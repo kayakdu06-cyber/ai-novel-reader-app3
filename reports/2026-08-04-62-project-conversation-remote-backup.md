@@ -90,3 +90,5 @@
 - 项目安全扫描通过。
 - 备份排除规则通过。
 - Git 暂存与提交内容的密钥形态复扫为 0。
+- 为验证安全夹具的短测试标记没有影响行为，`core:network` 的 `SecureRedirectExecutorTest` 已重新执行并通过；17 个 Gradle 任务成功，0 个测试失败。
+- 曾有一次聚合测试任务不接受 `--tests` 参数的命令错误；该次没有执行测试，随后已使用正确的 `testDebugUnitTest` 任务完成验证。
