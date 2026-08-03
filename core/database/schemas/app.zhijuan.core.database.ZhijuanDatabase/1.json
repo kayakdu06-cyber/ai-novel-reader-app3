@@ -1,0 +1,561 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 1,
+    "identityHash": "bcf73c5dd11d90270a1661920f6b0e64",
+    "entities": [
+      {
+        "tableName": "book_creation_snapshot",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`snapshot_id` TEXT NOT NULL, `raw_input_json` TEXT NOT NULL, `normalized_input_json` TEXT NOT NULL, `inference_provenance_json` TEXT NOT NULL, `genre_payload_json` TEXT NOT NULL, `presentation_profile_json` TEXT NOT NULL, `model_preference_json` TEXT NOT NULL, `schema_version` INTEGER NOT NULL, `prompt_bundle_version` TEXT NOT NULL, `content_control_schema_version` INTEGER NOT NULL, `content_hash` TEXT NOT NULL, `created_at` INTEGER NOT NULL, PRIMARY KEY(`snapshot_id`))",
+        "fields": [
+          {
+            "fieldPath": "snapshotId",
+            "columnName": "snapshot_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "rawInputJson",
+            "columnName": "raw_input_json",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "normalizedInputJson",
+            "columnName": "normalized_input_json",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "inferenceProvenanceJson",
+            "columnName": "inference_provenance_json",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "genrePayloadJson",
+            "columnName": "genre_payload_json",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "presentationProfileJson",
+            "columnName": "presentation_profile_json",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "modelPreferenceJson",
+            "columnName": "model_preference_json",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "schemaVersion",
+            "columnName": "schema_version",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "promptBundleVersion",
+            "columnName": "prompt_bundle_version",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "contentControlSchemaVersion",
+            "columnName": "content_control_schema_version",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "contentHash",
+            "columnName": "content_hash",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "snapshot_id"
+          ]
+        }
+      },
+      {
+        "tableName": "book",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`book_id` TEXT NOT NULL, `creation_snapshot_id` TEXT NOT NULL, `title` TEXT NOT NULL, `title_source` TEXT NOT NULL, `status` TEXT NOT NULL, `length_mode` TEXT NOT NULL, `target_characters` INTEGER, `target_chapters` INTEGER, `branched_from_book_id` TEXT, `branched_from_chapter_version_id` TEXT, `completed_chapter_count` INTEGER NOT NULL, `generation_status_summary` TEXT NOT NULL, `archived_at` INTEGER, `deleted_at` INTEGER, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, PRIMARY KEY(`book_id`), FOREIGN KEY(`creation_snapshot_id`) REFERENCES `book_creation_snapshot`(`snapshot_id`) ON UPDATE NO ACTION ON DELETE RESTRICT , FOREIGN KEY(`branched_from_book_id`) REFERENCES `book`(`book_id`) ON UPDATE NO ACTION ON DELETE RESTRICT , FOREIGN KEY(`branched_from_chapter_version_id`) REFERENCES `chapter_version`(`chapter_version_id`) ON UPDATE NO ACTION ON DELETE RESTRICT )",
+        "fields": [
+          {
+            "fieldPath": "bookId",
+            "columnName": "book_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "creationSnapshotId",
+            "columnName": "creation_snapshot_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "titleSource",
+            "columnName": "title_source",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lengthMode",
+            "columnName": "length_mode",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "targetCharacters",
+            "columnName": "target_characters",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "targetChapters",
+            "columnName": "target_chapters",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "branchedFromBookId",
+            "columnName": "branched_from_book_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "branchedFromChapterVersionId",
+            "columnName": "branched_from_chapter_version_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "completedChapterCount",
+            "columnName": "completed_chapter_count",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "generationStatusSummary",
+            "columnName": "generation_status_summary",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "archivedAt",
+            "columnName": "archived_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "deletedAt",
+            "columnName": "deleted_at",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "book_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_book_creation_snapshot_id",
+            "unique": true,
+            "columnNames": [
+              "creation_snapshot_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_book_creation_snapshot_id` ON `${TABLE_NAME}` (`creation_snapshot_id`)"
+          },
+          {
+            "name": "index_book_branched_from_book_id",
+            "unique": false,
+            "columnNames": [
+              "branched_from_book_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_book_branched_from_book_id` ON `${TABLE_NAME}` (`branched_from_book_id`)"
+          },
+          {
+            "name": "index_book_branched_from_chapter_version_id",
+            "unique": false,
+            "columnNames": [
+              "branched_from_chapter_version_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_book_branched_from_chapter_version_id` ON `${TABLE_NAME}` (`branched_from_chapter_version_id`)"
+          },
+          {
+            "name": "index_book_status",
+            "unique": false,
+            "columnNames": [
+              "status"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_book_status` ON `${TABLE_NAME}` (`status`)"
+          },
+          {
+            "name": "index_book_updated_at",
+            "unique": false,
+            "columnNames": [
+              "updated_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_book_updated_at` ON `${TABLE_NAME}` (`updated_at`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "book_creation_snapshot",
+            "onDelete": "RESTRICT",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "creation_snapshot_id"
+            ],
+            "referencedColumns": [
+              "snapshot_id"
+            ]
+          },
+          {
+            "table": "book",
+            "onDelete": "RESTRICT",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "branched_from_book_id"
+            ],
+            "referencedColumns": [
+              "book_id"
+            ]
+          },
+          {
+            "table": "chapter_version",
+            "onDelete": "RESTRICT",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "branched_from_chapter_version_id"
+            ],
+            "referencedColumns": [
+              "chapter_version_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "chapter",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`chapter_id` TEXT NOT NULL, `book_id` TEXT NOT NULL, `chapter_index` INTEGER NOT NULL, `planned_title` TEXT NOT NULL, `display_title` TEXT NOT NULL, `status` TEXT NOT NULL, `current_version_id` TEXT, `consistency_status` TEXT NOT NULL, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, PRIMARY KEY(`chapter_id`), FOREIGN KEY(`book_id`) REFERENCES `book`(`book_id`) ON UPDATE NO ACTION ON DELETE RESTRICT , FOREIGN KEY(`chapter_id`, `current_version_id`) REFERENCES `chapter_version`(`chapter_id`, `chapter_version_id`) ON UPDATE NO ACTION ON DELETE RESTRICT )",
+        "fields": [
+          {
+            "fieldPath": "chapterId",
+            "columnName": "chapter_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "bookId",
+            "columnName": "book_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "chapterIndex",
+            "columnName": "chapter_index",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "plannedTitle",
+            "columnName": "planned_title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "displayTitle",
+            "columnName": "display_title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "currentVersionId",
+            "columnName": "current_version_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "consistencyStatus",
+            "columnName": "consistency_status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "updatedAt",
+            "columnName": "updated_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "chapter_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_chapter_book_id_chapter_index",
+            "unique": true,
+            "columnNames": [
+              "book_id",
+              "chapter_index"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_chapter_book_id_chapter_index` ON `${TABLE_NAME}` (`book_id`, `chapter_index`)"
+          },
+          {
+            "name": "index_chapter_chapter_id_current_version_id",
+            "unique": false,
+            "columnNames": [
+              "chapter_id",
+              "current_version_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_chapter_chapter_id_current_version_id` ON `${TABLE_NAME}` (`chapter_id`, `current_version_id`)"
+          },
+          {
+            "name": "index_chapter_status",
+            "unique": false,
+            "columnNames": [
+              "status"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_chapter_status` ON `${TABLE_NAME}` (`status`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "book",
+            "onDelete": "RESTRICT",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "book_id"
+            ],
+            "referencedColumns": [
+              "book_id"
+            ]
+          },
+          {
+            "table": "chapter_version",
+            "onDelete": "RESTRICT",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "chapter_id",
+              "current_version_id"
+            ],
+            "referencedColumns": [
+              "chapter_id",
+              "chapter_version_id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "chapter_version",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`chapter_version_id` TEXT NOT NULL, `chapter_id` TEXT NOT NULL, `version_no` INTEGER NOT NULL, `content` TEXT NOT NULL, `character_count` INTEGER NOT NULL, `content_hash` TEXT NOT NULL, `source` TEXT NOT NULL, `parent_version_id` TEXT, `generation_stage_id` TEXT, `model_snapshot_json` TEXT, `created_at` INTEGER NOT NULL, PRIMARY KEY(`chapter_version_id`), FOREIGN KEY(`chapter_id`) REFERENCES `chapter`(`chapter_id`) ON UPDATE NO ACTION ON DELETE RESTRICT , FOREIGN KEY(`chapter_id`, `parent_version_id`) REFERENCES `chapter_version`(`chapter_id`, `chapter_version_id`) ON UPDATE NO ACTION ON DELETE RESTRICT )",
+        "fields": [
+          {
+            "fieldPath": "chapterVersionId",
+            "columnName": "chapter_version_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "chapterId",
+            "columnName": "chapter_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "versionNo",
+            "columnName": "version_no",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "content",
+            "columnName": "content",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "characterCount",
+            "columnName": "character_count",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "contentHash",
+            "columnName": "content_hash",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "source",
+            "columnName": "source",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "parentVersionId",
+            "columnName": "parent_version_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "generationStageId",
+            "columnName": "generation_stage_id",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "modelSnapshotJson",
+            "columnName": "model_snapshot_json",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "created_at",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "chapter_version_id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_chapter_version_chapter_id_chapter_version_id",
+            "unique": true,
+            "columnNames": [
+              "chapter_id",
+              "chapter_version_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_chapter_version_chapter_id_chapter_version_id` ON `${TABLE_NAME}` (`chapter_id`, `chapter_version_id`)"
+          },
+          {
+            "name": "index_chapter_version_chapter_id_version_no",
+            "unique": true,
+            "columnNames": [
+              "chapter_id",
+              "version_no"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_chapter_version_chapter_id_version_no` ON `${TABLE_NAME}` (`chapter_id`, `version_no`)"
+          },
+          {
+            "name": "index_chapter_version_chapter_id_parent_version_id",
+            "unique": false,
+            "columnNames": [
+              "chapter_id",
+              "parent_version_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_chapter_version_chapter_id_parent_version_id` ON `${TABLE_NAME}` (`chapter_id`, `parent_version_id`)"
+          },
+          {
+            "name": "index_chapter_version_generation_stage_id_content_hash",
+            "unique": true,
+            "columnNames": [
+              "generation_stage_id",
+              "content_hash"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_chapter_version_generation_stage_id_content_hash` ON `${TABLE_NAME}` (`generation_stage_id`, `content_hash`)"
+          },
+          {
+            "name": "index_chapter_version_created_at",
+            "unique": false,
+            "columnNames": [
+              "created_at"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_chapter_version_created_at` ON `${TABLE_NAME}` (`created_at`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "chapter",
+            "onDelete": "RESTRICT",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "chapter_id"
+            ],
+            "referencedColumns": [
+              "chapter_id"
+            ]
+          },
+          {
+            "table": "chapter_version",
+            "onDelete": "RESTRICT",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "chapter_id",
+              "parent_version_id"
+            ],
+            "referencedColumns": [
+              "chapter_id",
+              "chapter_version_id"
+            ]
+          }
+        ]
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'bcf73c5dd11d90270a1661920f6b0e64')"
+    ]
+  }
+}

@@ -1,0 +1,37 @@
+.gradle/
+.kotlin/
+.idea/
+**/build/
+local.properties
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+reports/generated/
+releases/
+
+# Local crashes, diagnostics, test databases, and generated packages
+hs_err_pid*.log
+*.hprof
+*.apk
+*.aab
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+
+# Credentials and machine-local service configuration
+.env
+.env.*
+!.env.example
+*.keystore
+*.jks
+*.p12
+*.pem
+*.key
+**/secrets.properties
+**/google-services.json
+
+# Local backup payloads must stay outside the repository
+backups/
+conversation-raw/

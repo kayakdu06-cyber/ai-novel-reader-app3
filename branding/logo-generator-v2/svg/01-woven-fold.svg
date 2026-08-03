@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-labelledby="title desc">
+  <title id="title">织卷标志方向一：回折</title>
+  <desc id="desc">一条纸带在方形结构中折返，形成抽象的卷册与编织关系。</desc>
+  <g fill="currentColor">
+    <path d="M26 18h38c10 0 18 8 18 18v12H68V38c0-4-2-6-6-6H39l29 36h14v14H64c-4 0-7-2-10-5L18 32v-6c0-4 4-8 8-8Z"/>
+    <path d="M18 52h14v10c0 4 2 6 6 6h12l11 14H36c-10 0-18-8-18-18V52Z"/>
+  </g>
+</svg>

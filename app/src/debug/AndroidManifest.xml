@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+    <application>
+        <service
+            android:name="app.zhijuan.reader.m0.M0DataSyncProbeService"
+            android:exported="true"
+            android:foregroundServiceType="dataSync"
+            android:stopWithTask="false" />
+
+        <provider
+            android:name="app.zhijuan.reader.m0.M0RecoveryProbeProvider"
+            android:authorities="${applicationId}.m0-recovery-probe"
+            android:exported="false" />
+
+        <receiver
+            android:name="app.zhijuan.reader.m0.Task048ForegroundProbeReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="app.zhijuan.reader.debug.task048.SEED" />
+                <action android:name="app.zhijuan.reader.debug.task048.QUERY" />
+                <action android:name="app.zhijuan.reader.debug.task048.START" />
+            </intent-filter>
+        </receiver>
+    </application>
+
+</manifest>

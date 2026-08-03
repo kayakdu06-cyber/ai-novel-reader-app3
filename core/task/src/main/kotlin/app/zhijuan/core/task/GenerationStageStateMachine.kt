@@ -1,0 +1,83 @@
+package app.zhijuan.core.task
+
+import app.zhijuan.core.model.GenerationStageStatus
+
+enum class StageEvent {
+    DEPENDENCIES_SATISFIED,
+    LEASE_ACQUIRED,
+    LEASE_EXPIRED_BEFORE_REQUEST,
+    PRECONDITION_BLOCKED,
+    LOCAL_OUTPUT_READY,
+    INPUT_FROZEN,
+    REQUEST_SENT,
+    RESULT_UNCERTAIN,
+    RESPONSE_COMPLETED,
+    RETRYABLE_FAILURE,
+    OUTPUT_VALID,
+    USER_ACTION_REQUIRED,
+    COMMIT_SUCCEEDED,
+    COMMIT_UNCERTAIN,
+    RETRY_DELAY_ELAPSED,
+    CONDITION_RECOVERED,
+    ISSUE_RESOLVED,
+    USER_CONFIRMED_RETRY,
+    USER_CANCELLED,
+    RECOVERY_AUDIT_REQUIRED,
+    PROVIDER_CONFIRMED_NOT_EXECUTED,
+    PAUSE_AT_SAFE_POINT,
+    PARENT_STOPPED,
+}
+
+object GenerationStageStateMachine {
+    private val transitions = mapOf(
+        (GenerationStageStatus.PENDING to StageEvent.DEPENDENCIES_SATISFIED) to GenerationStageStatus.READY,
+        (GenerationStageStatus.READY to StageEvent.LEASE_ACQUIRED) to GenerationStageStatus.PREPARING,
+        (GenerationStageStatus.PREPARING to StageEvent.LEASE_EXPIRED_BEFORE_REQUEST) to GenerationStageStatus.READY,
+        (GenerationStageStatus.PREPARING to StageEvent.PRECONDITION_BLOCKED) to GenerationStageStatus.BLOCKED,
+        (GenerationStageStatus.PREPARING to StageEvent.LOCAL_OUTPUT_READY) to GenerationStageStatus.COMMITTING,
+        (GenerationStageStatus.PREPARING to StageEvent.INPUT_FROZEN) to GenerationStageStatus.REQUEST_INTENT_RECORDED,
+        (GenerationStageStatus.REQUEST_INTENT_RECORDED to StageEvent.REQUEST_SENT) to GenerationStageStatus.STREAMING,
+        (GenerationStageStatus.REQUEST_INTENT_RECORDED to StageEvent.RESULT_UNCERTAIN) to GenerationStageStatus.UNKNOWN_RESULT,
+        (GenerationStageStatus.STREAMING to StageEvent.RESPONSE_COMPLETED) to GenerationStageStatus.VALIDATING,
+        (GenerationStageStatus.STREAMING to StageEvent.RETRYABLE_FAILURE) to GenerationStageStatus.RETRY_WAIT,
+        (GenerationStageStatus.STREAMING to StageEvent.RESULT_UNCERTAIN) to GenerationStageStatus.UNKNOWN_RESULT,
+        (GenerationStageStatus.REQUEST_INTENT_RECORDED to StageEvent.RECOVERY_AUDIT_REQUIRED) to GenerationStageStatus.RECOVERY_REQUIRED,
+        (GenerationStageStatus.STREAMING to StageEvent.RECOVERY_AUDIT_REQUIRED) to GenerationStageStatus.RECOVERY_REQUIRED,
+        (GenerationStageStatus.VALIDATING to StageEvent.OUTPUT_VALID) to GenerationStageStatus.COMMITTING,
+        (GenerationStageStatus.VALIDATING to StageEvent.RETRYABLE_FAILURE) to GenerationStageStatus.RETRY_WAIT,
+        (GenerationStageStatus.VALIDATING to StageEvent.USER_ACTION_REQUIRED) to GenerationStageStatus.NEEDS_ACTION,
+        (GenerationStageStatus.COMMITTING to StageEvent.COMMIT_SUCCEEDED) to GenerationStageStatus.SUCCEEDED,
+        (GenerationStageStatus.COMMITTING to StageEvent.COMMIT_UNCERTAIN) to GenerationStageStatus.RECOVERY_REQUIRED,
+        (GenerationStageStatus.VALIDATING to StageEvent.RECOVERY_AUDIT_REQUIRED) to GenerationStageStatus.RECOVERY_REQUIRED,
+        (GenerationStageStatus.COMMITTING to StageEvent.RECOVERY_AUDIT_REQUIRED) to GenerationStageStatus.RECOVERY_REQUIRED,
+        (GenerationStageStatus.RETRY_WAIT to StageEvent.RETRY_DELAY_ELAPSED) to GenerationStageStatus.READY,
+        (GenerationStageStatus.BLOCKED to StageEvent.CONDITION_RECOVERED) to GenerationStageStatus.READY,
+        (GenerationStageStatus.NEEDS_ACTION to StageEvent.ISSUE_RESOLVED) to GenerationStageStatus.READY,
+        (GenerationStageStatus.UNKNOWN_RESULT to StageEvent.USER_CONFIRMED_RETRY) to GenerationStageStatus.READY,
+        (GenerationStageStatus.UNKNOWN_RESULT to StageEvent.USER_CANCELLED) to GenerationStageStatus.CANCELLED,
+        (GenerationStageStatus.RECOVERY_REQUIRED to StageEvent.RESULT_UNCERTAIN) to GenerationStageStatus.UNKNOWN_RESULT,
+        (GenerationStageStatus.STREAMING to StageEvent.PROVIDER_CONFIRMED_NOT_EXECUTED) to GenerationStageStatus.READY,
+        (GenerationStageStatus.RECOVERY_REQUIRED to StageEvent.PROVIDER_CONFIRMED_NOT_EXECUTED) to GenerationStageStatus.READY,
+        (GenerationStageStatus.PREPARING to StageEvent.PAUSE_AT_SAFE_POINT) to GenerationStageStatus.READY,
+        (GenerationStageStatus.REQUEST_INTENT_RECORDED to StageEvent.PAUSE_AT_SAFE_POINT) to GenerationStageStatus.READY,
+        (GenerationStageStatus.STREAMING to StageEvent.PAUSE_AT_SAFE_POINT) to GenerationStageStatus.READY,
+        (GenerationStageStatus.PENDING to StageEvent.PARENT_STOPPED) to GenerationStageStatus.CANCELLED,
+        (GenerationStageStatus.READY to StageEvent.PARENT_STOPPED) to GenerationStageStatus.CANCELLED,
+        (GenerationStageStatus.PREPARING to StageEvent.PARENT_STOPPED) to GenerationStageStatus.CANCELLED,
+        (GenerationStageStatus.BLOCKED to StageEvent.PARENT_STOPPED) to GenerationStageStatus.CANCELLED,
+        (GenerationStageStatus.REQUEST_INTENT_RECORDED to StageEvent.PARENT_STOPPED) to GenerationStageStatus.CANCELLED,
+        (GenerationStageStatus.STREAMING to StageEvent.PARENT_STOPPED) to GenerationStageStatus.CANCELLED,
+        (GenerationStageStatus.VALIDATING to StageEvent.PARENT_STOPPED) to GenerationStageStatus.CANCELLED,
+        (GenerationStageStatus.COMMITTING to StageEvent.PARENT_STOPPED) to GenerationStageStatus.CANCELLED,
+        (GenerationStageStatus.RETRY_WAIT to StageEvent.PARENT_STOPPED) to GenerationStageStatus.CANCELLED,
+        (GenerationStageStatus.UNKNOWN_RESULT to StageEvent.PARENT_STOPPED) to GenerationStageStatus.CANCELLED,
+        (GenerationStageStatus.NEEDS_ACTION to StageEvent.PARENT_STOPPED) to GenerationStageStatus.CANCELLED,
+        (GenerationStageStatus.RECOVERY_REQUIRED to StageEvent.PARENT_STOPPED) to GenerationStageStatus.CANCELLED,
+    )
+
+    fun transition(
+        current: GenerationStageStatus,
+        event: StageEvent,
+    ): GenerationStageStatus = transitions[current to event]
+        ?: throw IllegalStateTransition("Stage cannot handle $event while in $current.")
+}

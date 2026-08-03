@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-labelledby="title desc">
+  <title id="title">织卷标志方向四：章印</title>
+  <desc id="desc">圆形书印中以三道留白表现逐行展开的章节正文。</desc>
+  <defs>
+    <mask id="chapter-field-mask">
+      <rect width="100" height="100" fill="black"/>
+      <circle cx="50" cy="50" r="34" fill="white"/>
+      <rect x="28" y="32" width="44" height="8" rx="4" fill="black"/>
+      <rect x="28" y="46" width="34" height="8" rx="4" fill="black"/>
+      <rect x="28" y="60" width="24" height="8" rx="4" fill="black"/>
+    </mask>
+  </defs>
+  <circle cx="50" cy="50" r="34" fill="currentColor" mask="url(#chapter-field-mask)"/>
+</svg>

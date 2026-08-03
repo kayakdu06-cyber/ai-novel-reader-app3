@@ -1,0 +1,121 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 2,
+    "identityHash": "ce26d07edd03310e0806795bd14d23fa",
+    "entities": [
+      {
+        "tableName": "search_document",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`rowid` INTEGER NOT NULL, `document_id` TEXT NOT NULL, `book_id` TEXT NOT NULL, `chapter_index` INTEGER NOT NULL, `content` TEXT NOT NULL, `content_hash` TEXT NOT NULL, `search_terms` TEXT NOT NULL, PRIMARY KEY(`rowid`))",
+        "fields": [
+          {
+            "fieldPath": "rowId",
+            "columnName": "rowid",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "documentId",
+            "columnName": "document_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "bookId",
+            "columnName": "book_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "chapterIndex",
+            "columnName": "chapter_index",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "content",
+            "columnName": "content",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "contentHash",
+            "columnName": "content_hash",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "searchTerms",
+            "columnName": "search_terms",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "rowid"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_search_document_document_id",
+            "unique": true,
+            "columnNames": [
+              "document_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_search_document_document_id` ON `${TABLE_NAME}` (`document_id`)"
+          },
+          {
+            "name": "index_search_document_book_id_chapter_index",
+            "unique": false,
+            "columnNames": [
+              "book_id",
+              "chapter_index"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_search_document_book_id_chapter_index` ON `${TABLE_NAME}` (`book_id`, `chapter_index`)"
+          }
+        ]
+      },
+      {
+        "tableName": "search_document_fts",
+        "createSql": "CREATE VIRTUAL TABLE IF NOT EXISTS `${TABLE_NAME}` USING FTS4(`search_terms` TEXT NOT NULL, content=`search_document`)",
+        "fields": [
+          {
+            "fieldPath": "searchTerms",
+            "columnName": "search_terms",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": []
+        },
+        "ftsVersion": "FTS4",
+        "ftsOptions": {
+          "tokenizer": "simple",
+          "tokenizerArgs": [],
+          "contentTable": "search_document",
+          "languageIdColumnName": "",
+          "matchInfo": "FTS4",
+          "notIndexedColumns": [],
+          "prefixSizes": [],
+          "preferredOrder": "ASC"
+        },
+        "contentSyncTriggers": [
+          "CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_search_document_fts_BEFORE_UPDATE BEFORE UPDATE ON `search_document` BEGIN DELETE FROM `search_document_fts` WHERE `docid`=OLD.`rowid`; END",
+          "CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_search_document_fts_BEFORE_DELETE BEFORE DELETE ON `search_document` BEGIN DELETE FROM `search_document_fts` WHERE `docid`=OLD.`rowid`; END",
+          "CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_search_document_fts_AFTER_UPDATE AFTER UPDATE ON `search_document` BEGIN INSERT INTO `search_document_fts`(`docid`, `search_terms`) VALUES (NEW.`rowid`, NEW.`search_terms`); END",
+          "CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_search_document_fts_AFTER_INSERT AFTER INSERT ON `search_document` BEGIN INSERT INTO `search_document_fts`(`docid`, `search_terms`) VALUES (NEW.`rowid`, NEW.`search_terms`); END"
+        ]
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'ce26d07edd03310e0806795bd14d23fa')"
+    ]
+  }
+}

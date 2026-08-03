@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-labelledby="title desc">
+  <title id="title">织卷标志方向五：层卷</title>
+  <desc id="desc">三层开放式卷页从同一位置递进展开，表达短篇、中篇与长篇的连续结构。</desc>
+  <g fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M22 28h39c10 0 17 7 17 17v29"/>
+    <path d="M22 40h32c8 0 13 6 13 14v20"/>
+    <path d="M22 52h24c7 0 10 4 10 11v11"/>
+  </g>
+</svg>

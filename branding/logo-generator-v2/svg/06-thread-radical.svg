@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-labelledby="title desc">
+  <title id="title">织卷标志方向六：纟卷</title>
+  <desc id="desc">左侧三笔取自绞丝旁，右侧是一笔卷页，构成中文语义驱动的专属字形标志。</desc>
+  <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M20 24l15 12-13 14M31 43l8 9-17 16M18 76l22-8" stroke-width="6"/>
+    <path d="M52 25h17c8 0 13 5 13 13v7c0 8-6 13-14 13H55v18" stroke-width="9"/>
+  </g>
+</svg>

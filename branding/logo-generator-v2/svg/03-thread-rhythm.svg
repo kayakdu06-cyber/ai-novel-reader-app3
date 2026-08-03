@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-labelledby="title desc">
+  <title id="title">织卷标志方向三：织线</title>
+  <desc id="desc">四条连续线在中央交错，表达多条设定被组织成稳定叙事。</desc>
+  <g fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round">
+    <path d="M17 31h21c13 0 11 17 24 17h21"/>
+    <path d="M17 42h19c13 0 13 16 26 16h21"/>
+    <path d="M17 58h19c13 0 13-16 26-16h21"/>
+    <path d="M17 69h21c13 0 11-17 24-17h21"/>
+  </g>
+</svg>
