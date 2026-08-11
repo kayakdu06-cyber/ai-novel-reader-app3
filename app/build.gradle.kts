@@ -82,6 +82,7 @@ dependencies {
     implementation(project(":core"))
     implementation(project(":engine"))
     implementation(project(":data"))
+    implementation(project(":provider"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
@@ -111,8 +112,6 @@ dependencies {
 
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.junit.jupiter)
-    testImplementation(libs.mockwebserver3)
-    testImplementation(libs.okhttp.tls)
     testRuntimeOnly(libs.junit.platform.launcher)
 
     implementation(libs.hilt.android)

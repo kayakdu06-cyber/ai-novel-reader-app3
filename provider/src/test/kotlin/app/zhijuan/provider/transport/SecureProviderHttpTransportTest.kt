@@ -206,7 +206,7 @@ class SecureProviderHttpTransportTest {
     }
 
     @Test
-    fun `active request cancellation is idempotent and stops the call`() {
+    fun `active request cancellation stops the call and repeated cancellation is race safe`() {
         val server = httpsServer()
         server.enqueue(
             MockResponse.Builder()
@@ -228,9 +228,11 @@ class SecureProviderHttpTransportTest {
                 ProviderTransportCancellationResult.CANCELLATION_REQUESTED,
                 transport.cancel("cancel-request"),
             )
-            assertEquals(
-                ProviderTransportCancellationResult.ALREADY_REQUESTED,
-                transport.cancel("cancel-request"),
+            assertTrue(
+                transport.cancel("cancel-request") in setOf(
+                    ProviderTransportCancellationResult.ALREADY_REQUESTED,
+                    ProviderTransportCancellationResult.NOT_ACTIVE,
+                ),
             )
             assertTrue(future.get(5, TimeUnit.SECONDS) is ProviderHttpOpenResult.Cancelled)
             assertEquals(ProviderTransportCancellationResult.NOT_ACTIVE, transport.cancel("cancel-request"))

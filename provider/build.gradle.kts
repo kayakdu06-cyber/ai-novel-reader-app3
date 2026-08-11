@@ -1,9 +1,9 @@
-﻿plugins {
+plugins {
     alias(libs.plugins.android.library)
 }
 
 android {
-    namespace = "app.zhijuan.engine"
+    namespace = "app.zhijuan.provider"
     compileSdk = 36
 
     defaultConfig {
@@ -25,13 +25,18 @@ android {
 dependencies {
     implementation(project(":core"))
     implementation(project(":data"))
-    implementation(project(":provider"))
+
+    implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.room.runtime)
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.okhttp)
+    implementation(libs.okio)
 
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.junit.jupiter)
+    testImplementation(libs.mockwebserver3)
+    testImplementation(libs.okhttp.tls)
     testRuntimeOnly(libs.junit.platform.launcher)
 
     androidTestImplementation(libs.androidx.room.testing)

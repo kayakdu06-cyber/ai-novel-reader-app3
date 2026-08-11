@@ -53,7 +53,7 @@
 |---|---|---|---|---|---|
 | 0 | 导入精简包和独立绑定 | 保留 app2 Git 历史，导入 ZIP；恢复 8 个被误删但仍被生产代码引用的 Repository/Codec；补 JVM HTTP 测试依赖；把已不存在的协议枚举用例改为模型错配/非流式拒绝 | app3 与 app2 隔离；仍为原始 `app/engine/data` 依赖 | `assembleDebug test` 成功，116 tasks；JVM 123/123 | 待提交 |
 | 1 | `:core` | 从 `data` 实体迁移 13 个 model 与 13 个 task/状态机文件；新增纯 Kotlin/JVM 17 模块 | 无 Android import、无项目依赖；app/data/engine 显式依赖 core | `:core:test assembleDebug test` 成功，118 tasks；JVM 123/123 | 待提交 |
-| 2 | `:provider` | 待执行 | 仅 `core + data` | 待执行 | 待提交 |
+| 2 | `:provider` | 迁移 common、capability-storage、OpenAI Chat、stream、transport、Fake Provider 及其 JVM/Android 测试，共 46 个 Kotlin 文件 | 仅依赖 `core + data`；app/engine 显式依赖 provider；旧三模块中 provider 文件为 0 | `:provider:test assembleDebug test` 成功，153 tasks；JVM 123/123 | 待提交 |
 | 3 | `:feature:connection` | 待执行 | `core + data + provider` | 待执行 | 待提交 |
 | 4 | `:feature:creation` | 待执行 | `core + data` | 待执行 | 待提交 |
 | 5 | `:feature:generation` | 待执行 | `core + data + provider` | 待执行 | 待提交 |
@@ -79,6 +79,10 @@
 - `app` JVM 测试补入现有 version catalog 已声明的 `mockwebserver3` 与 `okhttp-tls`。
 - `ProviderProtocol` 在精简包只剩 `OPENAI_CHAT_COMPAT`，因此不再伪造其他协议；契约测试保留模型快照错配，Fake Provider 增加模型错配前置拒绝，并保留非流式拒绝。
 - 日志：`D:\gptuser\logs\ai-novel-reader-app3\phase0-final.log`。
+
+### Phase 2 测试稳定性修复
+
+`SecureProviderHttpTransportTest` 原用例假定“第一次 cancel 返回后，第二次 cancel 必然早于后台请求清理”，存在真实线程竞态。现在仍严格要求第一次为 `CANCELLATION_REQUESTED`、请求最终为 Cancelled、最终状态为 `NOT_ACTIVE`，只允许竞态窗口内第二次返回 `ALREADY_REQUESTED` 或已经清理后的 `NOT_ACTIVE`；未修改生产取消逻辑。
 
 ## 7. APK
 
