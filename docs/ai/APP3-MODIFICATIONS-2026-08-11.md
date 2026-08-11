@@ -2,7 +2,7 @@
 
 > 日期：2026-08-11
 > 唯一项目：`D:\gptuser\projects\ai-novel-reader-app3`
-> 状态：执行中；本文件随每个 Phase 更新
+> 状态：Phase 1–8 已完成；最终产物已验证
 
 ## 1. 输入与基线
 
@@ -58,19 +58,24 @@
 | 4 | `:feature:creation` | 迁移创建网关、模型/标准化、极简创建与费用确认，共 5 个生产文件、2 个 JVM 测试、2 个 Android UI 测试 | 仅 `core + data`；创建入口改收最小 `CreationConnectionSelection`，由 app 映射连接快照，消除 creation→connection | `:feature:creation:test assembleDebug test` 成功，231 tasks；JVM 123/123 | `afc709a` |
 | 5 | `:feature:generation` | 真实移动原 `engine`，并合入前台 Service、通知、控制网关、恢复/维护 Worker；40 个生产文件、2 个 JVM 测试、4 个 Android 测试 | 仅 `core + data + provider`；服务/权限/通知资源由模块自持；打开 App 的 PendingIntent 不引用壳实现 | `:feature:generation:test assembleDebug test` 成功，239 tasks；JVM 123/123 | `0688a33` |
 | 6 | 跨模块契约 | `core.contract` 新增连接选择、生成控制、书架三类稳定 DTO/interface；连接与生成模块用 Hilt `@Binds` 绑定真实实现；新增 2 个 core 契约测试 | core 契约无 Android/Room/Provider 类型；功能实现不进入 app；Hilt 聚合编译通过 | `:core:test :feature:connection:test :feature:generation:test assembleDebug test` 成功，238 tasks；JVM 125/125 | `0b493f0` |
-| 7 | reader/library/template | 新增三个真实 Android Library；reader 可读取已完成章节并控制生成暂停/停止；library 通过加密 Room 的只读门面实现 core Repository；template 读取当前版本、来源与分类并复用 creation 草稿生成“按此重开”输入 | reader/library 仅 `core + data`；template 仅 `core + data + creation`，是唯一 feature 例外；DAO 不泄漏到 feature | 三模块独立测试及整仓 `assembleDebug test` 成功，361 tasks；JVM 130/130 | 本 Phase 单独提交 |
-| 8 | app 纯壳 | 待执行 | app 组装全部 feature | 待执行 | 待提交 |
+| 7 | reader/library/template | 新增三个真实 Android Library；reader 可读取已完成章节并控制生成暂停/停止；library 通过加密 Room 的只读门面实现 core Repository；template 读取当前版本、来源与分类并复用 creation 草稿生成“按此重开”输入 | reader/library 仅 `core + data`；template 仅 `core + data + creation`，是唯一 feature 例外；DAO 不泄漏到 feature | 三模块独立测试及整仓 `assembleDebug test` 成功，361 tasks；JVM 130/130 | `1f3f144` |
+| 8 | app 纯壳 | app 生产代码只保留 Application、Activity、Compose 导航组装和主题；Activity 注入连接/创建接口而非实现；新增可重复执行的模块边界校验脚本 | app 的 production `implementation(project(...))` 仅为 6 个 feature；旧调试探针所需 core/data 限定为 `debugImplementation`；Android 集成测试的 core/provider 限定为 `androidTestImplementation` | 强制重跑 `assembleDebug test --rerun-tasks` 成功，361/361 tasks；JVM 130/130；边界审计无环 | 本 Phase 单独提交 |
 
 ## 6. 最终构建与测试
 
-待完成后填写：
-
-- `assembleDebug`：待执行
-- `test`：待执行
-- 测试数量与结果：待统计
-- 依赖无环：待验证
-- feature 实现依赖审计：待验证
-- 安全扫描：待执行
+- `assembleDebug`：成功
+- `test`：成功
+- 强制重跑：`gradlew.bat assembleDebug test --rerun-tasks`
+- 构建结果：`BUILD SUCCESSFUL in 1m 27s`，361 actionable tasks，361 executed
+- 测试结果：22 个 JVM suite，130 tests，0 failures，0 errors，0 skipped
+- 依赖无环：通过，明确模块数为 10
+- feature 实现依赖审计：通过；唯一例外为 `:feature:template -> :feature:creation`
+- app 生产依赖：只依赖 6 个 feature
+- 安全扫描：源码与最终 APK 均通过，扫描 1 个 APK
+- Kotlin/Kotlin DSL 代码量：271 个受 Git 跟踪文件，60,576 行
+- 最终日志：`D:\gptuser\logs\ai-novel-reader-app3\final-build-test.log`
+- 边界日志：`D:\gptuser\logs\ai-novel-reader-app3\module-boundaries-final.log`
+- 安全日志：`D:\gptuser\logs\ai-novel-reader-app3\security-final.log`
 
 ### Phase 0 基线证据
 
@@ -93,9 +98,9 @@
 
 ## 7. APK
 
-- 路径：待生成
-- 大小：待填写
-- SHA-256：待填写
+- 路径：`D:\gptuser\projects\ai-novel-reader-app3\app\build\outputs\apk\debug\app-debug.apk`
+- 大小：47,278,936 bytes
+- SHA-256：`692bb864c4aab2c83706ea322c06d142329fb14963c9a22770a054524793332b`
 
 ## 8. 备份
 
@@ -106,6 +111,7 @@
 
 ## 9. 未完成风险
 
-- Phase 8 壳工程依赖收敛和最终依赖审计尚未完成，当前不能描述为最终模块化成品。
-- 新 reader/library/template 只能在本任务范围内提供真实可编译的最小功能边界，不等于完整产品功能已经实现。
+- 本次完成的是十模块架构整改和可编译的 reader/library/template 最小功能边界，不等于阅读器、书架和模板的全部产品 UI 已经完成。
+- app 的旧 M0 调试探针仍直接使用 data/core，但仅存在于 `src/debug`，不会扩大 release 生产代码依赖；后续可迁入专门测试夹具模块。
+- 各业务功能仍各自持有加密数据库 handle，符合迁移前既有模式但不是最终理想生命周期管理；后续应建立进程级共享数据库提供器。
 - 不调用真实 Provider，因此真实内容质量、费用和端到端网络行为不在本次验收范围。

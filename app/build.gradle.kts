@@ -79,12 +79,9 @@ kotlin {
 }
 
 dependencies {
-    implementation(project(":core"))
-    implementation(project(":feature:generation"))
-    implementation(project(":data"))
-    implementation(project(":provider"))
     implementation(project(":feature:connection"))
     implementation(project(":feature:creation"))
+    implementation(project(":feature:generation"))
     implementation(project(":feature:reader"))
     implementation(project(":feature:library"))
     implementation(project(":feature:template"))
@@ -92,12 +89,7 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
-    implementation(libs.androidx.room.runtime)
-    implementation(libs.androidx.work.runtime)
     implementation(libs.kotlinx.coroutines.core)
-    implementation(libs.kotlinx.serialization.json)
-    implementation(libs.okhttp)
-    implementation(libs.okio)
 
     val composeBom = platform(libs.androidx.compose.bom)
     implementation(composeBom)
@@ -107,6 +99,9 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
+    // Legacy debug probes exercise database recovery directly; production remains feature-only.
+    debugImplementation(project(":core"))
+    debugImplementation(project(":data"))
 
     androidTestImplementation(composeBom)
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
@@ -114,6 +109,8 @@ dependencies {
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.junit)
     androidTestImplementation(libs.androidx.work.testing)
+    androidTestImplementation(project(":core"))
+    androidTestImplementation(project(":provider"))
 
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.junit.jupiter)

@@ -57,7 +57,11 @@ if ($actual -cne 'D:/gptuser/projects/ai-novel-reader-app3') { throw "WRONG_ROOT
 - Phase 5 已完成：旧 `engine` 与 app 内生成 Service/Worker/控制边界合并为 `:feature:generation`，旧 `engine` 目录已消失。
 - Phase 6 已完成：core 内已有实际使用的连接/生成契约与未来书架契约，连接和生成模块通过 Hilt 绑定实现。
 - Phase 7 已完成：reader/library/template 均为有生产实现和独立测试的模块；模板到 creation 是唯一 feature 依赖例外，书架通过 data 只读门面实现 core 契约。
-- Phase 8 尚未完成：需要把 app 收敛为只依赖 feature 的组装壳、审计依赖无环并完成最终产物与备份；最终事实以 `APP3-MODIFICATIONS-2026-08-11.md` 更新为准。
+- Phase 8 已完成：app 生产依赖只指向 6 个 feature，Activity 注入接口而非具体网关；调试探针所需 data/core 被限制在 debug configuration。
+- 十模块边界校验通过：无空 feature、无跨目录 sourceSet、core 无 Android import、依赖无环；唯一 feature 例外是 template→creation。
+- 最终强制重跑 `assembleDebug test --rerun-tasks` 成功：361/361 tasks，JVM 130/130；源码与最终 APK 安全扫描通过。
+- 最终 APK：`app/build/outputs/apk/debug/app-debug.apk`，SHA-256 `692bb864c4aab2c83706ea322c06d142329fb14963c9a22770a054524793332b`。
+- 尚需完成本轮恢复 ZIP、哈希、可读性校验和远端同步尝试；最终事实以 `APP3-MODIFICATIONS-2026-08-11.md` 更新为准。
 
 ## Git 同步规则
 
