@@ -5,7 +5,7 @@ import app.zhijuan.core.database.EncryptedZhijuanDatabaseFactory
 import app.zhijuan.core.database.generation.GenerationControlRepository
 import app.zhijuan.core.database.generation.GenerationControlResult
 import app.zhijuan.core.database.generation.GenerationStateRepository
-import app.zhijuan.reader.storage.ZHIJUAN_DATABASE_NAME
+import app.zhijuan.core.database.ZHIJUAN_DATABASE_NAME
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton

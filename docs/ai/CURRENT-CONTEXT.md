@@ -52,7 +52,8 @@ if ($actual -cne 'D:/gptuser/projects/ai-novel-reader-app3') { throw "WRONG_ROOT
 - Phase 0 已完成：修复精简包遗漏后，三模块基线 `assembleDebug test` 成功，JVM 123/123。
 - Phase 1 已完成：`:core` 是无 Android/无项目依赖的纯 Kotlin 模块，model 与 task/状态机不再编译在 `:data` 内。
 - Phase 2 已完成：Provider common、OpenAI Chat、transport/stream、capability storage 与 Fake 全部集中到 `:provider`，旧 app/data/engine 不再包含 provider 源文件。
-- Phase 3–8 尚未完成；最终事实以 `APP3-MODIFICATIONS-2026-08-11.md` 更新为准。
+- Phase 3 已完成：连接网关、连接列表和首次引导已迁入 `:feature:connection`；跨功能导航测试仍由 app 壳验证。
+- Phase 4–8 尚未完成；最终事实以 `APP3-MODIFICATIONS-2026-08-11.md` 更新为准。
 
 ## Git 同步规则
 

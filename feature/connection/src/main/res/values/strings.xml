@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">织卷</string>
+    <string name="first_launch_skip">跳过说明</string>
+    <string name="first_launch_title">你的故事，先留在这台设备上</string>
+    <string name="first_launch_summary">织卷没有账号和云端书架。你创建的小说与设置默认保存在本机。</string>
+    <string name="first_launch_local_title">默认留在本机</string>
+    <string name="first_launch_local_body">小说、模板、设置和用量记录保存在这台设备。织卷不需要账号、会员或管理后台。</string>
+    <string name="first_launch_remote_title">远程生成时才会发送</string>
+    <string name="first_launch_remote_body">开始生成后，必要的故事设定、摘要和本次任务会发送到你选择的模型服务。连接测试不会发送小说内容。</string>
+    <string name="first_launch_secret_title">密钥单独保护</string>
+    <string name="first_launch_secret_body">API 密钥由 Android 安全存储保管，不进入小说、模板、诊断日志或项目备份。系统自动备份已经关闭。</string>
+    <string name="first_launch_continue">继续设置</string>
+    <string name="first_launch_next_hint">下一步只需选择服务并粘贴密钥，织卷会自动测试。</string>
+</resources>

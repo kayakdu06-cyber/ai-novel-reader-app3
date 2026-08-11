@@ -13,7 +13,7 @@ import app.zhijuan.core.task.GenerationMaintenanceAction
 import app.zhijuan.core.task.GenerationMaintenanceContext
 import app.zhijuan.core.task.GenerationMaintenancePolicy
 import app.zhijuan.core.task.ProviderRecoveryEvidence
-import app.zhijuan.reader.storage.ZHIJUAN_DATABASE_NAME
+import app.zhijuan.core.database.ZHIJUAN_DATABASE_NAME
 import kotlinx.coroutines.CancellationException
 
 internal data class GenerationMaintenanceReport(

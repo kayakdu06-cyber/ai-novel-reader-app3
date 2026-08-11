@@ -8,7 +8,7 @@ import app.zhijuan.core.database.library.BookEntity
 import app.zhijuan.core.database.library.StoredBookCreationSummary
 import app.zhijuan.core.model.BookLengthMode
 import app.zhijuan.reader.connection.SavedConnectionSnapshot
-import app.zhijuan.reader.storage.ZHIJUAN_DATABASE_NAME
+import app.zhijuan.core.database.ZHIJUAN_DATABASE_NAME
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.util.UUID
 import javax.inject.Inject

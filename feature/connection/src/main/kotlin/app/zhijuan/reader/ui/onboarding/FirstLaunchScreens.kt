@@ -34,8 +34,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import app.zhijuan.reader.R
-import app.zhijuan.reader.ui.theme.ZhijuanTheme
+import app.zhijuan.feature.connection.R
 
 private data class DisclosureItem(
     val sequence: String,
@@ -178,7 +177,7 @@ private fun DisclosureCard(item: DisclosureItem) {
 @Preview(name = "First launch light", showBackground = true, widthDp = 360, heightDp = 800)
 @Composable
 private fun FirstLaunchLightPreview() {
-    ZhijuanTheme(darkTheme = false) {
+    MaterialTheme {
         FirstLaunchDisclosureScreen(onSkip = {}, onContinue = {})
     }
 }
@@ -186,7 +185,7 @@ private fun FirstLaunchLightPreview() {
 @Preview(name = "First launch dark", showBackground = true, widthDp = 360, heightDp = 800)
 @Composable
 private fun FirstLaunchDarkPreview() {
-    ZhijuanTheme(darkTheme = true) {
+    MaterialTheme {
         FirstLaunchDisclosureScreen(onSkip = {}, onContinue = {})
     }
 }

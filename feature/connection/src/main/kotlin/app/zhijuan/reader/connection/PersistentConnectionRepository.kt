@@ -5,7 +5,7 @@ import app.zhijuan.core.database.EncryptedZhijuanDatabaseFactory
 import app.zhijuan.core.database.connection.AcceptedDataDisclosureEvidence
 import app.zhijuan.core.database.connection.ConnectionProfileEntity
 import app.zhijuan.core.model.ExternalDataDestinationBindingV1
-import app.zhijuan.reader.storage.ZHIJUAN_DATABASE_NAME
+import app.zhijuan.core.database.ZHIJUAN_DATABASE_NAME
 import app.zhijuan.provider.common.ProviderModelId
 import app.zhijuan.provider.common.ProviderProtocol
 import java.net.URI

@@ -20,7 +20,7 @@ import app.zhijuan.core.model.GenerationPhase
 import app.zhijuan.core.model.GenerationTargetType
 import app.zhijuan.core.model.TitleSource
 import app.zhijuan.core.task.JobEvent
-import app.zhijuan.reader.storage.ZHIJUAN_DATABASE_NAME
+import app.zhijuan.core.database.ZHIJUAN_DATABASE_NAME
 import java.util.UUID
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking

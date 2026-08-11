@@ -11,6 +11,7 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.material3.MaterialTheme
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.zhijuan.core.model.StandardErrorCode
 import app.zhijuan.provider.common.ProviderProtocol
@@ -24,7 +25,6 @@ import app.zhijuan.reader.connection.FullConnectionCheckResult
 import app.zhijuan.reader.connection.PendingConnectionSnapshot
 import app.zhijuan.reader.connection.SavedConnectionSnapshot
 import app.zhijuan.reader.ui.onboarding.ConnectionWizardScreen
-import app.zhijuan.reader.ui.theme.ZhijuanTheme
 import java.util.concurrent.atomic.AtomicReference
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -165,7 +165,7 @@ class ConnectionWizardFlowTest {
         onSaved: (SavedConnectionSnapshot) -> Unit = {},
     ) {
         composeRule.setContent {
-            ZhijuanTheme(darkTheme = false) {
+            MaterialTheme {
                 ConnectionWizardScreen(
                     gateway = fake,
                     onBack = {},

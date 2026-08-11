@@ -54,7 +54,7 @@
 | 0 | 导入精简包和独立绑定 | 保留 app2 Git 历史，导入 ZIP；恢复 8 个被误删但仍被生产代码引用的 Repository/Codec；补 JVM HTTP 测试依赖；把已不存在的协议枚举用例改为模型错配/非流式拒绝 | app3 与 app2 隔离；仍为原始 `app/engine/data` 依赖 | `assembleDebug test` 成功，116 tasks；JVM 123/123 | 待提交 |
 | 1 | `:core` | 从 `data` 实体迁移 13 个 model 与 13 个 task/状态机文件；新增纯 Kotlin/JVM 17 模块 | 无 Android import、无项目依赖；app/data/engine 显式依赖 core | `:core:test assembleDebug test` 成功，118 tasks；JVM 123/123 | 待提交 |
 | 2 | `:provider` | 迁移 common、capability-storage、OpenAI Chat、stream、transport、Fake Provider 及其 JVM/Android 测试，共 46 个 Kotlin 文件 | 仅依赖 `core + data`；app/engine 显式依赖 provider；旧三模块中 provider 文件为 0 | `:provider:test assembleDebug test` 成功，153 tasks；JVM 123/123 | 待提交 |
-| 3 | `:feature:connection` | 待执行 | `core + data + provider` | 待执行 | 待提交 |
+| 3 | `:feature:connection` | 迁移连接网关/持久 Repository、连接列表、连接向导与首次说明，共 5 个生产文件；模块内保留网关安全和向导 UI 测试，跨功能导航测试留在 app | 仅 `core + data + provider`；Hilt 绑定在功能模块编译；共享数据库名下沉 data | `:feature:connection:test assembleDebug test` 成功，190 tasks；JVM 123/123 | 待提交 |
 | 4 | `:feature:creation` | 待执行 | `core + data` | 待执行 | 待提交 |
 | 5 | `:feature:generation` | 待执行 | `core + data + provider` | 待执行 | 待提交 |
 | 6 | 跨模块契约 | 待执行 | 契约在 core，功能模块实现 | 待执行 | 待提交 |
