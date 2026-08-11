@@ -12,7 +12,12 @@
 - 真实 API 测试：`docs/31-REAL-API-QUALITY-PERFORMANCE-TEST-PLAN.md`。
 - `docs/25-*`、`docs/26-*` 和旧 TASK-064 任务包保留为历史输入，不再单独决定下一步。
 - TASK-064 已有 plan、预算、目的地、route 和 exact-token WIP 必须复用；剩余收口分配到 TASK-125～128，禁止从零重写。
-- 唯一下一任务是 TASK-121：WritingPolicyPack 领域合同、来源记录、片段目录和纯本地编译器骨架。
+- 唯一下一任务是 TASK-121：只在 `:core` 增加最小 WritingPolicyPack/fragment 纯 Kotlin 合同。
+- TASK-121 已进一步收窄：只允许修改 `:core`，不做 data、Provider、UI、migration、运行时来源管理或第三方 skill 安装。
+- 后续每个任务必须锁定主模块和允许配套模块；VS-1 不新增第十一个模块，feature 不新增实现依赖，`:app` 不写业务逻辑。
+- 不主动实现候选功能、通用扩展点或“以后可能有用”的抽象；只有不修会直接造成不稳定、数据损坏、费用失控、安全问题或严重 bug 时才扩大范围。
+- 测试按具体风险最小化；全量、双 API、Release/R8 和 APK 扫描只在里程碑、发布或对应高风险变化时运行。
+- 真实 API 测试收敛为连接证据、一个结构 smoke、一个完整混合章和同书连续 3–5 章；A/B 仅在出现质量/速度回归时触发。
 - 外部小说写作 skill 只能经过提炼后成为不可执行、可版本化的内置创作策略包；App 首版不安装或执行任意第三方 skill。
 - 在 TASK-129 Fake 3–5 章、TASK-130 启动接线、TASK-131 最小书架/阅读器通过前，不调用 App 内真实 Provider。
 - TASK-132 起按 31 号文档使用 DeepSeek V4 Flash 进行真实合同、质量和速度测试。

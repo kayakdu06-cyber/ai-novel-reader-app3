@@ -8,14 +8,14 @@
 
 App 里“放 skill”有用，但不应把 Codex/Claude 使用的 SKILL.md、脚本或代理工作流原样安装进 Android App。
 
-织卷需要的是 WritingPolicyPack（创作策略包）：
+织卷需要的是最小内置 WritingPolicyPack（创作策略包）：
 
 - 它是结构化规则和模板数据，不是可执行插件；
-- 由 App 自己的代码解析、选择、合并和校验；
+- 由 App 自己的代码解析、选择、合并和校验，不建设安装器、商店或运行时管理页；
 - 每次生成冻结版本和来源；
 - 只把本章相关片段编译进 Prompt；
 - 不允许任意文件访问、命令执行或网络工具；
-- 外部 skill 只是研究来源，必须经过提炼、许可证审查、测试和本地重写。
+- 外部 skill 只是研究来源，必须经过提炼、许可证审查、测试和本地重写；来源记录保留在开发文档，不为它新增运行时数据库。
 
 现有 PromptBundleCatalogV1 继续保留，但其长期职责改为“运行时编译结果和兼容桥”，不再承载所有创作规则的唯一作者源。
 
@@ -43,8 +43,8 @@ App 里“放 skill”有用，但不应把 Codex/Claude 使用的 SKILL.md、�
 5. 把需要模型判断的部分转成结构化输入/输出合同。
 6. 编写正向、冲突和“不应激活”测试。
 7. 用 Fake Provider 验证 Prompt 组成。
-8. 用 DeepSeek V4 Flash 做有限 A/B。
-9. 通过后发布为内置策略包版本。
+8. 用 DeepSeek V4 Flash 做一个真实 smoke；只有出现质量或速度回归时才做 A/B。
+9. 通过后作为随 App 发布的固定内置版本。
 
 ### 3.2 可提炼内容
 
@@ -59,20 +59,20 @@ App 里“放 skill”有用，但不应把 Codex/Claude 使用的 SKILL.md、�
 
 ### 4.1 WritingPolicyPack
 
-每个策略包至少包含：
+运行时最小合同只包含：
 
 | 字段 | 含义 |
 |---|---|
 | packId | 稳定 ID，例如 zhijuan.web-fiction-core |
 | version | 不可变语义版本 |
 | locale | 适用语言和地区 |
-| sourceRecords | 来源、版本、许可证、摘要和本地改写说明 |
 | fragments | 可独立选择的规则片段 |
 | validators | 本地验证器 ID，不包含可执行脚本 |
 | conflicts | 冲突规则和优先级 |
 | promptBudget | 本包最多占用的 token/字符预算 |
 | checksum | 规范化内容哈希 |
-| status | DRAFT、ACTIVE、DEPRECATED、BLOCKED |
+
+来源、许可证、审查人和排除内容写入仓库开发文档，不进入用户数据库、不做管理 UI，也不建立在线更新机制。
 
 ### 4.2 PolicyFragment
 
@@ -161,9 +161,9 @@ Manifest 只表示“这本书可能使用什么”，不代表每章全部激�
 
 ### 4.6 StoryStateDelta
 
-所有题材共享一个变化外壳：
+当前纵向切片实际需要的题材共享一个变化外壳：
 
-- namespace：character、relationship、item、system、cultivation、world 或 extension；
+- namespace：character、relationship、item、system、cultivation 或 world；
 - subjectId；
 - fieldKey；
 - beforeValueHash；
@@ -175,7 +175,7 @@ Manifest 只表示“这本书可能使用什么”，不代表每章全部激�
 - capabilityId；
 - policyVersion。
 
-具体能力定义自己的字段和合法转移，本地代码负责验证。例如：
+具体能力只在当前书实际启用时定义自己的字段和合法转移，本地代码负责验证。例如：
 
 - item.owner 不能在无转移事件时变更；
 - system.level 必须满足升级条件和单调规则；
@@ -318,12 +318,12 @@ PolicyCompiler 输入：
 
 ## 10. 数据迁移
 
-第一阶段优先避免立刻新增大量专表：
+第一阶段禁止为了“结构更完整”新增专表：
 
-1. 先以版本化 JSON 合同和现有不可变快照保存策略选择；
+1. 以版本化 JSON 合同和现有不可变快照保存策略选择；
 2. 用现有 OutlineRevision/ContextSnapshot/Stage input 固定计划与 activation hash；
-3. 当单章 Fake 闭环稳定后，再为 NarrativeObligation 和 StoryStateDelta 增加正式 Room 表；
-4. migration 必须保留 v1 书籍；旧书缺 Manifest 时只启用 core-narrative、character-continuity 和由原创建快照能确定的能力；
+3. 只有现有字段无法保证崩溃恢复、原子提交或防止权威状态污染时，才新增最小 Room migration；
+4. migration 若被触发，必须保留 v1 书籍；旧书缺 Manifest 时只启用 core-narrative、character-continuity 和由原创建快照能确定的能力；
 5. 不从旧正文猜测敏感能力或人物成年事实。
 
 ## 11. 测试矩阵
@@ -337,13 +337,13 @@ PolicyCompiler 输入：
 - Prompt 超预算时硬规则不丢失。
 - 来源记录缺失或许可证 BLOCKED 时不能发布为 ACTIVE。
 
-### 11.2 组合能力
+### 11.2 最小组合能力
 
-- 修仙 + 系统：境界与系统等级分别可信推进。
-- 恋爱 + 悬疑：人物知识不能超过已知线索。
-- 道具 + 战斗：归属、耐久和使用后状态一致。
-- 修仙 + 恋爱 + 系统 + 亲密呈现：本章只激活相关子集。
-- 不含系统能力的小说：Prompt 和数据库不出现系统状态负担。
+- 一个不含系统的普通小说：Prompt 和状态中不出现系统负担。
+- 一个修仙 + 恋爱 + 系统 + 道具的混合样本：本章只激活相关子集，关键状态分别可信。
+- 年龄不明或能力未启用的负例：联网前失败关闭。
+
+不为每种题材排列组合分别建测试；新测试必须保护一个尚未覆盖的独立故障。
 
 ### 11.3 章后分析
 
@@ -366,11 +366,11 @@ PolicyCompiler 输入：
 
 本规格只有在以下证据齐全后才算实现：
 
-1. 三个以上内置策略包经过来源和许可证记录；
+1. 一个内置核心策略版本经过来源和许可证文档审查；
 2. 组合能力路由纯本地测试通过；
 3. chapter-plan.v2 与 chapter-post-analysis.v1 严格 parser 通过；
 4. Prompt manifest 可证明每章实际选择了哪些片段；
 5. 未激活能力零 Prompt 占用的测试通过；
-6. Fake Provider 连续 5 章保持义务和状态；
-7. DeepSeek V4 Flash A/B 显示质量不低于旧 Prompt，速度和 token 在闸门内；
+6. Fake Provider 连续 3–5 章保持义务和状态；
+7. DeepSeek V4 Flash smoke 通过；只有 smoke 显示质量或速度回归才要求 A/B；
 8. 任意失败不会部分污染权威小说状态。
