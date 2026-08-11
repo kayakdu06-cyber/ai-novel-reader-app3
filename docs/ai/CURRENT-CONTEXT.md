@@ -61,7 +61,8 @@ if ($actual -cne 'D:/gptuser/projects/ai-novel-reader-app3') { throw "WRONG_ROOT
 - 十模块边界校验通过：无空 feature、无跨目录 sourceSet、core 无 Android import、依赖无环；唯一 feature 例外是 template→creation。
 - 最终强制重跑 `assembleDebug test --rerun-tasks` 成功：361/361 tasks，JVM 130/130；源码与最终 APK 安全扫描通过。
 - 最终 APK：`app/build/outputs/apk/debug/app-debug.apk`，SHA-256 `692bb864c4aab2c83706ea322c06d142329fb14963c9a22770a054524793332b`。
-- 尚需完成本轮恢复 ZIP、哈希、可读性校验和远端同步尝试；最终事实以 `APP3-MODIFICATIONS-2026-08-11.md` 更新为准。
+- 公开 GitHub 远端已创建并推送：`https://github.com/kayakdu06-cyber/ai-novel-reader-app3`，本地 `main` 跟踪 `origin/main`。
+- 尚需完成本轮恢复 ZIP、哈希与可读性校验；最终事实以 `APP3-MODIFICATIONS-2026-08-11.md` 更新为准。
 
 ## Git 同步规则
 

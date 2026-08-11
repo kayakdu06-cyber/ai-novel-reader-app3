@@ -59,7 +59,7 @@
 | 5 | `:feature:generation` | 真实移动原 `engine`，并合入前台 Service、通知、控制网关、恢复/维护 Worker；40 个生产文件、2 个 JVM 测试、4 个 Android 测试 | 仅 `core + data + provider`；服务/权限/通知资源由模块自持；打开 App 的 PendingIntent 不引用壳实现 | `:feature:generation:test assembleDebug test` 成功，239 tasks；JVM 123/123 | `0688a33` |
 | 6 | 跨模块契约 | `core.contract` 新增连接选择、生成控制、书架三类稳定 DTO/interface；连接与生成模块用 Hilt `@Binds` 绑定真实实现；新增 2 个 core 契约测试 | core 契约无 Android/Room/Provider 类型；功能实现不进入 app；Hilt 聚合编译通过 | `:core:test :feature:connection:test :feature:generation:test assembleDebug test` 成功，238 tasks；JVM 125/125 | `0b493f0` |
 | 7 | reader/library/template | 新增三个真实 Android Library；reader 可读取已完成章节并控制生成暂停/停止；library 通过加密 Room 的只读门面实现 core Repository；template 读取当前版本、来源与分类并复用 creation 草稿生成“按此重开”输入 | reader/library 仅 `core + data`；template 仅 `core + data + creation`，是唯一 feature 例外；DAO 不泄漏到 feature | 三模块独立测试及整仓 `assembleDebug test` 成功，361 tasks；JVM 130/130 | `1f3f144` |
-| 8 | app 纯壳 | app 生产代码只保留 Application、Activity、Compose 导航组装和主题；Activity 注入连接/创建接口而非实现；新增可重复执行的模块边界校验脚本 | app 的 production `implementation(project(...))` 仅为 6 个 feature；旧调试探针所需 core/data 限定为 `debugImplementation`；Android 集成测试的 core/provider 限定为 `androidTestImplementation` | 强制重跑 `assembleDebug test --rerun-tasks` 成功，361/361 tasks；JVM 130/130；边界审计无环 | 本 Phase 单独提交 |
+| 8 | app 纯壳 | app 生产代码只保留 Application、Activity、Compose 导航组装和主题；Activity 注入连接/创建接口而非实现；新增可重复执行的模块边界校验脚本 | app 的 production `implementation(project(...))` 仅为 6 个 feature；旧调试探针所需 core/data 限定为 `debugImplementation`；Android 集成测试的 core/provider 限定为 `androidTestImplementation` | 强制重跑 `assembleDebug test --rerun-tasks` 成功，361/361 tasks；JVM 130/130；边界审计无环 | `0e7cfa7` |
 
 ## 6. 最终构建与测试
 
@@ -104,12 +104,18 @@
 
 ## 8. 备份
 
-- 备份 ZIP：待生成
+- 备份 ZIP：`D:\gptuser\backups\ai-novel-reader-app3\2026-08-11\ai-novel-reader-app3-2026-08-11-verified.zip`（封装中）
 - SHA-256：待填写
 - 可读性/恢复校验：待执行
 - 排除项：`.gradle`、`.kotlin`、所有模块 `build`、本地密钥、`local.properties`、签名文件
 
-## 9. 未完成风险
+## 9. Git 同步
+
+- 公开远端：`https://github.com/kayakdu06-cyber/ai-novel-reader-app3`
+- 本地 `main` 已设置跟踪 `origin/main`。
+- Phase 0–8 的逐阶段提交已推送；备份哈希元数据将在 ZIP 生成后另行提交并推送。
+
+## 10. 未完成风险
 
 - 本次完成的是十模块架构整改和可编译的 reader/library/template 最小功能边界，不等于阅读器、书架和模板的全部产品 UI 已经完成。
 - app 的旧 M0 调试探针仍直接使用 data/core，但仅存在于 `src/debug`，不会扩大 release 生产代码依赖；后续可迁入专门测试夹具模块。
