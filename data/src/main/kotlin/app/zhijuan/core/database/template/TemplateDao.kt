@@ -32,6 +32,15 @@ internal interface TemplateDao {
     @Query("SELECT * FROM template WHERE template_id = :templateId")
     suspend fun findTemplate(templateId: String): TemplateEntity?
 
+    @Query(
+        """
+        SELECT * FROM template
+        WHERE archived_at IS NULL
+        ORDER BY is_pinned DESC, is_favorite DESC, updated_at DESC, template_id ASC
+        """,
+    )
+    suspend fun activeTemplates(): List<TemplateEntity>
+
     @Query("SELECT * FROM template_revision WHERE template_revision_id = :revisionId")
     suspend fun findRevision(revisionId: String): TemplateRevisionEntity?
 

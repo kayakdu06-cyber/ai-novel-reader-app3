@@ -85,6 +85,9 @@ dependencies {
     implementation(project(":provider"))
     implementation(project(":feature:connection"))
     implementation(project(":feature:creation"))
+    implementation(project(":feature:reader"))
+    implementation(project(":feature:library"))
+    implementation(project(":feature:template"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)

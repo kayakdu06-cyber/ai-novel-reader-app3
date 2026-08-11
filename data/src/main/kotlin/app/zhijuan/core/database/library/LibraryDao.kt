@@ -51,6 +51,16 @@ internal interface LibraryDao {
     @Query("SELECT * FROM book WHERE book_id = :bookId")
     suspend fun findBook(bookId: String): BookEntity?
 
+    @Query(
+        """
+        SELECT * FROM book
+        WHERE deleted_at IS NULL
+          AND archived_at IS NULL
+        ORDER BY updated_at DESC, book_id ASC
+        """,
+    )
+    suspend fun activeBooks(): List<BookEntity>
+
     @Query("SELECT * FROM book_creation_snapshot WHERE snapshot_id = :snapshotId")
     suspend fun findCreationSnapshot(snapshotId: String): BookCreationSnapshotEntity?
 
@@ -78,6 +88,18 @@ internal interface LibraryDao {
         """,
     )
     suspend fun chaptersForBook(bookId: String): List<ChapterEntity>
+
+    @Query(
+        """
+        SELECT chapter_version.content
+        FROM chapter
+        INNER JOIN chapter_version
+          ON chapter_version.chapter_version_id = chapter.current_version_id
+        WHERE chapter.chapter_id = :chapterId
+        LIMIT 1
+        """,
+    )
+    suspend fun currentChapterContent(chapterId: String): String?
 
     @Query(
         """
