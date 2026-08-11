@@ -64,6 +64,18 @@
 
 自动修订达到上限后，不继续循环。展示最关键的 1–3 个冲突；用户可接受当前章、重试或编辑设定。若违反硬性成人状态和应用内容边界，不提供“仍然提交”。
 
+### 5.5 生成过慢
+
+章节 watchdog 使用持久 Stage/Attempt 时间和最近流进度，不使用 Activity 内存倒计时。正常参考章达到 5 分钟后：
+
+1. 不再安排新的远程 Stage；
+2. 在途调用尽力取消并强制保存加密草稿检查点；
+3. 已有完整段落继续以“生成中正文”只读显示；
+4. 能证明未发送或未执行时才安全回队；请求可能已经离开设备时进入结果未知；
+5. 默认只提示“当前模型响应太慢，已安全暂停”，推荐切换到已验证的快速模型档案，不自动切换 host 或更贵模型。
+
+10 分钟仍未结束是 P0 发布阻断，不允许靠无限延长网络超时、自动重试或只显示半章把它当成成功。外部服务实际速度不受 App 完全控制，未验证组合可以使用但不能成为默认推荐。
+
 ## 6. 结果未知
 
 网络超时可能发生在服务端已经完成之后，甚至可能发生在“联网许可已交给执行器、请求已离开设备、Started 尚未写回数据库”的窗口。因此仅有 RequestIntent 也不能推导“没有发送”。
@@ -405,3 +417,49 @@ HTTP 400 `invalid_request_error` 与 404 `not_found_error` 当前保守归入 `P
 | candidate/input/local/scene hash 变化 | Provider-open 前 0 调用；返回旧结果时拒绝 | 按新候选重新准备 | 只改 hash 或复用旧报告 |
 | blocker/major 检出 | `REVISE_CANDIDATE`，正文仍为受保护候选 | TASK-059 自动有限修订 | 提前写入正式章节 |
 | 只有 minor/无问题 | `ACCEPT_CANDIDATE` | 无操作 | 把“允许提交”冒充“已经发布” |
+
+## 31. TASK-083 Phase 5B 跨日发送前错误处理
+
+| 情况 | 系统动作 | 默认用户动作 | 禁止 |
+|---|---|---|---|
+| 未发送请求在 Provider-open 前跨过 DAILY 日界 | 原子结束旧 Attempt、封账 UNKNOWN Usage、释放旧日 reservation；有剩余次数时自动重新排队 | 无操作 | 使用旧日预留发送，或修改旧 reservation 日键 |
+| 旧 Attempt 已达到 `maxAttempts` | Stage/Job 进入 `NEEDS_ACTION`，保留专用有限错误码 | 用户决定重试/调整 | 换日后清零次数形成无限循环 |
+| 同一旧 permit 重放或两个 worker 并发 claim | 至多一个完成释放；其余按 stale 证据失败关闭 | 无操作 | 重复释放、重复创建 Attempt 或进入 Provider |
+| Attempt 已发送、Usage 已封账、reservation 非 RESERVED、租约/身份不一致 | 零写入失败关闭，交由对应恢复/结算路径 | 通常无操作；必要时查看恢复状态 | 把这些情况伪装成“跨日未发送”释放预算 |
+| DAILY head/revision/zone 缺失、无效或校验时间倒退 | Provider 调用 0，保留原状态并要求修复策略/时钟事实 | 修复设置或设备时间 | 猜默认时区、沿用 caller 日键 |
+
+`DailyBudgetPeriodRolloverRequiredException` 只暴露 `retryAllowed`，不包含 ID、日期、zone、金额、token、destination 或快照。Phase 5C 才能在重新取得租约后创建新日新 Attempt；Phase 5B 的 claim 路径不能边释放边发送。
+
+## 32. TASK-083 Phase 5C 新日替代请求错误处理
+
+| 情况 | 系统动作 | 默认用户动作 | 禁止 |
+|---|---|---|---|
+| 普通 prepare 试图接续换日父 Attempt | 创建的新工件立即删除，数据库零写入 | 无操作，交由专用 runner 路径 | 绕过父证据或不复制旧种子 |
+| 父 Attempt/Usage/released reservation 不再是 Phase 5B 精确终态 | 失败关闭；不创建新持久请求 | 通常无操作；由恢复诊断处理 | 按 ID 猜测父状态或接受旧的非最新 Attempt |
+| Job/Stage token、owner、cursor、状态或 heartbeat 不一致/过期 | 失败关闭；Stage 保持当前权威状态 | 等待 runner 重新领取 | 用单 Stage token 冒充双租约授权 |
+| 当前 DAILY 策略仍派生旧日键，或 disclosure destination/protocol/binding 已变化 | 失败关闭，不预留、不发送 | 修复设备时间/策略，或重新确认目的地 | 复用旧日键、静默改发另一个目的地 |
+| 新日 request/book/daily 任一额度不足 | reservation candidate、Attempt、Usage 全部回滚；新工件删除，Stage 保持 `PREPARING` | 调整额度或稍后处理 | 先创建 Attempt 再补预算，或只重置 book 占用 |
+| 旧加密草稿缺失、不可读、超界或复制期间 revision 变化 | 联网前失败；旧引用不改 | 进入恢复/诊断 | 产生明文临时文件、共享旧引用或复制不确定内容 |
+| 新工件创建后数据库拒绝 | 删除新工件，保留旧工件 | 无操作 | 删除父工件或留下已知孤儿 |
+| 两个 worker 并发准备 | 最多一个新 Attempt 成功；失败者回滚并清理新工件 | 无操作 | 两个新日 reservation 同时落库 |
+
+崩溃发生在数据库提交前时，最坏结果是一个仍加密且无数据库引用的 orphan，由现有 retention/cleanup 回收；提交成功后，新工件必须已被新 Attempt 唯一引用。Phase 5C 不打开 Provider，因此这些错误均不能产生远端请求。
+
+## 33. TASK-083 Phase 5D Provider-open 目的地错误处理
+
+- 目的地失败使用有限原因集合：connection、destination origin、protocol、disclosure version、binding、acceptedAt 或 disclosure unavailable；不把实际值、期望值、URL、host 或连接 ID 写入异常。
+- profile protocol 与 adapter protocol 不一致时，在领取发送许可、打开受保护草稿和调用 adapter 之前失败。
+- 实际 evidence 与 reservation 或当前 disclosure 不一致时，数据库事务零写入；不刷新 heartbeat、不释放跨日 reservation、不消耗一次性 permit。修复 profile 后可以使用同一 permit 重试。
+- 证据派生失败、非法 endpoint 或 disclosure 读取失败一律失败关闭，不回退到 reservation 中的旧地址，也不允许调用方传入“已匹配”布尔值绕过比较。
+
+## 34. TASK-064 Phase 2E5A plan 请求准备错误处理
+
+| 情况 | 系统动作 | 默认用户动作 | 禁止 |
+|---|---|---|---|
+| 普通 plan 调用通用 Stage-token prepare | 失败关闭并删除刚创建的加密草稿；数据库零写入 | 无操作，由 runner 使用 bound 入口 | 把 Stage token 当成 Job+Stage 双租约 |
+| snapshot route、Job/Stage token、owner、cursor、状态或 attempt 上下界变化 | 同一事务内拒绝，不创建 reservation/Attempt/Usage | 等待 runner 重新解析 current route | 读取“最新同 owner token”替换旧 token |
+| heartbeat 过期或请求时间倒退 | 联网前拒绝，保留权威 Stage 状态 | 重新领取租约 | 延长旧授权或猜测设备时间 |
+| 来源 JSON 损坏但 phase 仍是 BUILD_CHAPTER_PLAN | 按普通 plan 的 bound-required 路径失败，不回退通用发送 | 修复持久来源或恢复任务 | 通过解析失败逃逸到 generic executor |
+| 工件已创建、随后事务拒绝 | 删除新工件；Attempt/Usage/reservation 均不存在 | 无操作 | 留下已知孤儿或删除其他请求工件 |
+
+错误对象不得展开 prompt、plan、人物、hash、连接或租约身份。本阶段尚未调用 Provider，因此没有远端 UNKNOWN 结果。

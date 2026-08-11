@@ -20,6 +20,7 @@ class GenerationJobStateMachineTest {
             (GenerationJobStatus.PAUSING to JobEvent.SAFE_POINT_REACHED) to GenerationJobStatus.PAUSED,
             (GenerationJobStatus.PAUSING to JobEvent.ALL_STAGES_COMPLETED) to GenerationJobStatus.COMPLETED,
             (GenerationJobStatus.RUNNING to JobEvent.USER_ACTION_REQUIRED) to GenerationJobStatus.NEEDS_ACTION,
+            (GenerationJobStatus.RUNNING to JobEvent.DAILY_BUDGET_ROLLOVER_COMPLETED) to GenerationJobStatus.READY,
             (GenerationJobStatus.RUNNING to JobEvent.ALL_STAGES_COMPLETED) to GenerationJobStatus.COMPLETED,
             (GenerationJobStatus.RUNNING to JobEvent.RECOVERY_REQUEUED) to GenerationJobStatus.READY,
             (GenerationJobStatus.RUNNING to JobEvent.STOP_REQUESTED) to GenerationJobStatus.STOPPING,

@@ -12,6 +12,7 @@ import app.zhijuan.core.database.memory.EntityEventEntity
 import app.zhijuan.core.database.memory.ForeshadowItemEntity
 import app.zhijuan.core.database.memory.ForeshadowTransitionEntity
 import app.zhijuan.core.database.memory.TimelineEventEntity
+import app.zhijuan.core.database.search.MemorySearchIndexWriterV1
 import app.zhijuan.core.model.BookStatus
 import app.zhijuan.core.model.CanonLevel
 import app.zhijuan.core.model.ChapterStatus
@@ -135,6 +136,7 @@ class ChapterFinalCandidateCommitRepositoryV1(
                 bookId = book.bookId,
             )
             requireDerivedOwnership(draft, book.bookId, chapter.chapterIndex, persistedEvidence)
+            requireFinalCommitStageBinding(draft, finalStage, persistedEvidence, chapter.chapterIndex)
 
             if (finalStage.status == GenerationStageStatus.SUCCEEDED) {
                 return@withTransaction replayCommitted(finalStage, job, draft, contentHash, outputReference)
@@ -155,6 +157,9 @@ class ChapterFinalCandidateCommitRepositoryV1(
                 "Final Stage already owns a chapter version without a completed commit record."
             }
 
+            val replacedSearchIdentities = draft.expectedCurrentVersionId?.let { replacedVersionId ->
+                MemorySearchIndexWriterV1.identitiesForReplacedChapter(memory, book.bookId, replacedVersionId)
+            }
             val stale = draft.expectedCurrentVersionId?.let { replacedVersionId ->
                 memory.markDerivedDataStaleForReplacedChapter(book.bookId, replacedVersionId, draft.committedAt)
             }
@@ -196,8 +201,36 @@ class ChapterFinalCandidateCommitRepositoryV1(
             if (draft.foreshadowTransitions.isNotEmpty()) {
                 memory.insertForeshadowTransitions(draft.foreshadowTransitions)
             }
+            ForeshadowProjectionRevisionWriterV1(memory).persistAfterStates(
+                bookId = book.bookId,
+                chapterIndex = chapter.chapterIndex,
+                sourceChapterVersionId = version.chapterVersionId,
+                generationStageId = draft.trackingProjection.generationStageId,
+                transitions = draft.foreshadowTransitions,
+            )
             memory.insertTrackingProjection(draft.trackingProjection)
             memory.insertConsistencyReport(draft.consistencyReport)
+
+            val search = database.memorySearchDao()
+            replacedSearchIdentities?.let { search.deleteSources(it) }
+            MemorySearchIndexWriterV1.replaceChapterMemory(
+                search = search,
+                summary = draft.summary,
+                entityEvents = draft.entityEvents,
+                canonFacts = draft.canonFacts,
+            )
+            MemorySearchIndexWriterV1.replaceStoryTracking(
+                search = search,
+                chapterIndex = chapter.chapterIndex,
+                timelineEvents = draft.timelineEvents,
+                foreshadows = (
+                    draft.newForeshadows + draft.existingForeshadowUpdates.map { update ->
+                        requireNotNull(memory.findForeshadow(update.foreshadowItemId)) {
+                            "Updated foreshadow disappeared during final publication."
+                        }
+                    }
+                ).sortedBy { it.foreshadowItemId },
+            )
 
             if (
                 library.compareAndSetGeneratedCurrentVersion(
@@ -310,6 +343,32 @@ class ChapterFinalCandidateCommitRepositoryV1(
                 consistency.string("nextStageId") == finalStage.stageId,
         ) { "Candidate evidence is not one contiguous body-memory-tracking-check chain." }
         return result
+    }
+
+    private fun requireFinalCommitStageBinding(
+        draft: ChapterFinalCandidateCommitDraftV1,
+        finalStage: GenerationStageEntity,
+        evidence: Map<ChapterCandidateArtifactRoleV1, Pair<GenerationStageEntity, RequestAttemptEntity>>,
+        chapterIndex: Int,
+    ) {
+        val source = ChapterFinalCommitStageBindingV1.parseAndVerify(finalStage)
+        val consistencyStage = evidence.getValue(ChapterCandidateArtifactRoleV1.CONSISTENCY).first
+        val consistencyOutput = parseObject(
+            requireNotNull(consistencyStage.outputReferenceJson) { "Consistency seal output is missing." },
+            "Consistency seal",
+        )
+        require(
+            source.candidateChapterVersionId == draft.chapterVersionId &&
+                source.candidateContentHash == draft.candidateContentHashHistory.last() &&
+                source.chapterId == draft.chapterId && source.chapterIndex == chapterIndex &&
+                source.revisionIndex == draft.revisionIndex &&
+                source.expectedCurrentVersionId == draft.expectedCurrentVersionId &&
+                source.maximumAutomaticRevisions == draft.maximumAutomaticRevisions &&
+                source.candidateContentHashHistory == draft.candidateContentHashHistory &&
+                source.predecessorStageId == consistencyStage.stageId &&
+                source.routeBindingHash == consistencyOutput.string("routeBindingHash") &&
+                source.consistencyRequestSourceBindingHash == consistencyOutput.string("sourceBindingHash"),
+        ) { "Final commit Stage source does not match the frozen publication draft." }
     }
 
     private fun requireDerivedOwnership(
@@ -466,16 +525,28 @@ class ChapterFinalCandidateCommitRepositoryV1(
         require(memory.timelineEventsForVersion(draft.chapterVersionId) == draft.timelineEvents.sortedWith(TIMELINE_ORDER))
         require(memory.findTrackingProjectionForVersion(draft.chapterVersionId) == draft.trackingProjection)
         require(memory.foreshadowTransitionsForStage(draft.trackingProjection.generationStageId) == draft.foreshadowTransitions.sortedWith(TRANSITION_ORDER))
+        val recordedForeshadowAfterStates = ForeshadowProjectionRevisionWriterV1(memory).requireStoredAfterStates(
+            bookId = draft.summary.bookId,
+            chapterIndex = draft.summary.chapterIndex,
+            sourceChapterVersionId = draft.chapterVersionId,
+            generationStageId = draft.trackingProjection.generationStageId,
+            transitions = draft.foreshadowTransitions,
+        )
         require(memory.findConsistencyReport(draft.consistencyReport.consistencyReportId) == draft.consistencyReport)
-        draft.newForeshadows.forEach { require(memory.findForeshadow(it.foreshadowItemId) == it) }
-        draft.existingForeshadowUpdates.forEach { update ->
-            val stored = requireNotNull(memory.findForeshadow(update.foreshadowItemId))
-            require(
-                stored.foreshadowStatus == update.toStatus && stored.sourceChapterVersionId == draft.chapterVersionId &&
-                    stored.resolvedChapterVersionId == update.resolvedChapterVersionId &&
-                    stored.visibleEntityIdsJson == update.visibleEntityIdsJson && stored.importance == update.importance,
-            )
-        }
+        MemorySearchIndexWriterV1.replaceChapterMemory(
+            search = database.memorySearchDao(),
+            summary = draft.summary,
+            entityEvents = draft.entityEvents,
+            canonFacts = draft.canonFacts,
+        )
+        MemorySearchIndexWriterV1.replaceStoryTracking(
+            search = database.memorySearchDao(),
+            chapterIndex = draft.summary.chapterIndex,
+            timelineEvents = memory.timelineEventsForVersion(draft.chapterVersionId),
+            foreshadows = recordedForeshadowAfterStates.mapNotNull { recorded ->
+                memory.findForeshadow(recorded.foreshadowItemId)?.takeIf { current -> current == recorded }
+            },
+        )
         require(job.status == GenerationJobStatus.COMPLETED)
         return ChapterFinalCandidateCommitResultV1(
             draft.chapterVersionId,

@@ -2,7 +2,13 @@ package app.zhijuan.core.database.generation
 
 import androidx.room.withTransaction
 import app.zhijuan.core.database.ZhijuanDatabase
+import app.zhijuan.core.model.BudgetDailyPeriodKeyV1
+import app.zhijuan.core.model.BudgetReservationStatus
+import app.zhijuan.core.model.BudgetScope
+import app.zhijuan.core.model.ExternalDataDestinationBindingV1
 import app.zhijuan.core.model.GenerationJobStatus
+import app.zhijuan.core.model.GenerationPhase
+import app.zhijuan.core.model.ProviderOpenDestinationEvidence
 import app.zhijuan.core.model.RequestAttemptStatus
 import app.zhijuan.core.model.UsageLedgerStatus
 import app.zhijuan.core.model.UsageSource
@@ -22,7 +28,6 @@ class RequestIntentDraft(
     val protocolSnapshotJson: String,
     val inputHash: String,
     val streamDraftRef: String?,
-    val dailyPeriodKey: String,
     val createdAt: Long,
 ) {
     override fun toString(): String =
@@ -36,10 +41,14 @@ class PersistedRequestSendPermit internal constructor(
     val inputHash: String,
     val leaseToken: GenerationLeaseToken,
     val intentRecordedAt: Long,
+    internal val reservationId: String,
 ) {
     private val claimed = AtomicBoolean(false)
 
-    internal fun claimAfterPersistedLeaseValidation(validatedAt: Long): ClaimedRequestSend {
+    internal fun claimAfterPersistedLeaseValidation(
+        validatedAt: Long,
+        destination: ProviderOpenDestinationEvidence,
+    ): ClaimedRequestSend {
         check(claimed.compareAndSet(false, true)) {
             "A persisted request send permit can be claimed only once."
         }
@@ -50,7 +59,9 @@ class PersistedRequestSendPermit internal constructor(
             inputHash = inputHash,
             leaseToken = leaseToken,
             intentRecordedAt = intentRecordedAt,
+            reservationId = reservationId,
             leaseValidatedAt = validatedAt,
+            destination = destination,
         )
     }
 
@@ -64,7 +75,9 @@ class ClaimedRequestSend internal constructor(
     val inputHash: String,
     val leaseToken: GenerationLeaseToken,
     val intentRecordedAt: Long,
+    internal val reservationId: String,
     val leaseValidatedAt: Long,
+    internal val destination: ProviderOpenDestinationEvidence,
 ) {
     override fun toString(): String = "ClaimedRequestSend(audit=redacted)"
 }
@@ -100,17 +113,149 @@ data class PersistedRequestAudit(
     val usage: StoredUsageLedgerAudit,
 )
 
+/**
+ * Business signal that the daily budget period expired before the request was
+ * sent: the unsent v1 attempt and its reservation were released by the
+ * dedicated rollover transaction, and the persistent runner must re-prepare
+ * the request. Deliberately redacted: only a limited retry flag is carried;
+ * no ids, dates, zones, amounts, tokens, destinations, or snapshots.
+ */
+class DailyBudgetPeriodRolloverRequiredException(
+    val retryAllowed: Boolean,
+) : Exception("Daily budget period expired before send; the persistent runner must re-prepare the request.") {
+    override fun toString(): String = "DailyBudgetPeriodRolloverRequiredException(retryAllowed=$retryAllowed)"
+}
+
+enum class ProviderOpenDestinationMismatchReason {
+    CONNECTION_ID,
+    DESTINATION_ORIGIN,
+    PROTOCOL,
+    DISCLOSURE_VERSION,
+    DISCLOSURE_BINDING,
+    DISCLOSURE_ACCEPTED_AT,
+    DISCLOSURE_UNAVAILABLE,
+}
+
+/**
+ * Finite, redacted provider-open failure. A mismatch does not consume the
+ * in-memory permit and does not move Attempt, Usage, reservation, Stage, or Job.
+ */
+class ProviderOpenDestinationMismatchException(
+    val reason: ProviderOpenDestinationMismatchReason,
+) : IllegalStateException("Provider-open destination validation failed.") {
+    override fun toString(): String =
+        "ProviderOpenDestinationMismatchException(reason=$reason)"
+}
+
 class GenerationRequestAuditRepository(
     private val database: ZhijuanDatabase,
     private val leasePolicy: GenerationLeasePolicy = GenerationLeasePolicy(),
 ) {
     internal suspend fun persistBeforeSend(
         draft: RequestIntentDraft,
+        budget: RequestBudgetReservationDraft,
         leaseToken: GenerationLeaseToken,
+    ): PersistedRequestAudit = database.withTransaction {
+        requireUnboundPreparationAllowed(draft.stageId)
+        persistBeforeSendInternal(
+            draft = draft,
+            budget = budget,
+            leaseToken = leaseToken,
+            rolloverParentAttemptId = null,
+            rolloverSourceArtifactRefId = null,
+            executionLease = null,
+        )
+    }
+
+    internal suspend fun persistBoundChapterPlanBeforeSend(
+        draft: RequestIntentDraft,
+        budget: RequestBudgetReservationDraft,
+        snapshot: GenerationRunnerCurrentStageRouteSnapshot,
+    ): PersistedRequestAudit = database.withTransaction {
+        requireBoundChapterPlanExecution(draft, snapshot)
+        persistBeforeSendInternal(
+            draft = draft,
+            budget = budget,
+            leaseToken = snapshot.executionLease.stageLeaseToken,
+            rolloverParentAttemptId = null,
+            rolloverSourceArtifactRefId = null,
+            executionLease = null,
+        )
+    }
+
+    internal suspend fun persistDailyRolloverReplacementBeforeSend(
+        draft: RequestIntentDraft,
+        budget: RequestBudgetReservationDraft,
+        executionLease: GenerationRunnerExecutionLeaseSnapshot,
+        parentAttemptId: String,
+        sourceArtifactRefId: String,
+    ): PersistedRequestAudit = database.withTransaction {
+        requireUnboundPreparationAllowed(draft.stageId)
+        persistBeforeSendInternal(
+            draft = draft,
+            budget = budget,
+            leaseToken = executionLease.stageLeaseToken,
+            rolloverParentAttemptId = parentAttemptId,
+            rolloverSourceArtifactRefId = sourceArtifactRefId,
+            executionLease = executionLease,
+        )
+    }
+
+    internal suspend fun persistBoundChapterPlanDailyRolloverReplacementBeforeSend(
+        draft: RequestIntentDraft,
+        budget: RequestBudgetReservationDraft,
+        snapshot: GenerationRunnerCurrentStageRouteSnapshot,
+        parentAttemptId: String,
+        sourceArtifactRefId: String,
+    ): PersistedRequestAudit = database.withTransaction {
+        requireBoundChapterPlanExecution(draft, snapshot)
+        persistBeforeSendInternal(
+            draft = draft,
+            budget = budget,
+            leaseToken = snapshot.executionLease.stageLeaseToken,
+            rolloverParentAttemptId = parentAttemptId,
+            rolloverSourceArtifactRefId = sourceArtifactRefId,
+            executionLease = snapshot.executionLease,
+        )
+    }
+
+    private suspend fun persistBeforeSendInternal(
+        draft: RequestIntentDraft,
+        budget: RequestBudgetReservationDraft,
+        leaseToken: GenerationLeaseToken,
+        rolloverParentAttemptId: String?,
+        rolloverSourceArtifactRefId: String?,
+        executionLease: GenerationRunnerExecutionLeaseSnapshot?,
     ): PersistedRequestAudit {
         RequestIntentDraftPolicy.validate(draft)
         val dao = database.generationDao()
-        val attempt = dao.recordRequestIntent(draft.toInternal(), leaseToken)
+        val reservationRepository = PersistentBudgetReservationRepository(database, leasePolicy)
+        val result = if (executionLease == null) {
+            check(rolloverParentAttemptId == null && rolloverSourceArtifactRefId == null) {
+                "Daily rollover replacement evidence is incomplete."
+            }
+            reservationRepository.recordBudgetedRequestIntent(draft.toInternal(), budget, leaseToken)
+        } else {
+            val parentAttemptId = requireNotNull(rolloverParentAttemptId) {
+                "Daily rollover replacement parent is missing."
+            }
+            val sourceArtifactRefId = requireNotNull(rolloverSourceArtifactRefId) {
+                "Daily rollover replacement source artifact is missing."
+            }
+            require(draft.retryParentAttemptId == parentAttemptId) {
+                "Daily rollover replacement must name its released parent."
+            }
+            reservationRepository.recordDailyRolloverReplacementRequestIntent(
+                intent = draft.toInternal(),
+                budget = budget,
+                executionLease = executionLease,
+                parentAttemptId = parentAttemptId,
+                sourceArtifactRefId = sourceArtifactRefId,
+            )
+        }
+        val attempt = requireNotNull(dao.findAttempt(result.attemptId)) {
+            "A budgeted request intent must own a persisted attempt before sending."
+        }
         val usage = requireNotNull(dao.findUsageForAttempt(attempt.attemptId)) {
             "A persisted request intent must own a usage ledger before sending."
         }
@@ -125,6 +270,7 @@ class GenerationRequestAuditRepository(
                 inputHash = attempt.inputHash,
                 leaseToken = leaseToken,
                 intentRecordedAt = attempt.requestIntentAt,
+                reservationId = result.reservationId,
             ),
             attempt = attempt.toStoredAudit(),
             usage = usage.toStoredAudit(),
@@ -134,8 +280,11 @@ class GenerationRequestAuditRepository(
     internal suspend fun claimForProviderOpen(
         permit: PersistedRequestSendPermit,
         validatedAt: Long,
+        destination: ProviderOpenDestinationEvidence,
     ): ClaimedRequestSend {
         val dao = database.generationDao()
+        var rolloverRequired = false
+        var rolloverRetryAllowed = false
         database.withTransaction {
             val attempt = validatePermitEvidence(
                 attemptId = permit.attemptId,
@@ -143,16 +292,42 @@ class GenerationRequestAuditRepository(
                 attemptNo = permit.attemptNo,
                 inputHash = permit.inputHash,
                 intentRecordedAt = permit.intentRecordedAt,
+                reservationId = permit.reservationId,
+                allowedAttemptStatuses = setOf(RequestAttemptStatus.INTENT_RECORDED),
             )
-            requireJobAllowsProviderOpen(attempt, validatedAt)
-            dao.heartbeatStageLease(
-                stageId = permit.stageId,
-                leaseToken = permit.leaseToken,
-                now = validatedAt,
-                policy = leasePolicy,
+            val reservation = requireNotNull(dao.findBudgetReservationByAttempt(attempt.attemptId)) {
+                "A v1 provider open requires its budget reservation."
+            }
+            requireProviderOpenDestination(
+                destination = destination,
+                reservation = reservation,
             )
+            val currentPeriodKey = dao.currentDailyBudgetPeriodKey(validatedAt)
+            if (currentPeriodKey == reservation.dailyPeriodKey) {
+                requireJobAllowsProviderOpen(attempt, validatedAt)
+                dao.heartbeatStageLease(
+                    stageId = permit.stageId,
+                    leaseToken = permit.leaseToken,
+                    now = validatedAt,
+                    policy = leasePolicy,
+                )
+            } else {
+                val disposition = dao.releaseUnsentAttemptAfterDailyRollover(
+                    attemptId = permit.attemptId,
+                    reservationId = permit.reservationId,
+                    leaseToken = permit.leaseToken,
+                    validatedAt = validatedAt,
+                )
+                rolloverRequired = true
+                rolloverRetryAllowed = disposition == DailyRolloverDisposition.REQUEUED
+            }
         }
-        return permit.claimAfterPersistedLeaseValidation(validatedAt)
+        if (rolloverRequired) {
+            // The rollover committed above; the business signal must be thrown
+            // after the transaction so the release is never rolled back.
+            throw DailyBudgetPeriodRolloverRequiredException(retryAllowed = rolloverRetryAllowed)
+        }
+        return permit.claimAfterPersistedLeaseValidation(validatedAt, destination)
     }
 
     internal suspend fun markRequestSent(
@@ -173,7 +348,10 @@ class GenerationRequestAuditRepository(
             attemptNo = claimedSend.attemptNo,
             inputHash = claimedSend.inputHash,
             intentRecordedAt = claimedSend.intentRecordedAt,
+            reservationId = claimedSend.reservationId,
+            allowedAttemptStatuses = setOf(RequestAttemptStatus.INTENT_RECORDED),
         )
+        requireDestinationMatchesReservation(claimedSend)
         return dao.recordRequestSent(
             attemptId = attempt.attemptId,
             providerRequestId = providerRequestId,
@@ -189,7 +367,18 @@ class GenerationRequestAuditRepository(
         require(startedAt >= claimedSend.leaseValidatedAt) {
             "Stream-start time cannot precede send authorization."
         }
-        return database.generationDao().recordStreamStarted(
+        val dao = database.generationDao()
+        validatePermitEvidence(
+            attemptId = claimedSend.attemptId,
+            stageId = claimedSend.stageId,
+            attemptNo = claimedSend.attemptNo,
+            inputHash = claimedSend.inputHash,
+            intentRecordedAt = claimedSend.intentRecordedAt,
+            reservationId = claimedSend.reservationId,
+            allowedAttemptStatuses = setOf(RequestAttemptStatus.SENT),
+        )
+        requireDestinationMatchesReservation(claimedSend)
+        return dao.recordStreamStarted(
             attemptId = claimedSend.attemptId,
             updatedAt = startedAt,
             leaseToken = claimedSend.leaseToken,
@@ -208,27 +397,122 @@ class GenerationRequestAuditRepository(
         attemptNo: Int,
         inputHash: String,
         intentRecordedAt: Long,
+        reservationId: String,
+        allowedAttemptStatuses: Set<RequestAttemptStatus>,
     ): RequestAttemptEntity {
         val dao = database.generationDao()
-        val attempt = requireNotNull(dao.findAttempt(attemptId)) {
-            "Persisted request attempt no longer exists."
-        }
-        val usage = requireNotNull(dao.findUsageForAttempt(attemptId)) {
-            "Persisted request usage ledger no longer exists."
-        }
+        val attempt = dao.findAttempt(attemptId)
+            ?: throw StaleGenerationStateException("Persisted request audit evidence is incomplete.")
+        val usage = dao.findUsageForAttempt(attemptId)
+            ?: throw StaleGenerationStateException("Persisted request audit evidence is incomplete.")
         if (
-            attempt.status != RequestAttemptStatus.INTENT_RECORDED ||
+            attempt.status !in allowedAttemptStatuses ||
             attempt.stageId != stageId ||
             attempt.attemptNo != attemptNo ||
             attempt.inputHash != inputHash ||
             attempt.requestIntentAt != intentRecordedAt ||
             usage.attemptId != attempt.attemptId ||
-            usage.status != UsageLedgerStatus.PROVISIONAL
+            usage.source != UsageSource.UNKNOWN ||
+            usage.status != UsageLedgerStatus.PROVISIONAL ||
+            usage.totalTokens != null
         ) {
             throw StaleGenerationStateException("Request send permit no longer matches persisted audit evidence.")
         }
+        if (attempt.budgetEnforcementVersion != 1 || attempt.budgetReservationId != reservationId) {
+            throw StaleGenerationStateException("Request send permit does not match a v1 budgeted attempt.")
+        }
+        val reservation = database.budgetDao().findReservation(reservationId)
+            ?: throw StaleGenerationStateException("Persisted budget evidence is incomplete.")
+        if (reservation.status != BudgetReservationStatus.RESERVED) {
+            throw StaleGenerationStateException("Budget reservation is no longer reserved.")
+        }
+        val job = dao.findJob(attempt.jobId)
+            ?: throw StaleGenerationStateException("Persisted request audit evidence is incomplete.")
+        if (
+            reservation.attemptId != attempt.attemptId ||
+            reservation.stageId != attempt.stageId ||
+            reservation.jobId != job.jobId ||
+            reservation.bookId != job.bookId ||
+            usage.bookId != reservation.bookId ||
+            reservation.dailyPeriodKey != usage.dailyPeriodKey
+        ) {
+            throw StaleGenerationStateException("Budget reservation no longer matches the persisted attempt.")
+        }
         return attempt
     }
+
+    /**
+     * The executor-observed destination, current disclosure, and frozen
+     * reservation must all agree before any provider-open write is allowed.
+     * This runs before both the same-day heartbeat and the cross-day release.
+     */
+    private suspend fun requireProviderOpenDestination(
+        destination: ProviderOpenDestinationEvidence,
+        reservation: RequestBudgetReservationEntity,
+    ) {
+        if (destination.connectionId != reservation.connectionId) {
+            throw providerOpenDestinationMismatch(ProviderOpenDestinationMismatchReason.CONNECTION_ID)
+        }
+        val current = try {
+            database.connectionDao().readAcceptedDataDisclosureEvidence(reservation.connectionId)
+        } catch (_: IllegalArgumentException) {
+            throw providerOpenDestinationMismatch(
+                ProviderOpenDestinationMismatchReason.DISCLOSURE_UNAVAILABLE,
+            )
+        } catch (_: IllegalStateException) {
+            throw providerOpenDestinationMismatch(
+                ProviderOpenDestinationMismatchReason.DISCLOSURE_UNAVAILABLE,
+            )
+        }
+        if (destination.normalizedDestination != current.normalizedDestination) {
+            throw providerOpenDestinationMismatch(ProviderOpenDestinationMismatchReason.DESTINATION_ORIGIN)
+        }
+        if (destination.protocolId != current.protocolId) {
+            throw providerOpenDestinationMismatch(ProviderOpenDestinationMismatchReason.PROTOCOL)
+        }
+        if (current.normalizedDestination != reservation.normalizedDestination) {
+            throw providerOpenDestinationMismatch(ProviderOpenDestinationMismatchReason.DESTINATION_ORIGIN)
+        }
+        if (current.protocolId != reservation.protocolId) {
+            throw providerOpenDestinationMismatch(ProviderOpenDestinationMismatchReason.PROTOCOL)
+        }
+        if (current.disclosureVersion != reservation.disclosureVersion) {
+            throw providerOpenDestinationMismatch(ProviderOpenDestinationMismatchReason.DISCLOSURE_VERSION)
+        }
+        if (
+            !ExternalDataDestinationBindingV1.constantTimeEquals(
+                current.bindingHash,
+                reservation.disclosureBindingHash,
+            )
+        ) {
+            throw providerOpenDestinationMismatch(ProviderOpenDestinationMismatchReason.DISCLOSURE_BINDING)
+        }
+        if (current.acceptedAt < reservation.disclosureAcceptedAt) {
+            throw providerOpenDestinationMismatch(ProviderOpenDestinationMismatchReason.DISCLOSURE_ACCEPTED_AT)
+        }
+    }
+
+    private suspend fun requireDestinationMatchesReservation(claimedSend: ClaimedRequestSend) {
+        val reservation = database.generationDao().findBudgetReservationByAttempt(claimedSend.attemptId)
+            ?: throw providerOpenDestinationMismatch(
+                ProviderOpenDestinationMismatchReason.DISCLOSURE_UNAVAILABLE,
+            )
+        val destination = claimedSend.destination
+        when {
+            destination.connectionId != reservation.connectionId ->
+                throw providerOpenDestinationMismatch(ProviderOpenDestinationMismatchReason.CONNECTION_ID)
+            destination.normalizedDestination != reservation.normalizedDestination ->
+                throw providerOpenDestinationMismatch(
+                    ProviderOpenDestinationMismatchReason.DESTINATION_ORIGIN,
+                )
+            destination.protocolId != reservation.protocolId ->
+                throw providerOpenDestinationMismatch(ProviderOpenDestinationMismatchReason.PROTOCOL)
+        }
+    }
+
+    private fun providerOpenDestinationMismatch(
+        reason: ProviderOpenDestinationMismatchReason,
+    ): ProviderOpenDestinationMismatchException = ProviderOpenDestinationMismatchException(reason)
 
     private suspend fun requireJobAllowsProviderOpen(
         attempt: RequestAttemptEntity,
@@ -247,12 +531,103 @@ class GenerationRequestAuditRepository(
         val stage = requireNotNull(dao.findStage(attempt.stageId)) {
             "Provider-open generation stage no longer exists."
         }
+        if (
+            ChapterCandidateStageSourceGuard(database).requireProviderOpenAllowedIfBound(
+                stage,
+                job,
+                attempt.inputHash,
+            )
+        ) return
+        ChapterEditRebuildStageRepository(database).requireProviderOpenAllowedIfBound(
+            stage = stage,
+            job = job,
+            observedAt = validatedAt,
+        )
         ChapterProgressionGateRepository(database).requireProviderOpenAllowed(stage, job)
         ChapterContextAssemblyRepository(database).requireProviderOpenAllowedIfBound(stage, job)
         ChapterMemoryExtractionSourceGuard(database).requireProviderOpenAllowedIfBound(stage, job)
         ChapterTrackingProjectionSourceGuard(database).requireProviderOpenAllowedIfBound(stage, job)
     }
+
+    private suspend fun requireUnboundPreparationAllowed(stageId: String) {
+        val stage = requireNotNull(database.generationDao().findStage(stageId)) {
+            "Request-intent Stage is missing."
+        }
+        if (requiresBoundChapterPlanExecution(stage)) {
+            throw StaleGenerationStateException(
+                "A normal chapter-plan request requires the bound runner preparation path.",
+            )
+        }
+    }
+
+    private suspend fun requireBoundChapterPlanExecution(
+        draft: RequestIntentDraft,
+        snapshot: GenerationRunnerCurrentStageRouteSnapshot,
+    ) {
+        val lease = snapshot.executionLease
+        if (
+            snapshot.route != GenerationRunnerStageRoute.CHAPTER_PLAN_V1 ||
+            draft.stageId != lease.stageId ||
+            lease.jobStatus != GenerationJobStatus.RUNNING ||
+            lease.stageStatus != app.zhijuan.core.model.GenerationStageStatus.PREPARING ||
+            lease.jobLeaseToken.ownerId != lease.stageLeaseToken.ownerId
+        ) {
+            throw StaleGenerationStateException("Bound chapter-plan execution snapshot is invalid.")
+        }
+        val dao = database.generationDao()
+        val stage = requireNotNull(dao.findStage(lease.stageId)) {
+            "Bound chapter-plan Stage is missing."
+        }
+        val job = requireNotNull(dao.findJob(lease.jobId)) {
+            "Bound chapter-plan Job is missing."
+        }
+        val jobHeartbeatAt = job.leaseHeartbeatAt
+            ?: throw StaleGenerationStateException("Bound chapter-plan Job heartbeat is missing.")
+        val stageHeartbeatAt = stage.leaseHeartbeatAt
+            ?: throw StaleGenerationStateException("Bound chapter-plan Stage heartbeat is missing.")
+        if (
+            job.jobId != lease.jobId ||
+            stage.stageId != lease.stageId ||
+            stage.jobId != job.jobId ||
+            job.status != GenerationJobStatus.RUNNING ||
+            stage.status != app.zhijuan.core.model.GenerationStageStatus.PREPARING ||
+            job.currentStageId != stage.stageId ||
+            job.pauseOrStopReason != null ||
+            job.leaseTokenOrNull() != lease.jobLeaseToken ||
+            stage.leaseTokenOrNull() != lease.stageLeaseToken ||
+            jobHeartbeatAt < lease.jobHeartbeatAt ||
+            stageHeartbeatAt < lease.stageHeartbeatAt ||
+            stage.attemptCount != snapshot.attemptCount ||
+            stage.maxAttempts != snapshot.maxAttempts ||
+            stage.attemptCount !in 0 until stage.maxAttempts ||
+            GenerationRunnerStageRouteResolver.resolve(stage) != GenerationRunnerStageRoute.CHAPTER_PLAN_V1
+        ) {
+            throw StaleGenerationStateException("Bound chapter-plan execution evidence changed.")
+        }
+        require(
+            draft.createdAt >= job.updatedAt &&
+                draft.createdAt >= stage.updatedAt &&
+                draft.createdAt >= jobHeartbeatAt &&
+                draft.createdAt >= stageHeartbeatAt,
+        ) { "Bound chapter-plan request time cannot move backwards." }
+        if (
+            leasePolicy.isExpired(jobHeartbeatAt, draft.createdAt) ||
+            leasePolicy.isExpired(stageHeartbeatAt, draft.createdAt)
+        ) {
+            throw StaleGenerationStateException("Bound chapter-plan execution lease expired.")
+        }
+    }
+
+    private fun requiresBoundChapterPlanExecution(stage: GenerationStageEntity): Boolean {
+        if (stage.phase != GenerationPhase.BUILD_CHAPTER_PLAN) return false
+        val root = runCatching {
+            BOUND_ROUTE_JSON.parseToJsonElement(stage.inputSourcesJson) as? JsonObject
+        }.getOrNull() ?: return true
+        return "firstChapterBootstrap" !in root
+    }
 }
+
+private val BOUND_ROUTE_JSON = Json { isLenient = false }
 
 internal object RequestIntentDraftPolicy {
     private const val MAX_SNAPSHOT_CHARS = 65_536
@@ -290,9 +665,6 @@ internal object RequestIntentDraftPolicy {
         }
         require(sha256.matches(draft.inputHash)) { "Input hash must be lowercase SHA-256." }
         require(draft.createdAt >= 0L) { "Request intent time must not be negative." }
-        require(draft.dailyPeriodKey.isNotBlank() && draft.dailyPeriodKey.length <= 128) {
-            "Daily period key is invalid."
-        }
         require(
             draft.streamDraftRef != null &&
                 draft.streamDraftRef.length <= MAX_REFERENCE_CHARS &&
@@ -340,7 +712,10 @@ private fun RequestIntentDraft.toInternal() = NewRequestIntent(
     protocolSnapshotJson = protocolSnapshotJson,
     inputHash = inputHash,
     streamDraftRef = streamDraftRef,
-    dailyPeriodKey = dailyPeriodKey,
+    // Non-sensitive placeholder only: the budgeted reservation core derives
+    // the canonical daily key from the active DAILY policy before any write,
+    // and this value never reaches the database.
+    dailyPeriodKey = "policy-derived",
     createdAt = createdAt,
 )
 

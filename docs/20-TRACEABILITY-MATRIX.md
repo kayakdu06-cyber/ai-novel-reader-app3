@@ -10,7 +10,7 @@
 | PR-004 呈现选项 | FEAT-013 | DATA-002,005,021 | TEST-036~039 | TASK-035,050,058 |
 | PR-005 篇幅规划 | FEAT-012,031 | DATA-001,002,006 | TEST-001、篇幅策略边界 | TASK-010,033,034,036,052 |
 | PR-006 分阶段生成 | FEAT-020~023,030~037 | DATA-030~035 | TEST-010~020、TASK-042 发送前审计门、TASK-043 受控流草稿 | TASK-011,040~059 |
-| PR-007 边生成边阅读 | FEAT-024,025,028,060~066 | DATA-001,003,004,030 | TEST-010,012,018、TASK-043 中断隔离 | TASK-010,043~049,090~096 |
+| PR-007 边生成边阅读 | FEAT-024,025,028,060~066,121~123 | DATA-001,003,004,030、受保护草稿投影 | TEST-010,012,018,093~098、TASK-043 中断隔离 | TASK-010,043~049,062~069,090~096 |
 | PR-008 长篇记忆 | FEAT-030~039 | DATA-005~012,034,035 | TEST-030~035 | TASK-012,051~061 |
 | PR-009 模板重开 | FEAT-050~054 | DATA-020~022 | TEST-050~060 | TASK-013,071,075~078 |
 | PR-010 模板来源分类版本 | FEAT-055~059 | DATA-020~023 | TEST-052~059,062,063 | TASK-013,070~074,079 |
@@ -19,7 +19,7 @@
 | PR-013 模型切换 | FEAT-005,006,009 | DATA-040,042 | TEST-003,005 | TASK-027,029,031,032 |
 | PR-014 费用保护 | FEAT-016,070~074 | DATA-002,033,043 | TEST-070~076、TASK-037 未知价格占位 | TASK-011,037,080~086 |
 | PR-015 书架阅读器 | FEAT-060~067 | DATA-001,003,004 | UI/性能矩阵 | TASK-010,090~098 |
-| PR-016 本地隐私 | FEAT-007,080~084,087 | DATA-004,032,041,044,051 | TEST-080~082,087,089 | TASK-014~016,021,043,097,100~103,108 |
+| PR-016 本地隐私 | FEAT-007,080,083,084,087；FEAT-081/082 已取消 | DATA-004,032,041,044,051 | TEST-080~082,087；TEST-089 已取消 | TASK-014~016,021,043,100~103,108；TASK-097 已取消 |
 | PR-017 备份恢复导出 | FEAT-085,086,090 | DATA-050,051 | TEST-083~085 | TASK-100~103 |
 | PR-018 诊断 | FEAT-083,091 | 诊断事件/脱敏快照 | TEST-081 | TASK-018,104 |
 | PR-019 无障碍中文排版 | FEAT-061~063 | 阅读偏好 | UI/性能矩阵 | TASK-091~094,098 |
@@ -38,6 +38,7 @@
 | NFR-005 可测试性 | 15 全文 | CI + 故障注入 | P0 测试 100% |
 | NFR-006 可用性 | 03、04、12 | 主流程用户走查 | 技术术语不阻塞 |
 | NFR-007 可恢复 | 10、11 §7–10 | TEST-012~015、083~088、TASK-041 双执行器与到期回收 | 备份/恢复/升级演练 |
+| NFR-008 章节生成响应 | 06 §2.1、08 §12.1~12.3、25 全文 | TEST-093~099 | 首段/正文/提交 P95 达标；5 分钟安全处置；10 分钟发布阻断 |
 
 ## 3. P0 功能覆盖检查
 
@@ -54,6 +55,7 @@
 | 加密与备份 | ✓ | ✓ | ✓ | ✓ | ✓ |
 | 数据迁移/签名 | ✓ | ✓ | ✓ | ✓ | ✓ |
 | 内容边界 | ✓ | ✓ | ✓ | ✓ | ✓ |
+| 生成速度与慢服务处置 | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 ## 4. 变更检查清单
 
@@ -424,7 +426,7 @@
 | 终态落库与结算之间崩溃后误重发 | 输出 hash、分类、成功响应证据同事务；本地恢复结算无 Provider | 租约过期恢复和重复恢复幂等测试 |
 | 错误提示/父输出被篡改后仍联网 | 续接提示绑定父输出、尾窗、锚点、序号与输入 hash | 未绑定提示 Provider 调用 0；hash/anchor 失败关闭 |
 | 超大章节耗尽内存/存储 | 累计 UTF-8 4 MiB 上限和 2,048 码点尾窗 | JVM 边界测试与双 AVD 安全门禁 |
-| 把流完成冒充正式章节 | `STOP` 只到 `VALIDATING`；TASK-056/057 提供记忆/追踪契约，TASK-058 提供检查门禁，仍等待 TASK-059 最终提交 | 状态机/验收文档和后续任务依赖 |
+| 把流完成冒充正式章节 | `STOP` 只到 `VALIDATING`；TASK-056/057 提供记忆/追踪契约，TASK-058 提供检查门禁，TASK-059 提供唯一最终协调器与原子提交 | 双 API 最终候选/全量回归与状态机证据 |
 
 ## 30. TASK-056 追踪闭环
 
@@ -468,5 +470,348 @@
 | 模型把普通文风差异升级成硬阻断 | 问题码固定精确严重度和修订动作 | voice minor、mechanical detail 不可升级 blocker 测试 |
 | 检查另一候选后复用旧结果 | 候选/本地/场景/实体/证据/过程来源绑定 + 持久 inputHash | 换 candidate 后 Provider 调用 0，Attempt 保持 intent |
 | 报告复制正文造成额外泄露 | 只保存码点范围和白名单 ID，无 evidence/suggestion 自由文本 | mapper 断言 `issuesJson` 不含候选正文；安全扫描 0 命中 |
-| “允许提交”被冒充“已经发布” | mapper 只生成候选报告草稿，不单独插入外键行 | E2E 接受后 Stage 仅到 COMMITTING；TASK-059 显式依赖 |
+| “允许提交”被冒充“已经发布” | mapper 只生成候选报告草稿；TASK-059 只有严格恢复、复核和原子提交后才发布 | E2E 接受后只创建本地 COMMIT Stage；最终候选事务负正例通过 |
 | 测试触发真实费用或实体设备 | 本地规则/假 Provider、显式项目 AVD serial | 双 AVD 各 162/162；真实 API 0、实体设备 0 写入 |
+
+## 33. TASK-059 完整追踪闭环
+
+| 风险/需求 | 实现证据 | 验证证据 |
+|---|---|---|
+| MINOR 被错误升级成自动改写 | 三路仓库只调用 `ChapterRevisionPolicyV1`，调用方不能另选路线 | MINOR 策略单测；接受路径进入本地 COMMIT Stage |
+| BLOCKER/MAJOR 无限互改 | 比例模式 1 次、细写模式 2 次；次数与候选 hash 历史来自冻结输入 | 额度耗尽后 Stage/Job/Usage 原子 `NEEDS_ACTION`，无后继 Stage |
+| 进程恢复后用新问题集合重放旧修订 Stage | 完整策略输入与结果生成 route binding hash，同时写入一致性封存与后继来源 | 同为 MAJOR、仅问题 ID 改变的重放被拒绝，原 Stage/后继不变 |
+| 额度耗尽仍提前发布候选章节 | 一致性结果可在 COMMITTING 安全点直接结算 NEEDS_ACTION，不创建 COMMIT/REVISE | API 35 专项断言 `currentVersionId` 仍为空、后继 Stage 不存在 |
+| 候选封存时偷换版本/hash/revision | MEMORY/TRACKING/CONSISTENCY 封存重新核对当前 Stage 冻结 binding | 既有来源篡改负例继续通过，候选专项合计 13/13 |
+| REVISE Stage 保留但发送前换了另一份提示 | Stage 来源冻结 request source binding；Provider-open 对照最新 Attempt input hash | 不同 input hash 保持 INTENT_RECORDED/PROVISIONAL，Provider 未领取发送权 |
+| 上层伪造修订正文长度绕过过短门禁 | 数据库重新读取加密 artifact，严格 UTF-8 解码并复算码点数 | 长度差 1 即拒绝，Stage 留在 COMMITTING，无 MEMORY 后继 |
+| 修订成功后复用旧候选身份或派生数据 | 新版本 ID、新正文 hash、revision+1、完整历史和结果 binding 同时核对 | 新 BODY 封存后只激活绑定新候选的 MEMORY Stage |
+| artifact 清理后重放时改长度或改策略 | 修订结果 binding 覆盖来源 route/request、长度、hash 和候选历史 | 精确 replay 成功；改策略或改长度均拒绝，行数与后继不变 |
+| 修订结果指纹在重新提取中途丢失或被替换 | MEMORY/TRACKING 封存同时核对当前 Stage 来源指纹、封存草稿和下一 Stage 来源；CONSISTENCY 分流点才允许生成新的策略指纹 | 丢失指纹时 MEMORY 留在 COMMITTING、TRACKING 不创建；完整修订派生链仍可到额度耗尽分流 |
+| 上层从 opaque permit 手工伪造最终 artifact 证据 | 候选封存仓库在成功/精确 replay 时直接返回由持久 Attempt 和封存草稿生成的 `ChapterFinalCandidateArtifactEvidenceV1` | BODY 修订封存返回证据与持久响应逐字段一致；API 35 专项 17/17 |
+| 实际协调器只验证模型结构但没有推进持久 Stage | `ChapterCandidateDerivedStagePersistenceCoordinatorV1` 把已审计 MEMORY/TRACKING 结果、冻结请求、最终 Usage 与候选身份装配后调用唯一封存仓库 | 4 项规划器 JVM 测试 + 371 项统一离线门禁；真实 API 0、物理设备写入 0 |
+| 一致性 gate、有限策略和数据库路线由不同调用方分别选择 | `ChapterCandidateConsistencyRoutingCoordinatorV1` 从同一冻结候选与报告一次生成 gate、策略输入、精确 revision request 和持久路线 | MINOR/MAJOR/额度耗尽/候选错配/跨 Job seed 共 5 项 JVM 负正例；独立重跑 8/8 |
+| 最终提交前由上层手工拼装正文、派生数据和四类证据 | `ChapterFinalCandidateCommitDraftMapperV1` 只接受同一候选 lineage、ACCEPT gate、唯一 BODY/MEMORY/TRACKING/CONSISTENCY evidence 和来源一致的派生草稿 | 4 项映射器 JVM 测试 + 371 项统一离线门禁；缺失/重复/错 hash/非接受均拒绝 |
+| 进程重启后把未经验证的 artifact 明文或宽松 JSON 当成最终候选 | `ChapterFinalCandidateArtifactRecoveryCoordinator` 只经 `AndroidProtectedArtifactStore` lease 按固定角色顺序读取，核对 descriptor/ref/revision/type、raw/canonical hash，并复用三套严格 Parser | 5 项 JVM 覆盖乱序、缺失/重复、descriptor、revision、类型、payload、schema、canonical hash 与脱敏；371 项统一离线门禁、安全扫描通过 |
+| 最终 COMMIT 重启后由调用方猜测修订上限、候选历史或预期父版本 | `ChapterFinalCommitStageBindingV1` v2 在 ACCEPT 路线冻结完整 history、上限、expected current、CONSISTENCY 前驱和 route binding；最终仓库在任何正式行写入前与草稿/封存链逐项复核 | API 35 最终候选专项 19/19；改上限或 expected current 均原子失败，正式版本/summary/report 为 0，Stage/Job 保持可恢复 |
+| 重启后按 phase 猜测候选 Stage，或把旧 Attempt/未结算 Usage/损坏模型快照用于最终映射 | `ChapterFinalCandidateRecoveryRepository` 在单一只读事务中从 final v2 前驱反向恢复唯一 CONSISTENCY→TRACKING→MEMORY→BODY 链，核对连续 next Stage、冻结输入、最后成功 Attempt、FINAL Usage、同书章节和严格模型 JSON；恢复快照不是提交许可 | API 35 最终候选专项 23/23；初始与一次修订完整链成功，断链和损坏模型快照失败且无正式行/状态前进；371 项统一门禁与安全扫描通过 |
+| 重启后缺少本地报告、expectation 或场景契约而猜测最终一致性映射输入 | `ChapterFinalConsistencyMappingSnapshotCodecV1` 只从已绑定一致性请求和同一 routing spec 冻结最小输入，严格校验 exact keys、类型、集合顺序、跨对象 hash/正文计数/检查标准/过程节点关系；不保存正文、名称、证据 payload、提示词或 API 信息 | JVM 7/7 覆盖确定性往返、非 canonical 根键序同 hash、未知字段、字符串伪 null/数字、集合乱序/重复、跨对象篡改及诊断脱敏；371 项统一离线门禁、安全扫描和备份排除通过 |
+| 快照只存在内存，重启后 final Stage 仍无法证明映射来源 | ACCEPT 路线把 canonical 快照作为嵌套 object 写入 final Stage v3，并同时冻结原请求 source binding、快照 hash 与完整外层 input hash；REVISE/NEEDS_ACTION 明确拒绝夹带；恢复仓库和最终提交仓库复核 CONSISTENCY seal 的 source binding | API 35 最终候选专项 25/25；缺快照和绑错请求均在创建 final Stage 前失败且不发布章节；JVM 相关 15 项、371 项统一门禁、安全扫描和备份排除通过 |
+| 修订正文来源 binding 与最终接受 route binding 被当成同一个值 | 恢复仓库从 CONSISTENCY 输入链单独返回候选修订 binding；最终协调器只用它构造候选身份，并用重新计算的有限策略 hash 独立复核 final source route | 初始候选要求 null、修订候选要求非空且两种 binding 可不同；协调器修订恢复正例和数据库修订链断言通过 |
+| final Stage 有恢复数据但仍由上层手工拼装或提前进入 COMMITTING | `ChapterFinalCandidateCommitCoordinatorV1` 按固定顺序执行 v3 快照解析、artifact 恢复、三套 mapper、有限策略、最终 draft；全部成功后才走 `LOCAL_OUTPUT_READY`，COMMITTING 重启复用持久 mapping time | 协调器 JVM 6/6 覆盖 PREPARING、COMMITTING、READY/SUCCEEDED、策略篡改、转换失败和修订 binding；相关链 33/33、API 35 数据库 25/25、371 项统一门禁通过 |
+| runner 领取 final Stage 后绕过唯一协调器，或恢复时偷取其他 worker 租约 | `ChapterFinalCandidateCommitStageExecutorV1` 只在 READY 精确领取一次，PREPARING/COMMITTING 只恢复同 owner 的持久 token，SUCCEEDED 零提交，随后只调用唯一最终协调器 | 执行器 JVM 8/8；最终提交相关链 41/41；真实 DAO 的领取 SQL 将 acquired/heartbeat/updated 同时写为请求时间；生产 `src/main` 旁路审计未发现实际绕过调用；371 项统一门禁通过 |
+| 旧 DRAFT Stage 的合法数组来源被误识别成损坏候选 binding | `parseIfBound` 对合法非 JsonObject 返回未绑定；畸形 JSON 仍失败，当前候选 policy object 仍严格验签 | JVM 3/3；API 35/API 30 Database 114/114、Generation 28/28 全量通过 |
+| 局部专项通过但旧链或正式包回归 | 同一 WIP 运行双 API 三模块全量、Release/R8、统一 JVM/安全/备份门禁 | API 35 与 API 30 各 187/187；JVM 467；Release/R8、371 tasks、`SECURITY_SCAN_OK`、备份排除和 `git diff --check` 通过 |
+| 把任务完成误写成整 App 已可自动生成 | TASK-059 的完成边界是有限修订与 COMMIT_CHAPTER 专用执行入口；总 runner 仍单独接线 | 状态、待办和交接文档均保留“无总 runner”限制；真实 API 0、实体设备写入 0 |
+
+## 34. TASK-060 阶段追踪（已完成）
+
+| 风险/需求 | 实现证据 | 验证证据 |
+|---|---|---|
+| 详细计划产生太多关键词导致整章生成失败 | 编译结果保留最多 128 个探针并报告遗漏数；畸形 JSON、大小、深度、叶子和单 token 上限仍失败关闭 | JVM 覆盖 128/130 唯一探针、256/257 叶子及大小/深度边界 |
+| 章计划占满名额，用户补充和目标弧完全不参与召回 | 三路先保留与执行配额一致的 32/16/16 名额，再把剩余容量按路由优先级分配 | 190 个跨路由唯一 token 仍保留目标章 96、用户 16、目标弧 16 |
+| FTS 查询或候选数量拖垮移动设备 | 总查询 64、每探针 16、累计后最终文档 128；所有查询复用 `searchBeforeChapter` | 双 AVD 覆盖 153 条命中文档时逐探针与最终双重上限 |
+| 同一记忆跨多个关键词重复进入上下文 | 以 `documentId` 聚合，另验 `(bookId, sourceType, sourceId)` 唯一映射，分别累计三路命中 | 中文双字命中累计为 2 但结果文档只出现一次 |
+| 其他书或未来章节污染当前章 | 单事务先验证目标书存在，SQL 和返回行双重核对书 ID 与 `chapterIndex < target` | API 35/API 30 专项包含其他书和目标章同序号文档，均不进入结果 |
+| 排序重放漂移或调试输出泄露计划/检索词 | 固定九级排序；指纹覆盖实际执行探针、书、目标章与策略版本；结果/命中/探针字符串表示均脱敏 | 稳定 replay、输入变化、各排序层与 canary 断言；core/database 双 API 各 126/126 |
+| 把检索指针误当权威记忆直接发送给模型 | 2B1 只返回派生指针；2B2 重读六类权威行并复核 hash；2C1/2C2 才允许映射为章前候选并在 Provider-open 重验 | 六类旧/损坏指针均被剔除或自动重建；章前接线与双 API 全量通过后才把 TASK-060 标记完成 |
+| 索引仍指向旧 Bible、被替换章节、归档人物或已解决伏笔 | 单 Room 事务按六类 source ID 最多执行六个批量查询；SQL 与 Kotlin 双重要求同书、有效状态、当前 Bible/章节版本及 `< targetChapterIndex` | 双 AVD 专项把 Bible head、章节 current version、人物归档和伏笔状态分别前移，8 个旧指针全部被拒绝且整批不抛错 |
+| 派生索引的 hash、章节或重要度被篡改后进入模型 | 权威行重新调用唯一 `MemorySearchDocumentFactoryV1`，除 SQLite rowid 外与召回指针逐字段精确比较 | 篡改 `sourceContentHash` 只拒绝该命中，其他命中保持原有顺序；返回 `rejectedPointerCount` 与 `indexRebuildRequired` |
+| hydration 逐条查库造成 128 次 N+1，或错误信息展开私密实体 | 按六类去重 ID 分组，空组跳过，最多六查询；六类 wrapper、hit、result 均自定义脱敏字符串 | 编译/Room 全量通过；六类真实行 8 个命中保持输入顺序，canary 不出现在结果/命中字符串；API 35/API 30 core/database 各 131/131 |
+| 所有章节级 STORY_CANON 都被当成不可裁剪硬事实，长篇上下文随章节数必然膨胀 | Phase 2C1 只把当前有效 `HARD_CANON` 放入强制路线；普通 `STORY_CANON` 仅在 FTS 相关时进入 | 双 AVD 真实 Room 测试先断言无关键词时章节事实不进入，再以匹配词证明它只带 FTS 路由 |
+| 旧逻辑先截断 128 伏笔再判断到期，低重要度到期伏笔被静默挤掉 | SQL 先过滤 `VALID`、未解决、来源 current/早于目标章和到期条件，再按 importance/update/id 排序；查询 `limit+1` 探测强制溢出 | 双 AVD 排除旧章节版本、未来章、未到期和已解决来源，仅全局到期伏笔进入 |
+| 强制事实/伏笔超过选择上限时静默裁剪，模型在缺事实状态下继续 | 强制+最近先合并；超过 hardLimit 返回 `MANDATORY_OVERFLOW`、空 items、明确 overflow count，并在运行任何 FTS 前结束 | hardLimit=3、4 个硬事实返回空选择、overflow=1、执行探针/FTS 命中均为 0 |
+| 强制、最近和 FTS 跨事务读取形成时间切片竞态，或合并后丢掉相关度证据 | 整个 Phase 2C1 在一个 Room 事务；按强制→最近→FTS 的插入顺序按 source identity 去重，逐项保留目标章/用户补充/目标弧命中数 | 三类 core item 与 FTS 合并后不移动，FTS 新项后置且有逐路命中；API 35/API 30 core/database 各 136/136 |
+| Phase 2C1 已选好记忆但旧上下文仍全量加载 STORY_CANON、时间线和开放伏笔 | `ChapterContextAssemblyRepository` 以权威路线结果作为普通事实/摘要/历史/时间线/伏笔的唯一候选入口；仅当前人物和每个属性最新事件保留独立安全路线 | 真实 Room 用例断言命中 STORY_CANON 进入、无关 STORY_CANON 与大时间线不进入；双 API 专项各 5/5 |
+| 强制记忆超界后仍生成部分 snapshot 或创建 Provider Attempt | `MANDATORY_OVERFLOW` 映射为独立上下文阻断原因，Stage/Job 在组装事务内结束，不进入预算、不建 snapshot、不激活计划 Stage | 512 个硬事实加上一章摘要触发阻断；snapshot 为空、上下文/计划 Attempt 均为 0 |
+| 搜索指针损坏后只能要求用户手工修复 | 组装阶段发现 hydration 拒绝时强制完整重建该书索引一次并重新选择；第二次仍异常才失败关闭 | 篡改事实指针 hash 后仍自动恢复并成功组装，重建后指针回到权威 hash |
+| snapshot 完成后动态事实/事件/时间线/伏笔变化，旧 payload 仍被发送 | manifest 冻结逐项路线和三路命中证据；Provider-open 在同一 Room 事务重跑权威选择、候选映射与预算，要求 payload hash 和完整 manifest 与 snapshot 完全一致 | 同步使已选 STORY_CANON 与索引失效后，Provider-open 报动态记忆变化且计划 Stage Attempt 为 0；API 35/API 30 core/database 各 139/139 |
+| CJK 双字 token 中的下划线被 Android FTS4 拆开，导致不相邻汉字误命中 | 双字 token v2 改为全字母数字编码；回填 schema 升为 2，已有 v1 标记在首次组装时自动整书重建 | “甲乙”只命中相邻文档、不命中“甲丙乙”；v1 文档/标记自动更新为 v2，双 API 通过 |
+| 尖峰库通过但正式 SQLCipher schema、召回仓库或多路配额性能退化 | 在正式加密 `ZhijuanDatabase` 插入 10,000 条生产索引文档，以 20 个固定中文人物/地点/物品/伏笔词走完整 `MemorySearchRecallRepositoryV1` | 20/20 命中、无关查询为空、replay 一致、三路 41 个实际探针仍取回 20 个目标；API 30/35 热查询中位约 6.07/4.35 ms，双 API 全量各 143/143 |
+
+## 35. TASK-061 阶段追踪（已完成）
+
+| 风险/需求 | 实现证据 | 验证证据 |
+|---|---|---|
+| 生产用户编辑只切 current，继续使用旧摘要、伏笔和搜索索引 | `ChapterUserEditRepository` 在一个 Room 事务中捕获旧搜索 identity、调用既有 stale 级联、插入不可变 `USER_EDIT` 版本、CAS 为 `EDITED/UNKNOWN` 并删除旧索引 | TEST-032 的 10 章场景：第 3 章旧摘要、第 3–10 章聚合、第 4–10 章上下文/报告按规则 stale，旧 FTS 行为 0 |
+| 用户编辑覆盖并发生成或另一设备刚保存的新版本 | 命令必须携带预期 current；编辑专用 SQL 同时比较旧 current、旧 status、旧 consistency 和单调时间，任何一项变化都 CAS 失败并回滚 | 过期 expected current 不产生 v3，current 仍为已提交 v2；跨书/错章在写入前失败 |
+| 崩溃重放重复增加版本号或同 ID 悄悄替换正文 | 新版本 ID、parent、source、null Stage/model、正文 hash 与正文必须全部一致才算 replay；同 ID 不同正文失败关闭 | 精确 replay 保持 2 个版本且 `replayed=true`；冲突正文不覆盖已保存版本 |
+| 调用方伪造正文 hash，或日志展开用户正文 | repository 内部以 UTF-8 计算 SHA-256，命令不接收 hash；命令/结果 `toString()` 脱敏，正文限制 4 MiB | 测试复算新版本 hash；canary 正文和章节/版本 ID 不出现在默认字符串表示 |
+| 编辑早期章节时自动删除后续正式正文 | stale 级联只把后续章节标为 `CONSISTENCY_UNKNOWN/UNKNOWN`，不改 current version 或 `chapter_version` 行 | 第 4–10 章 current 与正文逐章保持原样；API 30/API 35 定向各 3/3、数据库全量各 146/146 |
+| 把原子失效误报为完整重建 | Phase 1 明确不建 Provider job、不伪造新摘要/索引；只有 Phase 2B3B2E 通用逐章链和 TEST-033 通过后才关闭任务 | Phase 1 报告保持未完成；最终 10 章 ordinal 4–16 Fake Provider 与生产上下文权威排除通过，报告 106 才标记完成；真实 API 0、物理设备写入 0 |
+| 把“需要重建的清单”误报为“已能重建” | `ChapterEditRebuildPlanRepository` 为每一步给出 `READY/WAITING/ALREADY_SATISFIED/BLOCKED` 和精确 blocker；未实现策略失败关闭，计划本身绝不写 Job/Attempt/业务表 | 10 章编辑第 3 章得到 32 步，其中仅 1 步 READY、31 步 BLOCKED；写入计数均为 0，TEST-033 仍明确待办 |
+| 规划后章节或派生状态变化，旧计划仍继续执行 | `planHash` 覆盖请求身份、整个受影响 current-version 集合、状态、步骤和依赖；执行前 `requireCurrentMatches` 在单事务内重建完整计划 | 编辑章补入摘要或后续章切换 current version 后，旧计划均失败；重新规划后才可匹配 |
+| 长篇按章节逐条查 current/tracking 或反复线性找前驱，造成 N+1/O(n²) | DAO 按书批量 join current chapter/version，并按范围批量读取 tracking；内存构建以 ordinal O(1) 引用前驱 | 10 章计划双 API 确定性通过；实现审查确认无逐章 DAO 调用和 `drop/any/single` 依赖扫描 |
+| 只规划编辑章 tracking，遗漏后续正式章的顺序 replay | 影响计划为编辑点至最新 current 章逐章建立 tracking、context、consistency 和 aggregate 步骤；当前不能安全覆盖的步骤显式阻塞而非省略 | 10 章编辑第 3 章保留后 7 章正文并生成完整 32 步；双 API 定向各 4/4、数据库全量各 150/150 |
+| 旧派生占住唯一槽，只能覆盖或删除历史才能重建 | schema v11 将 summary/tracking/aggregate/transition 业务槽改为普通索引；旧头先 stale，再插入新头 | v10→v11 无损迁移和新库测试均保留两代；四类槽各 1 VALID + 1 STALE |
+| 并发重建在同一业务槽产生两个当前头 | fresh/open/migration 共用数据库触发器，在 INSERT/UPDATE 时检查同槽 `VALID` | 两协程争抢空 summary 槽恰好一个成功；第二个 VALID 在四类槽均失败 |
+| 旧历史被恢复为 VALID、篡改或删除后失去审计链 | 七类派生历史只允许内容不变的 `VALID → STALE`；`IS NOT` 保护 NULL 字段；DELETE 全部拒绝 | STALE→VALID、内容/来源/NULL、时间倒退与七类 DELETE 负例通过 |
+| 生产单行/批量查询混入 stale，或 `associateBy` 任意选择历史代 | authority 查询显式限定 VALID；tracking 还绑定 current chapter version；全历史使用独立 `*History*` API | summary/event/fact/timeline/tracking authority/history 双视图通过，Phase 2A 计划只使用有效 tracking 头 |
+| 放开 transition 历史槽后误报伏笔 replay 已完成 | 继续保留 tracking 顺序保护；`foreshadow_item` checkpoint/rewind 和 aggregate writer 仍显式阻塞 | 文档与计划均保持 TEST-033 未完成；真实 Provider 0、物理设备写入 0 |
+| transition 不含可见实体、重要度、目标窗口等完整状态，无法可靠 rewind | schema v12 为每条 transition 写唯一 `foreshadow_projection_revision`；共享 writer 从真实 post-CAS item 规范封存全部字段与 SHA-256 | snapshot 逐字段 round-trip；迁移/新库触发器、篡改/删除/恢复负例通过，双 API 定向各 20/20 |
+| 两条提交路径各自补字段而漂移，或 transition 已提交但 revision 缺失 | tracking 与 final candidate 在同一 Room 事务内共用 `ForeshadowProjectionRevisionWriterV1`；任一读取、校验或插入失败整笔回滚 | tracking E2E 双 API 各 3/3，final commit 专项各 27/27，数据库全量各 155/155 |
+| 旧 Stage replay 把 later-current 伏笔当旧 after-state，误失败或覆盖最新索引 | replay 以不可变 revision 校验旧 after-state；只有 current 仍逐字段等于旧 revision 时才补写对应伏笔索引，否则只修复不可变时间线 | current importance/索引章序后来改变后旧 final Stage replay 仍成功，并保留最新 importance 与章序 |
+| v11 旧 transition 被迁移时猜测成完整快照 | v11→v12 只建空 revision 表，不从不完整 transition 反推 after-state；缺账在消费时失败关闭 | 迁移后旧 transition=1、revision=0；没有 legacy backfill 或静默可信入口 |
+| 可变 `foreshadow_item` 无法证明编辑点前状态，直接改字段可能生成混合年代数据 | schema v13 rewind 只采用编辑点前、绑定当时 current 章节版本的最后一个 VALID 完整 revision；共享 verifier 验证 snapshot/hash/transition provenance，再以全字段 CAS 恢复 | A 经 PLANT→DEVELOP→RESOLVE 后编辑中间章，逐字段恢复为 PLANT 后基线；迁移与正式 Room 测试双 API 通过 |
+| legacy transition 缺少完整 checkpoint 时凭当前状态猜测旧值 | 仅允许把区间第一条 `PLANT(null → PLANTED)` 解释为编辑前不存在；其他缺可信 revision 的操作整笔失败关闭 | legacy DEVELOP 场景抛错，item、revision、transition、FTS 和审计均保持原状 |
+| 先失效 transition 会绕过 revision 依赖，或区间仍残留可被误读的 VALID 历史 | rewind 固定先 revision 后 transition，并在恢复 current 前断言受影响章节范围两类 VALID 计数均为 0；数据库触发器同时阻止反序 | 正向场景记录的 stale 计数准确，反序写入负例被拒绝，双 API 全量各 159/159 |
+| 同一编辑计划重复执行改变状态或形成两份冲突审计 | rewind ID 与 plan/hash/range/time 全量绑定；相同 ID 精确 replay 零写入，`plan_hash` 唯一禁止另一 ID 抢占 | exact replay 返回 replayed；different ID/same plan 失败且审计仍只有一条 |
+| current 投影已恢复但 FTS 仍指向区间内旧状态或错误章序 | 先删除所有受影响 item identity，只对可信基线使用其基线章节序号重新索引；区间新生 STALE item 不重建索引 | A 的搜索指针恢复为第 1 章，B 的指针为 0；authority lookup 与投影一致 |
+| Phase 1 已将区间新生伏笔置为 STALE，rewind 又改写 `updatedAt` 造成伪历史 | 特殊 CAS 只在 item 仍需从有效状态转为 STALE 时写入；已经 STALE 的新生 item 保留原状态与时间 | 独立回归断言 Phase 1 stale 时间在 rewind 后逐值不变 |
+| aggregate 直接复制上一代 JSON，把旧版本、坏数据或未来状态继续传播 | 上一章 aggregate 只作为顺序栅栏；每章从 current-version-bound 最新实体属性、活动伏笔和有效 tracking 权威重算有界 CURRENT_STATE | 规范写入测试排除旧/未来事件与正文；未来伏笔整笔失败且写入数为 0 |
+| tracking 已换代但旧 aggregate 仍被计划当作完成 | aggregate provenance 绑定 projection/stage、memory/prior-foreshadow/output/payload 全套 hash；计划 v2 严格解码比对当前 tracking | 替换 tracking 代次后旧 aggregate 不再满足计划，旧证据不能 replay 成新头 |
+| 同章重建覆盖历史或并发写出两个 VALID 聚合头 | 事务先把精确业务槽旧 VALID 头转 STALE，再插入确定性新代；数据库唯一 VALID 触发器与 constraint race 的 replay-only 重试共同保护 | 旧版本头保留为 STALE；两协程同证据恰好一个新写、一个 replay，最终只有一个 VALID |
+| 畸形当前聚合被静默覆盖，掩盖数据损坏 | 计划严格解码 canonical JSON/hash/provenance；槽已占用但不匹配时显式 `DERIVED_VERSION_SLOT_OCCUPIED`，writer 只接受 READY | 畸形 VALID 头使计划 BLOCKED，writer 拒绝且原行不变 |
+| 聚合无限收集全历史导致长篇 payload 膨胀或泄露正文/模型信息 | schema v1 只保存 256 个最新实体属性和 128 个活动伏笔，128 KiB 硬上限；明确排除正文、历史、Provider、Attempt、Usage 和提示词 | 双 API 规范 payload/上限/正文 canary 回归；统一源码与 APK 安全扫描通过 |
+| 用会随合法进展变化的 `planHash` 作为持久执行 ID，崩溃后无法识别同一次重建 | schema v14 以实际 current 章节、rewind after-state 和 summary/tracking/aggregate 基线指纹计算 stable fence；`initialPlanHash` 只作诊断 | 精确 replay 只保留一条 execution；edited version、rewind 和 fence 三重唯一，冲突身份失败关闭 |
+| rewind 已提交但后续准备失败，留下“投影已回退却无可恢复工作” | `ChapterEditRebuildExecutionRepository.prepare` 用一个外层 Room 事务包住 rewind、计划重验、基线冻结和 ledger 插入，并做写后精确回读 | 人为制造 rewind 后时间门禁失败，rewind/execution/step 均为 0，既有 summary 保留 |
+| 为了省事提前创建所有后续 Stage，导致不可变 `inputSourcesJson` 只能写假引用 | v14 只持久化关键步骤和真实基线，不创建 Job/Stage；后续 Stage 必须在直接前驱真实结果落库后动态创建 | migration+ledger 定向双 API 各 9/9；Job/Stage/Attempt/Usage 计数全部为 0 |
+| 重建 Stage 与 ledger 仅靠调用约定关联，崩溃或篡改后可能消费错误 execution | memory/tracking 使用严格 v2 `chapterEditRebuild` binding，并把 execution/fence/ordinal/type/章/来源版本与 hash 纳入 Stage input hash 和确定性 ID | factory 篡改、身份占用、精确 replay、current 范围变化和并发创建回归通过；普通 v1 Stage 保持兼容 |
+| 只看到编辑章 summary 就跳过真实 memory 请求审计，直接创建 tracking | pending memory 必须具备绑定 Job COMPLETED、Stage SUCCEEDED、最新 Attempt SUCCEEDED、Usage FINAL、严格 output reference 和权威 memory 行；prepared-SATISFIED 则按全字段 fingerprint 复核 | Fake Provider E2E 实际完成绑定 memory 请求、解析、Attempt/Usage、commit 后才创建 tracking；双 API 各 4/4 |
+| 为了重建中间章而全局删除 tracking 顺序保护，普通生成可越过后续已提交章 | 普通 source loader 继续失败；只有 stable-fence 重建授权通过后才调用专用 loader，并在 Provider-open 与 commit 重新复核 | 两章夹具中普通 guard 被拒绝、专用 ordinal 2 Stage 成功；范围变化零写入、并发只保留一份；数据库双 API 各 178/178 |
+| tracking 已成功但 aggregate 失败，留下后续章节可消费的混合年代状态 | rebuild tracking 的业务写入与 aggregate writer 位于同一 Room 外层事务；FINAL Usage 和 Stage/Job 完成在 aggregate 成功之后 | 未来章活动伏笔使 aggregate 失败时，tracking/timeline/transition/aggregate 全部为 0，Stage=COMMITTING、Job=RUNNING、Usage=PROVISIONAL |
+| 成功 replay 用变化后的 planHash 再写 aggregate，产生重复代次 | 首次提交调用 writer；SUCCEEDED replay 只要求当前 tracking/aggregate 均为 `ALREADY_SATISFIED`，不再次写入 | Fake Provider 正向闭环提交后精确 replay，tracking/transition/revision/FTS/aggregate 数量均不增加；双 API 各 5/5 |
+| tracking Stage 创建后 aggregate 槽被其他执行占用，仍打开 Provider 浪费费用 | Stage 创建、Provider-open 和 commit 均复核 prepared aggregate step 与同章槽；只有成功 replay 允许严格匹配的 aggregate 已存在 | Stage 创建后插入意外 aggregate，Provider-open 失败且 Attempt/tracking 为 0；计划套件双 API 各 16/16 |
+| 后续章节旧 tracking/timeline 先 stale，崩溃后没有可恢复 Stage，或 replay 无法证明精确退役集合 | schema v15 `chapter_edit_rebuild_tracking_retirement` 把 prepared tracking 指纹、精确 timeline ID/内容指纹、deterministic replacement Job/Stage 与时间绑定；退役、搜索删除、Stage 创建和 evidence 插入同事务 | 第二章正向+replay、双 worker 收敛、replacement 身份碰撞整笔回滚；计划套件双 API 各 19/19，数据库全量各 183/183 |
+| 只靠当前 STALE 状态推断本次 execution，误把其他历史退役当成可继续依据 | retirement 主外键绑定 immutable execution/step 和准备时 baseline；唯一索引禁止 baseline/Job/Stage/章节被多次认领，写后复核 stale 指纹与 exact timeline set | v14→v15 双 API 迁移验证表、唯一索引、provenance/immutable/delete triggers；JVM evidence codec 3/3 |
+| 把“第二章 replacement Stage 已创建”误报为后续区间已完成 | Phase 2B3B2D 只闭合 ordinal 4；Phase 2B3B2E 必须使用显式目标 ordinal 和直接前驱证据逐章推进，未通过 10 章场景前不关闭任务 | ordinal 6 正向/负例、10 章编辑第 3 章 ordinal 4–16 Fake Provider 双 API 通过；报告 105/106 分别记录中间与完成边界 |
+| planner 把任意新 VALID tracking 误认成本次 execution 的重建结果 | 只授权 retirement 指向的 deterministic replacement Stage；projection 必须以 `generationStageId` 绑定该 Stage，并复核 Job/Stage/binding/source/旧退役集合 | 正向提交后 tracking/aggregate 均为 ALREADY；无 retirement 或 identity 不匹配仍保持槽占用阻塞 |
+| 保留章节 aggregate 失败后同时丢失 retirement，导致旧 tracking 已 stale 但无法恢复 | retirement 是先前事务的不可变准备事实；Provider 提交事务只原子处理新 tracking/aggregate/Usage/Stage | 故障注入后 retirement=1、旧 tracking=STALE、新 tracking/timeline/aggregate=0、Stage=COMMITTING |
+| 跳过中间保留章节或提前创建未来 Stage，使用并不存在的来源继续重建 | 显式偶数 target ordinal；ledger 推导目标；直接前驱 tracking+aggregate 必须确定性完成且时间不晚于当前创建；禁止自动猜 next | ordinal 6 前驱未完成和时间倒退均零写入拒绝；三章正向与 10 章 ordinal 4–16 顺序闭环双 API 通过 |
+| 较后的 retirement evidence 掩盖较早缺口，使旧派生重新获得执行许可 | Provider-open/commit/planner 仅授权从 ordinal 4 开始的连续、章节递增、时间单调 evidence 前缀 | 通用 repository 前缀校验；旧 projection 精确 `STALE`、新 projection 精确 Stage identity，10 章 retirement=7 |
+| 旧摘要或搜索指针在用户编辑后仍进入后续章节上下文 | 编辑事务原子 `VALID→STALE` 并删除对应 FTS；生产上下文选择器只 hydration current+VALID 来源 | `userEditedChapterContextSelectsOnlyTheReplacementSummary` 双 API：只返回新版本摘要，旧摘要 STALE、旧搜索行 0；TEST-033 完成 |
+| 为了给 TASK-061 标记完成而给不可变 execution 增加可能漂移的 mutable 完成字段 | execution 只保存 PREPARED fence；完成性由权威 planner 重算，自动游标和恢复状态归 TASK-064 total runner | 10 章所有 tracking/aggregate 为 ALREADY；schema 保持 v15；797-task Release/R8 门禁通过 |
+
+## 36. TASK-062 脱敏时序追踪（已完成）
+
+| 风险/需求 | 实现证据 | 验证证据 |
+|---|---|---|
+| 只看 Job/Stage 墙上时间，无法定位十分钟慢章卡在哪一段 | phase+milestone 追加账本与报告器分别计算 queue/local/provider/首段/body/memory/tracking/consistency/revision/commit/total | 完整固定时间线逐项公式通过；phase 同名事件隔离回归通过 |
+| 用户调系统时间或设备重启产生负耗时/虚假达标 | duration 只用 elapsedRealtime；每事件绑定 boot 指纹，epoch 只展示 | 跨 boot 与单调回退均返回明确 Unavailable，不输出猜测值 |
+| 性能事件泄漏正文、人物、提示词、端点、密钥或原始 ID/hash | 表结构没有自由文本字段；关联、连接、模型、boot 全部域分离指纹；首段只保留有限状态与码点计数 | JVM/正式 Room/Fake 流三层 canary 0 命中；源码安全扫描门禁保留 |
+| BODY/MEMORY/TRACKING 等 Stage 事件同名造成错误配对 | phase 进入 event ID、索引、触发器和 reporter group；Stage/Attempt 起止按同指纹配对 | 错 milestone-phase 直接 SQL 插入被拒；跨 phase 同事件 ID 不相等且报告仍精确 |
+| 拒绝、断流、暂停或取消没有结束事件，被误报成缺数据 | BODY 终态覆盖 FAILED_CLOSED/UNKNOWN/NEEDS_ACTION/CANCELLED/TRUNCATED；无响应失败不伪造 FIRST_BYTE | Fake NOT_SENT 仅写 PROVIDER_OPENED+失败 BODY_STREAM_ENDED；迟到结算幂等 |
+| 把测量底座误报成完整自动生成 | TASK-062 只接 BODY 执行器；total runner 负责其他 phase 发射，Fake 性能分布另归 TASK-063 | 文档、Backlog 和测试明确 TASK-063 已完成而 064/066 未完成；真实 Provider 0、物理设备写入 0 |
+
+## 37. TASK-063 Fake 性能夹具追踪（已完成）
+
+| 风险/需求 | 实现证据 | 验证证据 |
+|---|---|---|
+| 5 分钟场景真实等待，回归过慢且不稳定 | `VirtualFakeStreamClock` 只在可取消调度点后推进虚拟毫秒，不 sleep/忙等 | 301 秒虚拟慢流的 JVM 与双 API 集成均在秒级完成 |
+| Fake adapter 偷补成功终态或未知结果后自动重发 | 无终态脚本按 EOF 原样结束；UNKNOWN/STREAM_INTERRUPTED 保留有限 request state | Room+加密草稿执行器进入 UNKNOWN，generateCalls=1 |
+| 共享虚拟时钟让并发调用互相污染耗时 | stats 只累计本 collection 已完成的 Wait，不用全局开始/结束差 | 并发统计与确定性重放 JVM 回归；Sol 审查修复 DeepSeek 初稿 |
+| 只报成功样本使 P95 虚假变快 | benchmark 同时保存 total/available/NotApplicable/各 unavailable reason | 失败、缺事件和跨 boot 不被丢弃；正式提交明确 20 个 MISSING_EVENT |
+| 用短文本冒充普通参考章 | 双 API 测试实际生成 20 个 2,500～3,450 字 BODY 流 | 首段 P95 19.70 秒、正文 P95 174 秒；最慢 19.85/177 秒 |
+| Fake 测试代码误进 Release | 新模块不被 app/feature implementation 引用；generation 仅 androidTestImplementation | Release 依赖边界审查与统一门禁 |
+
+## 38. TASK-064 Phase 1A 持久恢复追踪（进行中）
+
+| 风险/需求 | 实现证据 | 验证证据 |
+|---|---|---|
+| Job lease 领取后、Stage lease 领取前崩溃，原维护器永远扫不到而永久 RUNNING | Job→current Stage 有界 JOIN 只选过期 Job lease、Stage READY+无 lease；单事务 exact CAS 恢复 Job READY | timeout 临界、正向恢复与双 API 数据库全量各 197/197 |
+| 维护器用旧扫描结果抢走已经开始的 Stage | re-read + SQL `EXISTS` 再证明 Stage READY 且三 lease 为空；匹配 Job owner/acquired/heartbeat/currentStage | 扫描后另一 executor 领取 Stage，恢复 stale-fail，Job/Stage 活跃租约保留 |
+| 宽 status CAS 或伪造候选误恢复别人的 Job | 专用 CAS 匹配完整 lease token 和 heartbeat；候选 heartbeat 必须等于重读事实 | 篡改 heartbeat 回归零写入；双维护器仅一份成功 |
+| 修恢复时改写 Stage/Attempt 造成重复请求 | Phase 1A 只清 Job lease并保留 currentStage；Stage、Attempt、attemptCount、错误和 retryAt 不变 | 正向/并发用例逐字段断言；真实 Provider 调用 0 |
+
+## 39. TASK-064 Phase 1B runner queue 追踪（进行中）
+
+| 风险/需求 | 实现证据 | 验证证据 |
+|---|---|---|
+| 两个 runner 同时领取同一 READY Job，产生重复请求 | 有界候选在单 Room 事务精确重读，复用 Job 状态 CAS；候选绑定 Job/currentStage/status/updatedAt | 双 runner 并发无 sleep，精确一个 claim 成功；双 API 定向各 64/64 |
+| Stage 交接后重新领取 Job 或丢失 RUNNING 任务 | 原 Job token heartbeat 后读取最新 currentStage；业务 cursor 仍由 commit 事务推进 | Stage A→B 后 acquiredAt/owner 不变、heartbeat 前进且读到 B |
+| 新进程仅凭相同 owner 收养旧租约 | API 必须传入精确 owner+acquiredAt token；没有按 owner 扫描 RUNNING Job 的入口 | 旧 token 在超时回收并由新 runner 领取后 stale-fail，新 token 正常续跑 |
+| READY 坏行残留租约被队列覆盖 | DAO 要求 Job/Stage 三 lease 均空；claim 再复验；异常 projection 不静默跳过 | 人工残留完整 Job lease 的 READY 行不进入 scan；Stage lease/updatedAt 竞争零写入 |
+| queue 泄露业务 payload 或获得提交权限 | projection 不读 book/target/input/intent/source/owner；结果字符串脱敏；仅改 Job lease | 日志 canary 断言无 Job/Stage/owner；Stage/Attempt/attemptCount 全字段不变 |
+
+## 40. TASK-064 Phase 1C 原子执行租约追踪（进行中）
+
+| 风险/需求 | 实现证据 | 验证证据 |
+|---|---|---|
+| 只凭 StageId 领取已非 current 或不属于 Job 的 READY Stage | acquire 先验证精确 Job token、RUNNING、currentStage、归属和 same-owner，再取得 Stage lease | 正向/错误 owner/currentStage 与双 API 69/69；不创建 Attempt |
+| 先续 Job 后 Stage acquire 失败，留下部分 heartbeat | 两个 DAO 调用位于一个 `withTransaction`；第二步失败回滚第一步 | Stage updatedAt 超前使 acquire 第二步拒绝，Job heartbeat 保持领取值 |
+| 两个执行器同时领取 current Stage | 共享 Job token 仍需 Stage READY CAS，Room 事务串行裁决 | 两协程无 sleep，精确一个成功；Stage 只有一个 token |
+| Job/Stage heartbeat 分别成功导致维护事实不一致 | 双 heartbeat 共用外层事务并要求 same-owner/currentStage | 错 Stage token 时 Job heartbeat 回滚；错/混合 token 零写入 |
+| 过期 Stage 或已推进 cursor 被旧执行器续活 | 正式 lease policy 与 currentStage 重验在每次 heartbeat 前执行 | 60,000ms 临界 Stage 过期、cursor A→B 后旧 S heartbeat 均 stale-fail |
+
+## 41. TASK-064 Phase 1D heartbeat envelope 追踪（进行中）
+
+| 风险/需求 | 实现证据 | 验证证据 |
+|---|---|---|
+| action 完成后迟到 heartbeat 把已提交结果误报失败 | select 等待 action/tick，action 先完成即取消 waiter | 首 tick 前完成零 heartbeat；多 tick 后完成不再调用 |
+| 真正丢 lease 后 Provider/action 仍继续 | heartbeat 失败且权威 Job 仍是同 current Stage时取消 action | awaitCancellation action 的 finally 被执行，runner 收到 lease-lost |
+| commit 已推进 cursor，旧 heartbeat stale 导致成功 action 被误取消 | 同 Job token + currentStage 已改变视为 durable handoff | A→B 检查后 action 未取消，随后返回 committed |
+| Job 已完成/暂停/停止/需操作，旧 lease 清除被误判为抢占 | 有限终态/等待态 + lease null 视为 durable boundary | COMPLETED fixture 停止 beats并返回 action；mixed owner 在 action 前拒绝 |
+| 测试真实等待 15 秒造成慢回归 | waiter/clock 依赖注入，手动 Channel tick | 新增 5 JVM 测试秒级完成，模块 125/125 |
+
+## 42. TASK-064 Phase 2A 派生 route identity 追踪（进行中）
+
+| 风险/需求 | 实现证据 | 验证证据 |
+|---|---|---|
+| `EXTRACT_MEMORY` 只按 phase 把 memory 当 tracking 或反向 | 先读有限 `sourcePolicyVersion`，再委托各自权威 parser；没有 phase-only fallback | 双向 policy/schema 互换、错误 phase/target/hash 均失败；正向 v1/v2 分流 |
+| 伪造 schemaVersion=2 冒充编辑重建 | 完整 parse 后再读取正式 `chapterEditRebuild` binding | memory/tracking 合法 v2 各命中独立 route；未知 schema 与额外 root 拒绝 |
+| candidate role 与 executor phase 接错 | 完整 candidate binding 后按 BODY/MEMORY/TRACKING/CONSISTENCY + phase 穷举 | 五种合法组合唯一命中；不兼容 role/phase 失败 |
+| 损坏或未来 policy 被 generic route 继续执行 | 未知、缺失、非字符串、非 object 或畸形 JSON 直接抛错，不降级 | 11 个 resolver JVM 测试全部通过，异常断言不打印 payload |
+| route 解析触发状态或联网副作用 | 纯 enum resolver，只读取 Stage entity；无 DAO/Provider/文件写入 | database JVM 81/81、双 API Android 各 209/209、安全扫描通过、Provider 0 |
+
+## 43. TASK-064 Phase 2B current-lease route binding 追踪（进行中）
+
+| 风险/需求 | 实现证据 | 验证证据 |
+|---|---|---|
+| 调用方用陈旧/伪造 Stage 取得合法 route | repository 在同一 Room 事务重读 current Job/Stage 后才解析；resolver 为 `internal` | 合法 memory route 与精确 lease snapshot 绑定；非 current Stage 失败 |
+| 错 token、mixed owner 或租约超时后继续分发 | exact Job/Stage token、same owner、双 heartbeat 与 60 秒临界共同验证 | 错双 token、mixed owner、倒退时间与 60,000ms 临界全部拒绝 |
+| PAUSING/STOPPING 或请求已记录后又开新 executor | 只允许 `RUNNING + PREPARING`，attempt 必须仍有额度 | PAUSING 故障注入与 `REQUEST_INTENT_RECORDED` fixture 均失败且状态不变 |
+| 裸 route snapshot 被 feature 层手工构造 | 绑定快照是普通 class 且构造器 `internal`；route parser 也只在数据库模块可见 | Android/JVM 编译通过；跨模块只能消费 repository 返回值 |
+| route 授权检查意外续租或创建 Attempt | 整个入口只读，无 DAO update/Provider 调用 | 前后 Job/Stage/Attempt 相等；JVM 81/81、双 API各214/214、安全扫描通过 |
+
+## 44. TASK-064 Phase 2C2 final exact-token executor 追踪（进行中）
+
+| 风险/需求 | 实现证据 | 验证证据 |
+|---|---|---|
+| owner 相同的新租约继承旧 route 授权 | `executeBound` 要求 persisted token 与调用方 token 完整相等 | same owner、acquiredAt 40→41 在 coordinator 前拒绝 |
+| total runner 再 acquire READY Stage 覆盖 Phase 2B 身份 | bound 入口不调用 acquire，且 READY 失败关闭 | PREPARING/COMMITTING trace 只有 find+commit；READY 零 commit |
+| 过期 token 进入 artifact recovery/commit | executor 在 coordinator 前使用正式 lease policy 检查 heartbeat | 60,000ms 临界失败，trace 无 commit |
+| durable commit race 被误报失败并重复工作 | SUCCEEDED 直接返回 `AlreadySucceeded` | 无 lease、无 acquire、无 commit 的只读用例通过 |
+| registry 绕过唯一 final executor | DEC-063 固定 registry 只能调用 `executeBound` | executor 定向12/12，generation JVM129/129、双 API各39/39 |
+
+## 45. TASK-064 Phase 2C3 最小 registry 追踪（进行中）
+
+| 风险/需求 | 实现证据 | 验证证据 |
+|---|---|---|
+| feature 层用裸 route 或伪造 Stage 绕过数据库事实 | registry 公开入口只接受构造器受限的 `GenerationRunnerCurrentStageRouteSnapshot` | real Room 创建绑定快照后才可进入 Android 集成用例 |
+| final route 换用同 owner 新 token 或重新 acquire | 唯一分支把快照 exact Stage token 原样传给 `executeBound` | trace 只有 bound commit；token 完整相等；acquire 回调零调用 |
+| 已识别 remote route 被 generic executor 意外发送 | 注册集合只有 final；九条 route 在 exhaustive `when` 中逐项 `notRegistered` | memory v1 集成用例在 executor/状态写入前失败；编译器保证枚举穷举 |
+| 未注册错误泄露业务标识或正文 | 异常只保存有限 route enum | JVM 断言不含 Job/Stage/owner；结果字符串不含 Stage/owner fixture |
+| 最小接线破坏全项目 Release/R8 或安全边界 | 不改 schema/DAO/Provider/Gradle；统一门禁复核 | generation JVM 131/131、双 API各41/41；801 tasks、5 APK 扫描和备份排除通过 |
+
+## 46. TASK-064 Phase 2D1 candidate draft 合同审计（进行中）
+
+| 风险/需求 | 实现证据 | 验证证据 |
+|---|---|---|
+| 请求前伪造尚未生成的 candidate version/hash | candidate binding 强制这两项，但 initial DRAFT 没有生产 factory | 生产 stageSetup 调用仅 3 处且都是 derived/revision successor |
+| resolver 识别的 BODY+DRAFT 在 Provider-open 被另一层拒绝 | resolver 映射 BODY+DRAFT；source guard 明确 bound BODY 必须 REVISE | Sol 源码复核；registry 仍将该 route 显式 notRegistered |
+| seal 与 final recovery 对初始根节点解释不一致 | seal DRAFT 分支不解析 source；recovery 要求 revisionIndex=0 inputSource null | 对应分支逐段复核，无生产 adapter 可跨越该缺口 |
+| 测试手工闭环被误当生产链 | Android fixture 直接造 phase-only BODY Stage并手工 seal | `ReadyForValidation` 生产消费者只有 revision coordinator |
+| 为接线放宽 guard造成错发/重复付费 | DEC-065 要求另建 request 前可得的 initial source contract | route 保持未注册；本审计 Provider 0、Git 差异 0 |
+
+## 47. TASK-064 Phase 2D2 context route identity 追踪（进行中）
+
+| 风险/需求 | 实现证据 | 验证证据 |
+|---|---|---|
+| context Stage 没有独立 route，dispatcher 无法识别本地前置步骤 | factory 只给 `ASSEMBLE_CONTEXT` 写独立 source policy；resolver 新增有限 route | factory/resolver JVM 正向与错误 policy/schema/phase/target/hash 负例 |
+| repository 与 resolver 各自解析造成合同漂移 | 两者共用 `ChapterContextAssemblyJobFactory.parseAndVerify` | 数据库 JVM 86/86；双 API database 各214/214 |
+| 损坏 progression evidence 或跨章节输入被识别为合法 route | parser 复算 evidence hash，并交叉验证 chapterId、chapterIndex 与 Stage/context | Sol 加固后定向 JVM 19/19、双 API context 各5/5 |
+| 新 route 被枚举后意外获得执行权 | registry 白名单仍只有 final；context 在穷举分支显式未注册 | feature 正式/AndroidTest Kotlin 编译通过，0 Provider/Attempt/状态写入 |
+| 错误字符串泄露冻结输入 | source `toString` 对 prompt/progression hash、预算和用户补充脱敏 | JVM 断言不包含 tokenizer 与 token 数值 |
+
+## 48. TASK-064 Phase 2D3 context exact-token registry 追踪（进行中）
+
+| 风险/需求 | 实现证据 | 验证证据 |
+|---|---|---|
+| route 解析后 Job token/cursor 变化仍提交 context | `assembleBound` 在业务提交同一 Room 事务内重读 Job/Stage 并复核 exact 双 token/current cursor | 错 Job/Stage token、PAUSING、cursor 改变均零 snapshot/Attempt 写入 |
+| context adapter 复制旧业务逻辑并产生漂移 | 旧入口与 bound 入口共用唯一 `assembleInternal` | 原有5项 context 回归与4项 bound 用例合计双 API 各9/9 |
+| 成功竞态重复插 snapshot 或再次推进 plan | SUCCEEDED 分支使用既有严格 durable replay，不执行 shared write path | replay 前后 snapshot、Job、context Stage、plan Stage完全相等 |
+| registry 把 context 快照拆成 owner/stage 参数 | context executor 接口直接接收原始 `GenerationRunnerCurrentStageRouteSnapshot` | real Room registry 用例断言对象同一、时间原样、final executor 0次 |
+| 本地 route 注册意外放开远程调用 | 白名单只增加 context；其余九条逐项 `notRegistered` | JVM注册集合严格2项；remote memory Android 用例零 executor/状态写入 |
+| 新切片破坏发布和安全基线 | 无 schema/DAO/Provider/Attempt/Usage 变更 | JVM 86+131；双 API 218+42；801-task Release/R8与安全门禁通过 |
+
+## 49. TASK-064 Phase 2E1 chapter-plan 合同审计（进行中）
+
+| 风险/需求 | 实现/决策证据 | 验证证据 |
+|---|---|---|
+| plan Stage 只有 phase/schema 字符串，被 runner 当成可执行身份 | 工厂当前缺 source policy，resolver 因缺身份失败关闭；2E2 单独增加严格 source/parser/route | 限定源码追踪无 chapter-plan route；Provider/Attempt/Usage 0 |
+| 普通 plan 误用 bootstrap 或 arc-window 合同 | 三者按请求前持久身份分离；普通 plan 不写 ChapterVersion/OutlineRevision | DeepSeek 与 Sol 逐段比较 factory、parser、commit 目标 |
+| 没有严格输出合同却提交错误 schema | 当前无 `chapter-plan.v1` parser/业务 validator/commit，registry 保持关闭 | 全仓限定符号搜索只见常量和 context 引用 |
+| 只保存成功 artifact，隔天继续时计划被清理 | DEC-068 将规范计划原子冻结进 initial DRAFT 输入；artifact 只作提交证据 | Sol 复核 `STREAM_DRAFT` 成功默认保留 24 小时及 64 KiB Stage 输入上限 |
+| 新增表或误写 OutlineRevision 造成权威模型漂移 | 采用无 migration 的 DRAFT immutable input；窗口 outline 与章内 scene contract 分离 | 数据模型/现有 commit 模式复核；规范计划目标上限 48 KiB |
+| 网络失败被误认为审计结论或代码贡献 | 首次运行记录为网络中断；仅采用第二次正常 final，并由 Sol 独立复核 | 两次 summary、stderr 与 Git status 指纹；工作树无新增改动 |
+
+## 50. TASK-064 Phase 2E2 chapter-plan route identity（进行中）
+
+| 风险/需求 | 实现证据 | 验证证据 |
+|---|---|---|
+| `BUILD_CHAPTER_PLAN`只凭phase误分发到bootstrap/arc/context | 独立`zhijuan.chapter-plan-source.v1`，resolver先policy后唯一严格parser | resolver plan正向与错误policy/phase负例；JVM全量90+131 |
+| context依赖被替换或依赖数组夹带多项 | exact root；dependency恰好一项且等于contextAssemblyStageId；context input hash为64位hex | factory依赖空数组、不同context ID、坏hash负例 |
+| progression被改写后仍获得route | 复算去掉evidenceHash后的规范对象hash，并核对targetId与chapterIndex>=1 | 重哈希错chapterId/0章序及坏evidence hash均拒绝 |
+| route identity泄露持久ID/hash | 有限source `toString`隐藏context Stage/input/progression hash；route enum无payload | JVM断言不含实际Stage ID和hash |
+| 新route一出现就被registry发送 | registry新增穷举`CHAPTER_PLAN_V1 → notRegistered`；registered set仍final+context | registry unit、双API generation各42/42、Provider0 |
+| plan字段新增破坏context提交或发布构建 | repository继续按已知字段读取，不依赖旧exact root；无schema/DAO变化 | 双API database各218/218；801-task Release/R8/安全门禁通过 |
+
+## 51. TASK-064 Phase 2E3 chapter-plan 输出合同（进行中）
+
+| 风险/需求 | 实现证据 | 验证证据 |
+|---|---|---|
+| 模型输出超大、深层或夹带未知字段进入内存/提交 | `StructuredOutputLimits` 48 KiB、8层、4096节点、64数组项；exact schema/reader | 超限、重复key、未知字段、乱序负例；JVM 140/140 |
+| 相同计划只因JSON字段顺序不同产生新hash | object key递归排序，scene/process数组保留顺序 | root字段反序与原输入 canonical JSON/content hash完全相同 |
+| 模型改章节或使用陈旧ContextSnapshot | expectation核对chapterId/index与context内容/manifest两个hash | chapter identity漂移返回固定cross issue，零业务写入 |
+| 输出引用未知人物或POV不在场 | knownCharacterIds白名单与POV∈participants交叉门禁 | unknown character + POV membership同次失败关闭 |
+| Allowed相关章节被模型标成无相关场景以规避尺度 | Allowed要求至少一个`intimacyRelevant`场景；NotApplicable反向禁止自行增加 | 缺相关场景与意外相关场景均有固定issue |
+| 严格场景用一个含糊节点、淡出或无余波冒充完整计划 | 每相关场景至少3个有序节点，逐节点六类状态，aftermath必填，全章≤64 | strict正向及节点不足/成年人门禁/余波缺失负例 |
+| 比例模式伪造严格过程证明或Blocked静默降档 | 非严格相关场景禁止process nodes；Blocked expectation直接拒绝 | proportional forged nodes与Blocked构造负例 |
+| 计划/人物/hash通过日志或异常泄露 | 领域对象和Invalid结果字符串只给计数/issue code并标记redacted | 正向/错误toString不含计划文本；安全扫描通过 |
+| 输出合同一落地就触发真实生成 | registry未改，`CHAPTER_PLAN_V1`仍notRegistered | 双API generation各42/42；真实/Fake Provider 0 |
+
+## 52. TASK-064 Phase 2E4A 目的地/预算前置审计（进行中）
+
+| 风险/需求 | 实现/决策证据 | 验证证据 |
+|---|---|---|
+| 把 Job 预算 JSON 当成可扣余额，并发请求突破上限 | DEC-071 明确 snapshot 只读；TASK-083 建独立持久 reservation | `BudgetEngine` 生产调用为0；`recordRequestIntent` 当前无三层竞争 |
+| 先扣预算后写 RequestIntent 或反向分两次提交 | reservation+RequestIntent+Attempt+Usage 必须同一 Room 事务 | 后续 TEST-071 需双协程只成功一方且失败方零写入 |
+| 更换中转站 host/port/protocol 后沿用旧确认 | disclosure 绑定版本化 canonical destination+protocol，并在发送前动态核对 | 后续 TEST-090/091 覆盖未确认与变更失效 |
+| base URL 大小写、默认端口和尾斜杠造成同目的地漂移 | 单独定义规范化 origin，不直接保存用户输入字符串作为授权身份 | 后续纯 JVM 规范化向量+Room round-trip |
+| 可靠门禁导致每章弹确认 | 用户确认按目的地/书预算持久复用；runner 逐请求无交互复核 | 产品流保持首次或变更时一次确认 |
+| 审计结论被误写成已接线 | registry仍只有final+context，plan显式未注册 | 本阶段0 Provider、0 schema/migration、0执行器变化 |
+
+## 53. TASK-064 Phase 2E4B 目的地确认内核（进行中）
+
+| 风险/需求 | 实现证据 | 验证证据 |
+|---|---|---|
+| 大小写/path/默认端口变化导致重复操作 | canonical origin忽略path并显式effective port，host/scheme小写且移除DNS尾点 | JVM同origin、HTTP/HTTPS默认端口、DNS尾点向量 |
+| host/port/scheme/protocol改变仍沿用旧同意 | binding覆盖origin+protocol+version；读取按当前endpoint动态重算 | Room protocol/host变化、version bump均失败关闭 |
+| 写确认期间endpoint变化导致旧同意落到新地址 | 接受事务UPDATE以connection/base URL/protocol为CAS条件并立即回读验证 | DAO写入计数必须为1；篡改后零放行 |
+| 格式正确但伪造hash被当成合法 | stored hash先验格式，再与重算值常量时间比较 | 64个`0`合法hex篡改负例 |
+| 新连接或连接测试静默接受小说发送 | App保存canonical destination但disclosure三字段恒null；连接测试无接受调用 | 未确认read失败；接受前后持久字段对比 |
+| 对象字符串泄露endpoint/密钥尾号/hash | binding、evidence和`ConnectionProfileEntity`覆写脱敏toString | JVM/Android断言不包含host/hash/connection/secret tail |
+| evidence被当作独立Provider permit | API/文档明确只读证据；registry未增加plan | 双API数据库222/222；真实/Fake Provider0 |
+
+## 54. TASK-083 Phase 5B Provider-open 换日旧请求释放（进行中）
+
+| 风险/需求 | 实现证据 | 验证证据 |
+|---|---|---|
+| 旧日 reservation 在新日继续发送而绕过 daily 上限 | claim 内从当前 DAILY head/revision zone 重算日键；不同则不签发 permit | 上海午夜前1ms同日、到点换日；双API专项35/35 |
+| 跨日释放和 Provider-proof 混用，普通网络失败也清零 | 独立错误码、事件和 `releaseUnsentAttemptAfterDailyRollover`，没有通用 release boolean | 普通Phase4B回归保留；整库双API264/264 |
+| 释放一半留下 Attempt/Usage/reservation/Stage/Job 分裂 | 单一外层Room事务、逐行CAS和五类写后回读 | 状态/时间/租约/聚合精确断言；并发最多一次提交 |
+| attempt 上限被换日重置形成无限收费重试 | 旧Attempt计数不变；`attemptCount < maxAttempts`才READY，否则Stage/Job NEEDS_ACTION | maxAttempts=1负例，`retryAllowed=false` |
+| 已发送请求被误判为未发送并释放 | permit evidence和专用事务都要求INTENT_RECORDED、无发送字段、UNKNOWN/PROVISIONAL Usage、RESERVED reservation | SENT负例保持reservation RESERVED且零换日写入 |
+| 换日检查发生在草稿/Provider之后 | Executor先claim，成功后才open buffer和adapter | adapter调用0；受保护草稿revision/time/0字节不变 |
+| 把“旧请求已结束”误写成“新日已重新预留” | 文档明确Phase5B只回READY；新Attempt/reservation/种子复制归Phase5C | registry仍未注册plan；TASK-083保持进行中 |
+
+## 55. TASK-083 Phase 5C 新日替代请求准备（进行中）
+
+| 风险/需求 | 实现证据 | 验证证据 |
+|---|---|---|
+| 调用方只凭父ID创建替代请求 | 专用API要求真实`GenerationRunnerExecutionLeaseSnapshot`，事务内重读最新父Attempt/Usage/reservation与当前Job/Stage | 错Job token负例零写入；双APIreservation各40/40 |
+| 普通prepare绕过种子复制与双租约 | 最新Attempt为换日错误时普通reservation入口直接stale失败 | feature集成测试证明临时新工件已删除、数据库无新Attempt |
+| 复用旧Attempt、reservation、attemptNo或草稿引用 | 新身份全部唯一；`attemptNo=parent+1`、`retryParent=old`、新artifact不可与父相同 | 正向逐字段断言；空/非空种子均产生不同引用 |
+| 跨日把单书预算一并清零 | 新reservation重新进入book聚合，只进入新daily key | 旧日50+新日100时book=150、旧daily=50、新daily=100 |
+| 新日策略不足却留下半请求 | candidate与Attempt/Usage/Stage在同一Room事务；上层删除新artifact | DAILY拒绝后新三行不存在，Stage仍PREPARING且旧release保持 |
+| 明文种子落盘或复制后旧草稿被改写 | 有界ByteArray在lease内复制并清零；只创建新受保护artifact，旧descriptor复核 | 非空内容逐字节相同；旧descriptor/content不变；无明文临时文件路径 |
+| 并发worker双重预留 | 最新Attempt、attemptCount、Stage状态与精确双lease同事务重验 | 两个并发专用prepare只有一个成功，只有一个新RESERVED行 |
+| 把repository能力误报为总runner已接通 | 文档明确未注册Phase5C总路由，Provider-open不在本阶段执行 | adapter调用0；plan registry仍未注册；TASK-083保持进行中 |
+
+## 56. TASK-083 Phase 5D Provider-open 实际目的地匹配（完成）
+
+- 需求：FR-011、FR-012、FR-013、NFR-003、NFR-006、DEC-071、DEC-073。
+- 代码：`ProviderOpenDestinationEvidence`、`GenerationRequestAuditRepository`、`GenerationStreamingDraftRepository`、`AuditedStreamingProviderExecutor`。
+- 数据边界：不新增schema；实际connection/canonical origin/protocol/current disclosure与reservation冻结证据在Provider-open事务内动态比较，claimed send继续携带同一脱敏证据。
+- 失败边界：错误目的地或协议在heartbeat、跨日release、受保护草稿打开和adapter调用前失败，Attempt/Usage/reservation/Stage/Job零写入，permit可在修复后重试。
+- 证据：双API reservation各43/43、executor各23/23；数据库模块各272/272、generation各48/48；801-task统一离线门禁、Release/R8、安全扫描与备份排除通过。
+- 结论：TASK-083在持久预算与实际发送目的地门禁边界完成；total runner、plan执行与App可用闭环继续由TASK-064承担。
+
+## 57. TASK-064 Phase 2E5A chapter-plan exact-token 请求准备（进行中）
+
+- 需求：FR-011、FR-012、NFR-003、NFR-005、NFR-006、DEC-071、DEC-073、DEC-074。
+- 代码：`GenerationRequestAuditRepository.persistBoundChapterPlanBeforeSend`、`GenerationStreamingDraftRepository.prepareBoundChapterPlanBeforeSend`及bound换日入口。
+- 授权边界：只接受Room签发的`CHAPTER_PLAN_V1` snapshot；同事务复核exact Job+Stage lease、current cursor、heartbeat、route和attempt范围后才创建v1预算请求事实。
+- 旁路边界：普通`BUILD_CHAPTER_PLAN`使用generic prepare会失败；损坏plan来源也不能借解析失败回落generic；首章bootstrap保持兼容。
+- 工件边界：公开streaming负例证明被拒绝的新加密草稿已删除；正例证明成功Attempt唯一引用bound工件。
+- 证据：双API reservation各47/47、数据库各276/276、generation各48/48；801-task统一离线门禁、Release/R8、安全扫描和备份排除通过。
+- 未完成：request factory、权威expectation冻结、Fake streaming、严格响应提交、initial DRAFT与registry仍属后续Phase 2E5。

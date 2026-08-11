@@ -6,6 +6,9 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.zhijuan.core.database.generation.ChapterGenerationCommitDraft
 import app.zhijuan.core.database.generation.ChapterGenerationCommitRepository
+import app.zhijuan.core.database.generation.ChapterMemoryExtractionJobFactory
+import app.zhijuan.core.database.generation.ChapterMemoryExtractionJobSpec
+import app.zhijuan.core.database.generation.ChapterMemoryExtractionSourceV1
 import app.zhijuan.core.database.generation.FinalUsageCommit
 import app.zhijuan.core.database.generation.GenerationControlDisposition
 import app.zhijuan.core.database.generation.GenerationControlReason
@@ -13,17 +16,23 @@ import app.zhijuan.core.database.generation.GenerationControlRepository
 import app.zhijuan.core.database.generation.GenerationExecutionControl
 import app.zhijuan.core.database.generation.GenerationDao
 import app.zhijuan.core.database.generation.GenerationJobEntity
+import app.zhijuan.core.database.generation.GenerationJobSetupRepository
 import app.zhijuan.core.database.generation.GenerationLeaseToken
 import app.zhijuan.core.database.generation.GenerationMaintenanceRepository
 import app.zhijuan.core.database.generation.GenerationOutputValidationRepository
 import app.zhijuan.core.database.generation.GenerationRequestAuditRepository
 import app.zhijuan.core.database.generation.GenerationRecoveryDisposition
+import app.zhijuan.core.database.generation.GenerationRunnerExecutionLeaseRepository
+import app.zhijuan.core.database.generation.GenerationRunnerQueueRepository
+import app.zhijuan.core.database.generation.GenerationRunnerStageRoute
 import app.zhijuan.core.database.generation.GenerationStreamingDraftRepository
 import app.zhijuan.core.database.generation.GenerationStageEntity
 import app.zhijuan.core.database.generation.GenerationStateRepository
 import app.zhijuan.core.database.generation.GenerationUnknownResultRecoveryRepository
 import app.zhijuan.core.database.generation.ExpiredStageLeaseDisposition
 import app.zhijuan.core.database.generation.NewRequestIntent
+import app.zhijuan.core.database.generation.PersistedRequestSendPermit
+import app.zhijuan.core.database.generation.PersistedStreamingRequest
 import app.zhijuan.core.database.generation.RequestIntentDraft
 import app.zhijuan.core.database.generation.StaleGenerationStateException
 import app.zhijuan.core.database.generation.StreamingDraftRecoveryDisposition
@@ -47,6 +56,8 @@ import app.zhijuan.core.security.ProtectedArtifactType
 import app.zhijuan.core.model.BookLengthMode
 import app.zhijuan.core.model.BookStatus
 import app.zhijuan.core.model.AdultStatus
+import app.zhijuan.core.model.BudgetDailyPeriodKeyV1
+import app.zhijuan.core.model.BudgetReservationStatus
 import app.zhijuan.core.model.CanonLevel
 import app.zhijuan.core.model.ChapterStatus
 import app.zhijuan.core.model.ChapterVersionSource
@@ -77,6 +88,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -105,6 +117,7 @@ class GenerationDatabaseTest {
         generationDao = database.generationDao()
         memoryDao = database.memoryDao()
         seedBook()
+        BudgetedRequestTestSupport.seedBudgetedRequestEnvironment(database, BOOK_ID)
     }
 
     @After
@@ -267,6 +280,7 @@ class GenerationDatabaseTest {
                 streamDraftRef = null,
                 createdAt = 4L,
             ),
+            budget = BudgetedRequestTestSupport.budgetedDraft("attempt-crash-window"),
             stageLease("stage-1"),
         )
         val observedLease = stageLease("stage-1")
@@ -334,6 +348,7 @@ class GenerationDatabaseTest {
                 streamDraftRef = null,
                 createdAt = 4L,
             ),
+            budget = BudgetedRequestTestSupport.budgetedDraft("attempt-pending"),
             stageLease("stage-1"),
         )
         val claimed = drafts.claimForProviderOpen(prepared, 5L)
@@ -352,6 +367,14 @@ class GenerationDatabaseTest {
         assertEquals(GenerationStageStatus.RECOVERY_REQUIRED, generationDao.findStage("stage-1")?.status)
         assertEquals(UsageLedgerStatus.PROVISIONAL, generationDao.findUsageForAttempt("attempt-pending")?.status)
         assertEquals(null, generationDao.findStage("stage-1")?.leaseOwnerId)
+
+        val waitingReservation = requireNotNull(
+            database.budgetDao().findReservation("reservation-attempt-pending"),
+        )
+        assertEquals(BudgetReservationStatus.RESERVED, waitingReservation.status)
+        assertEquals(BudgetedRequestTestSupport.BUDGETED_ESTIMATED_TOKENS, waitingReservation.accountedTokens)
+        assertNull(waitingReservation.releasedAt)
+        assertNull(waitingReservation.settledAt)
 
         val completedWithoutOutput = drafts.reconcilePendingAttempt(
             attemptId = "attempt-pending",
@@ -385,6 +408,7 @@ class GenerationDatabaseTest {
                 streamDraftRef = null,
                 createdAt = 4L,
             ),
+            budget = BudgetedRequestTestSupport.budgetedDraft("attempt-not-executed"),
             stageLease("stage-1"),
         )
         val claimed = drafts.claimForProviderOpen(prepared, 5L)
@@ -402,7 +426,23 @@ class GenerationDatabaseTest {
         assertEquals(RequestAttemptStatus.FAILED_RETRYABLE, generationDao.findAttempt("attempt-not-executed")?.status)
         assertEquals(GenerationStageStatus.READY, generationDao.findStage("stage-1")?.status)
         assertEquals(GenerationJobStatus.READY, generationDao.findJob(JOB_ID)?.status)
-        assertEquals(UsageLedgerStatus.FINAL, generationDao.findUsageForAttempt("attempt-not-executed")?.status)
+        val usage = requireNotNull(generationDao.findUsageForAttempt("attempt-not-executed"))
+        assertEquals(UsageLedgerStatus.FINAL, usage.status)
+        assertEquals(UsageSource.UNKNOWN, usage.source)
+        assertNull(usage.totalTokens)
+        assertNull(usage.estimatedCostMicros)
+        assertEquals(60_005L, usage.finalizedAt)
+
+        val reservation = requireNotNull(
+            database.budgetDao().findReservation("reservation-attempt-not-executed"),
+        )
+        assertEquals(BudgetReservationStatus.RELEASED, reservation.status)
+        assertEquals(0L, reservation.accountedTokens)
+        assertNull(reservation.accountedCostMicros)
+        assertNull(reservation.accountedCurrency)
+        assertEquals(60_005L, reservation.releasedAt)
+        assertNull(reservation.settledAt)
+        assertEquals(60_005L, reservation.updatedAt)
     }
 
     @Test
@@ -417,6 +457,7 @@ class GenerationDatabaseTest {
                 streamDraftRef = null,
                 createdAt = 4L,
             ),
+            budget = BudgetedRequestTestSupport.budgetedDraft("attempt-contradiction"),
             stageLease("stage-1"),
         )
         val claimed = drafts.claimForProviderOpen(prepared, 5L)
@@ -437,6 +478,14 @@ class GenerationDatabaseTest {
         assertEquals(GenerationRecoveryDisposition.USER_CONFIRMATION_REQUIRED, result.disposition)
         assertEquals(RequestAttemptStatus.UNKNOWN_RESULT, generationDao.findAttempt("attempt-contradiction")?.status)
         assertEquals(GenerationStageStatus.UNKNOWN_RESULT, generationDao.findStage("stage-1")?.status)
+
+        val reservation = requireNotNull(
+            database.budgetDao().findReservation("reservation-attempt-contradiction"),
+        )
+        assertEquals(BudgetReservationStatus.SETTLED, reservation.status)
+        assertEquals(BudgetedRequestTestSupport.BUDGETED_ESTIMATED_TOKENS, reservation.accountedTokens)
+        assertNull(reservation.releasedAt)
+        assertEquals(60_005L, reservation.settledAt)
     }
 
     @Test
@@ -1032,6 +1081,7 @@ class GenerationDatabaseTest {
         val repository = GenerationRequestAuditRepository(database)
         val audit = repository.persistBeforeSend(
             draft = publicIntent("attempt-public-1", "ledger-public-1", "stage-1"),
+            budget = BudgetedRequestTestSupport.budgetedDraft("attempt-public-1"),
             leaseToken = stageLease("stage-1"),
         )
 
@@ -1040,6 +1090,28 @@ class GenerationDatabaseTest {
         assertEquals(UsageLedgerStatus.PROVISIONAL, audit.usage.status)
         assertEquals(null, audit.usage.totalTokens)
         assertEquals(GenerationStageStatus.REQUEST_INTENT_RECORDED, generationDao.findStage("stage-1")?.status)
+        val expectedDailyKey = BudgetDailyPeriodKeyV1.create(
+            epochMillis = 3L,
+            zoneId = BudgetedRequestTestSupport.BUDGETED_DAILY_ZONE,
+        )
+        val persistedAttempt = requireNotNull(generationDao.findAttempt("attempt-public-1"))
+        assertEquals(1, persistedAttempt.budgetEnforcementVersion)
+        assertEquals("reservation-attempt-public-1", persistedAttempt.budgetReservationId)
+        assertEquals("reservation-attempt-public-1", audit.permit.reservationId)
+        val reservation = requireNotNull(database.budgetDao().findReservation("reservation-attempt-public-1"))
+        assertEquals(BudgetReservationStatus.RESERVED, reservation.status)
+        assertEquals("attempt-public-1", reservation.attemptId)
+        assertEquals("stage-1", reservation.stageId)
+        assertEquals(BOOK_ID, reservation.bookId)
+        assertEquals(expectedDailyKey, reservation.dailyPeriodKey)
+        assertEquals(
+            expectedDailyKey,
+            requireNotNull(generationDao.findUsageForAttempt("attempt-public-1")).dailyPeriodKey,
+        )
+        assertEquals(
+            expectedDailyKey,
+            requireNotNull(generationDao.findUsageLedger("ledger-public-1")).dailyPeriodKey,
+        )
         val claimed = repository.claimForProviderOpen(audit.permit, 4L)
         expectFailure { repository.claimForProviderOpen(audit.permit, 4L) }
 
@@ -1052,6 +1124,109 @@ class GenerationDatabaseTest {
         assertEquals(GenerationStageStatus.STREAMING, generationDao.findStage("stage-1")?.status)
         assertEquals(sent, repository.findAttempt(sent.attemptId))
         assertEquals(audit.usage, repository.findUsageForAttempt(sent.attemptId))
+        assertEquals(
+            BudgetReservationStatus.RESERVED,
+            database.budgetDao().findReservation("reservation-attempt-public-1")?.status,
+        )
+    }
+
+    @Test
+    fun publicRequestAuditRejectsOverBudgetBeforeLeavingAnyRequestHalfState() = runBlocking {
+        prepareSingleStage()
+        val repository = GenerationRequestAuditRepository(database)
+
+        expectFailure {
+            repository.persistBeforeSend(
+                publicIntent("attempt-public-over-budget", "ledger-public-over-budget", "stage-1"),
+                BudgetedRequestTestSupport.budgetedDraft(
+                    attemptId = "attempt-public-over-budget",
+                    requestMaxTokens = 1L,
+                    estimatedTokens = 2L,
+                ),
+                stageLease("stage-1"),
+            )
+        }
+
+        assertNull(generationDao.findAttempt("attempt-public-over-budget"))
+        assertNull(generationDao.findUsageLedger("ledger-public-over-budget"))
+        assertNull(database.budgetDao().findReservation("reservation-attempt-public-over-budget"))
+        assertEquals(GenerationStageStatus.PREPARING, generationDao.findStage("stage-1")?.status)
+        assertEquals(0, generationDao.findStage("stage-1")?.attemptCount)
+    }
+
+    @Test
+    fun legacyV0AttemptCannotClaimProviderOpen() = runBlocking {
+        prepareSingleStage()
+        val lease = stageLease("stage-1")
+        val legacyIntent = intent("attempt-legacy-v0", "ledger-legacy-v0", "stage-1")
+        val attempt = generationDao.recordRequestIntent(legacyIntent, lease)
+        assertEquals(0, attempt.budgetEnforcementVersion)
+        assertNull(attempt.budgetReservationId)
+
+        val forgedPermit = PersistedRequestSendPermit(
+            attemptId = attempt.attemptId,
+            stageId = attempt.stageId,
+            attemptNo = attempt.attemptNo,
+            inputHash = attempt.inputHash,
+            leaseToken = lease,
+            intentRecordedAt = attempt.requestIntentAt,
+            reservationId = "reservation-forged-v0",
+        )
+
+        expectFailure {
+            GenerationRequestAuditRepository(database).claimForProviderOpen(forgedPermit, 4L)
+        }
+        assertEquals(RequestAttemptStatus.INTENT_RECORDED, generationDao.findAttempt(attempt.attemptId)?.status)
+        assertEquals(
+            GenerationStageStatus.REQUEST_INTENT_RECORDED,
+            generationDao.findStage("stage-1")?.status,
+        )
+        assertNull(database.budgetDao().findReservationByAttempt(attempt.attemptId))
+    }
+
+    @Test
+    fun mismatchedOrReleasedReservationCannotClaimProviderOpen() = runBlocking {
+        prepareSingleStage()
+        val repository = GenerationRequestAuditRepository(database)
+        val audit = repository.persistBeforeSend(
+            publicIntent("attempt-budget-evidence", "ledger-budget-evidence", "stage-1"),
+            BudgetedRequestTestSupport.budgetedDraft("attempt-budget-evidence"),
+            stageLease("stage-1"),
+        )
+        val forgedPermit = PersistedRequestSendPermit(
+            attemptId = audit.permit.attemptId,
+            stageId = audit.permit.stageId,
+            attemptNo = audit.permit.attemptNo,
+            inputHash = audit.permit.inputHash,
+            leaseToken = audit.permit.leaseToken,
+            intentRecordedAt = audit.permit.intentRecordedAt,
+            reservationId = "reservation-wrong-evidence",
+        )
+        expectFailure { repository.claimForProviderOpen(forgedPermit, 4L) }
+
+        database.openHelper.writableDatabase.execSQL(
+            """
+            UPDATE request_budget_reservation
+            SET status = 'RELEASED',
+                accounted_tokens = 0,
+                accounted_cost_micros = NULL,
+                accounted_currency = NULL,
+                updated_at = 4,
+                released_at = 4
+            WHERE budget_reservation_id = 'reservation-attempt-budget-evidence'
+            """.trimIndent(),
+        )
+        expectFailure { repository.claimForProviderOpen(audit.permit, 4L) }
+
+        assertEquals(RequestAttemptStatus.INTENT_RECORDED, repository.findAttempt(audit.attempt.attemptId)?.status)
+        assertEquals(
+            GenerationStageStatus.REQUEST_INTENT_RECORDED,
+            generationDao.findStage("stage-1")?.status,
+        )
+        assertEquals(
+            BudgetReservationStatus.RELEASED,
+            database.budgetDao().findReservation("reservation-attempt-budget-evidence")?.status,
+        )
     }
 
     @Test
@@ -1065,9 +1240,17 @@ class GenerationDatabaseTest {
             connectionSnapshot = "{\"api_key\":\"must-not-persist\"}",
         )
 
-        expectFailure { repository.persistBeforeSend(unsafe, stageLease("stage-1")) }
+        expectFailure {
+            repository.persistBeforeSend(
+                unsafe,
+                BudgetedRequestTestSupport.budgetedDraft("attempt-unsafe"),
+                stageLease("stage-1"),
+            )
+        }
         assertEquals(null, repository.findAttempt("attempt-unsafe"))
         assertEquals(null, repository.findUsageForAttempt("attempt-unsafe"))
+        assertNull(database.budgetDao().findReservation("reservation-attempt-unsafe"))
+        assertNull(database.budgetDao().findReservationByAttempt("attempt-unsafe"))
         assertEquals(0, generationDao.findStage("stage-1")?.attemptCount)
         assertEquals(GenerationStageStatus.PREPARING, generationDao.findStage("stage-1")?.status)
     }
@@ -1078,7 +1261,12 @@ class GenerationDatabaseTest {
         val repository = GenerationRequestAuditRepository(database)
         repository.persistBeforeSend(
             publicIntent("attempt-1", "shared-ledger", "stage-1"),
+            BudgetedRequestTestSupport.budgetedDraft("attempt-1"),
             stageLease("stage-1"),
+        )
+        assertEquals(
+            BudgetReservationStatus.RESERVED,
+            database.budgetDao().findReservation("reservation-attempt-1")?.status,
         )
         generationDao.recordRequestSent("attempt-1", null, 4L, stageLease("stage-1"))
         val recovery = GenerationUnknownResultRecoveryRepository(database)
@@ -1101,10 +1289,19 @@ class GenerationDatabaseTest {
                     createdAt = 7L,
                     retryParent = "attempt-1",
                 ),
+                BudgetedRequestTestSupport.budgetedDraft("attempt-2"),
                 stageLease("stage-1"),
             )
         }
         assertEquals(null, repository.findAttempt("attempt-2"))
+        assertNull(database.budgetDao().findReservation("reservation-attempt-2"))
+        assertNull(database.budgetDao().findReservationByAttempt("attempt-2"))
+        val settledFirstReservation = requireNotNull(
+            database.budgetDao().findReservation("reservation-attempt-1"),
+        )
+        assertEquals(BudgetReservationStatus.SETTLED, settledFirstReservation.status)
+        assertEquals(1L, settledFirstReservation.accountedTokens)
+        assertEquals(5L, settledFirstReservation.settledAt)
         assertEquals(1, generationDao.findStage("stage-1")?.attemptCount)
         assertEquals(GenerationStageStatus.PREPARING, generationDao.findStage("stage-1")?.status)
     }
@@ -1115,6 +1312,7 @@ class GenerationDatabaseTest {
         val repository = GenerationRequestAuditRepository(database)
         val audit = repository.persistBeforeSend(
             publicIntent("attempt-expired", "ledger-expired", "stage-1"),
+            BudgetedRequestTestSupport.budgetedDraft("attempt-expired"),
             stageLease("stage-1"),
         )
         expectFailure {
@@ -1138,7 +1336,13 @@ class GenerationDatabaseTest {
             streamDraftRef = null,
         )
 
-        expectFailure { repository.prepareBeforeSend(unsafe, stageLease("stage-1")) }
+        expectFailure {
+            repository.prepareBeforeSend(
+                unsafe,
+                BudgetedRequestTestSupport.budgetedDraft("attempt-stream-unsafe"),
+                stageLease("stage-1"),
+            )
+        }
         assertTrue(artifactStore.listArtifactReferenceIds().isEmpty())
         assertEquals(null, generationDao.findAttempt("attempt-stream-unsafe"))
         assertEquals(GenerationStageStatus.PREPARING, generationDao.findStage("stage-1")?.status)
@@ -1150,6 +1354,7 @@ class GenerationDatabaseTest {
                 stageId = "stage-1",
                 streamDraftRef = null,
             ),
+            BudgetedRequestTestSupport.budgetedDraft("attempt-stream-1"),
             stageLease("stage-1"),
         )
         val artifactRef = requireNotNull(generationDao.findAttempt("attempt-stream-1")?.streamDraftRef)
@@ -1173,6 +1378,7 @@ class GenerationDatabaseTest {
                 stageId = "stage-1",
                 streamDraftRef = null,
             ),
+            BudgetedRequestTestSupport.budgetedDraft("attempt-stream-2"),
             stageLease("stage-1"),
         )
         val claimed = repository.claimForProviderOpen(prepared, validatedAt = 4L)
@@ -1208,6 +1414,7 @@ class GenerationDatabaseTest {
                 stageId = "stage-1",
                 streamDraftRef = null,
             ),
+            BudgetedRequestTestSupport.budgetedDraft("attempt-retention"),
             stageLease("stage-1"),
         )
         val claimed = repository.claimForProviderOpen(prepared, validatedAt = 4L)
@@ -1402,7 +1609,7 @@ class GenerationDatabaseTest {
         assertEquals(ChapterStatus.READY, libraryDao.findChapter("chapter-target")?.status)
         assertEquals(ConsistencyStatus.VALID, libraryDao.findChapter("chapter-target")?.consistencyStatus)
         assertEquals("正式章节正文-CANARY", libraryDao.findChapterVersion("chapter-version-generated")?.content)
-        assertEquals("VALID", memoryDao.summaryStatus("chapter-version-generated"))
+        assertEquals("VALID", memoryDao.latestSummaryHistoryStatus("chapter-version-generated"))
         assertEquals(1L, scalarLong("SELECT COUNT(*) FROM entity_event"))
         assertEquals(1L, scalarLong("SELECT COUNT(*) FROM canon_fact"))
         assertEquals(1L, scalarLong("SELECT COUNT(*) FROM timeline_event"))
@@ -1533,6 +1740,7 @@ class GenerationDatabaseTest {
                 stageId = "stage-1",
                 streamDraftRef = null,
             ),
+            BudgetedRequestTestSupport.budgetedDraft("attempt-failed-retention"),
             stageLease("stage-1"),
         )
         val claimed = repository.claimForProviderOpen(prepared, validatedAt = 4L)
@@ -1648,6 +1856,7 @@ class GenerationDatabaseTest {
         val drafts = GenerationStreamingDraftRepository(database, artifactStore)
         val prepared = drafts.prepareBeforeSend(
             publicIntent("attempt-pause", "ledger-pause", "stage-1", streamDraftRef = null),
+            BudgetedRequestTestSupport.budgetedDraft("attempt-pause"),
             stageLease("stage-1"),
         )
         val claimed = drafts.claimForProviderOpen(prepared, validatedAt = 4L)
@@ -1686,6 +1895,7 @@ class GenerationDatabaseTest {
         val drafts = GenerationStreamingDraftRepository(database, artifactStore)
         val prepared = drafts.prepareBeforeSend(
             publicIntent("attempt-stop", "ledger-stop", "stage-1", streamDraftRef = null),
+            BudgetedRequestTestSupport.budgetedDraft("attempt-stop"),
             stageLease("stage-1"),
         )
         val claimed = drafts.claimForProviderOpen(prepared, validatedAt = 4L)
@@ -1751,6 +1961,7 @@ class GenerationDatabaseTest {
         val drafts = GenerationStreamingDraftRepository(database, artifactStore, leasePolicy)
         val prepared = drafts.prepareBeforeSend(
             publicIntent("attempt-expired-pause", "ledger-expired-pause", "stage-1", streamDraftRef = null),
+            BudgetedRequestTestSupport.budgetedDraft("attempt-expired-pause"),
             stageLease("stage-1"),
         )
         val claimed = drafts.claimForProviderOpen(prepared, validatedAt = 4L)
@@ -2059,6 +2270,1012 @@ class GenerationDatabaseTest {
         assertEquals(true, scan.hasMore)
     }
 
+    @Test
+    fun maintenanceRequeuesExpiredIdleRunningJobLeaseWithoutTouchingTheStage() = runBlocking {
+        generationDao.createJob(job(), listOf(stage("stage-1", "idem-1", 1L)))
+        startJob()
+        generationDao.transitionStage(
+            "stage-1",
+            GenerationStageStatus.PENDING,
+            StageEvent.DEPENDENCIES_SATISFIED,
+            updatedAt = 2L,
+        )
+        val repository = GenerationMaintenanceRepository(database)
+
+        val scan = repository.scanExpiredIdleJobLeases(observedAt = 60_003L)
+        val candidate = scan.candidates.single()
+
+        assertEquals(JOB_ID, candidate.jobId)
+        assertEquals(GenerationJobStatus.RUNNING, candidate.jobStatus)
+        assertEquals("stage-1", candidate.currentStageId)
+        assertEquals(GenerationStageStatus.READY, candidate.currentStageStatus)
+        assertEquals(jobLease(), candidate.observedJobLease)
+        assertEquals(3L, candidate.jobLeaseHeartbeatAt)
+        assertEquals(false, scan.hasMore)
+        assertEquals(false, candidate.toString().contains(JOB_ID))
+
+        val tamperedHeartbeat = candidate.copy(jobLeaseHeartbeatAt = candidate.jobLeaseHeartbeatAt - 1L)
+        val tamperedError = expectFailure {
+            repository.requeueExpiredIdleJobLease(tamperedHeartbeat, observedAt = 60_003L)
+        }
+        assertTrue(tamperedError is StaleGenerationStateException)
+        assertEquals(GenerationJobStatus.RUNNING, generationDao.findJob(JOB_ID)?.status)
+
+        repository.requeueExpiredIdleJobLease(candidate, observedAt = 60_003L)
+
+        val jobAfter = requireNotNull(generationDao.findJob(JOB_ID))
+        assertEquals(GenerationJobStatus.READY, jobAfter.status)
+        assertEquals("stage-1", jobAfter.currentStageId)
+        assertEquals(null, jobAfter.leaseOwnerId)
+        assertEquals(null, jobAfter.leaseAcquiredAt)
+        assertEquals(null, jobAfter.leaseHeartbeatAt)
+        val stageAfter = requireNotNull(generationDao.findStage("stage-1"))
+        assertEquals(GenerationStageStatus.READY, stageAfter.status)
+        assertEquals(0, stageAfter.attemptCount)
+        assertEquals(2L, stageAfter.updatedAt)
+        assertEquals(null, stageAfter.leaseOwnerId)
+        assertEquals(null, stageAfter.leaseAcquiredAt)
+        assertEquals(null, stageAfter.leaseHeartbeatAt)
+        assertEquals(null, stageAfter.standardErrorCode)
+        assertEquals(null, stageAfter.nextRetryAt)
+        assertEquals(0, generationDao.attemptsForStage("stage-1").size)
+    }
+
+    @Test
+    fun maintenanceOnlyScansIdleJobLeaseAtOrPastTheTimeoutBoundary() = runBlocking {
+        generationDao.createJob(job(), listOf(stage("stage-1", "idem-1", 1L)))
+        startJob()
+        generationDao.transitionStage(
+            "stage-1",
+            GenerationStageStatus.PENDING,
+            StageEvent.DEPENDENCIES_SATISFIED,
+            updatedAt = 2L,
+        )
+        val repository = GenerationMaintenanceRepository(database)
+
+        val beforeExpiry = repository.scanExpiredIdleJobLeases(observedAt = 60_002L)
+        assertEquals(emptyList<Any>(), beforeExpiry.candidates)
+        assertEquals(false, beforeExpiry.hasMore)
+
+        val atBoundary = repository.scanExpiredIdleJobLeases(observedAt = 60_003L)
+        assertEquals(1, atBoundary.candidates.size)
+        assertEquals(3L, atBoundary.candidates.single().jobLeaseHeartbeatAt)
+        assertEquals(false, atBoundary.hasMore)
+    }
+
+    @Test
+    fun maintenanceRequeueFailsWhenAnotherExecutorClaimedTheIdleStage() = runBlocking {
+        generationDao.createJob(job(), listOf(stage("stage-1", "idem-1", 1L)))
+        startJob()
+        generationDao.transitionStage(
+            "stage-1",
+            GenerationStageStatus.PENDING,
+            StageEvent.DEPENDENCIES_SATISFIED,
+            updatedAt = 2L,
+        )
+        val repository = GenerationMaintenanceRepository(database)
+        val candidate = repository.scanExpiredIdleJobLeases(observedAt = 60_003L).candidates.single()
+        generationDao.acquireStageLease("stage-1", "worker-b", 60_004L)
+
+        val error = expectFailure {
+            repository.requeueExpiredIdleJobLease(candidate, observedAt = 60_003L)
+        }
+        assertTrue(error is StaleGenerationStateException)
+
+        val jobAfter = requireNotNull(generationDao.findJob(JOB_ID))
+        assertEquals(GenerationJobStatus.RUNNING, jobAfter.status)
+        assertEquals("job-worker", jobAfter.leaseOwnerId)
+        val stageAfter = requireNotNull(generationDao.findStage("stage-1"))
+        assertEquals(GenerationStageStatus.PREPARING, stageAfter.status)
+        assertEquals("worker-b", stageAfter.leaseOwnerId)
+        assertEquals(60_004L, stageAfter.leaseAcquiredAt)
+    }
+
+    @Test
+    fun concurrentMaintenanceRequeuesOfTheSameIdleJobSucceedExactlyOnce() = runBlocking {
+        generationDao.createJob(job(), listOf(stage("stage-1", "idem-1", 1L)))
+        startJob()
+        generationDao.transitionStage(
+            "stage-1",
+            GenerationStageStatus.PENDING,
+            StageEvent.DEPENDENCIES_SATISFIED,
+            updatedAt = 2L,
+        )
+        val repository = GenerationMaintenanceRepository(database)
+        val candidate = repository.scanExpiredIdleJobLeases(observedAt = 60_003L).candidates.single()
+
+        val requeues = coroutineScope {
+            listOf(
+                async(Dispatchers.IO) {
+                    runCatching { repository.requeueExpiredIdleJobLease(candidate, 60_003L) }
+                },
+                async(Dispatchers.IO) {
+                    runCatching { repository.requeueExpiredIdleJobLease(candidate, 60_003L) }
+                },
+            ).awaitAll()
+        }
+
+        assertEquals(1, requeues.count { it.isSuccess })
+        assertEquals(1, requeues.count { it.isFailure })
+        val jobAfter = requireNotNull(generationDao.findJob(JOB_ID))
+        assertEquals(GenerationJobStatus.READY, jobAfter.status)
+        assertEquals(null, jobAfter.leaseOwnerId)
+        val stageAfter = requireNotNull(generationDao.findStage("stage-1"))
+        assertEquals(GenerationStageStatus.READY, stageAfter.status)
+        assertEquals(null, stageAfter.leaseOwnerId)
+        assertEquals(0, stageAfter.attemptCount)
+        assertEquals(0, generationDao.attemptsForStage("stage-1").size)
+    }
+
+    @Test
+    fun maintenanceIdleJobScanIsBoundedAndOrderedByOldestHeartbeat() = runBlocking {
+        listOf(
+            Triple("job-idle-a", "stage-idle-a", 3L),
+            Triple("job-idle-b", "stage-idle-b", 4L),
+            Triple("job-idle-c", "stage-idle-c", 5L),
+        ).forEachIndexed { index, (jobId, stageId, leaseAt) ->
+            generationDao.createJob(
+                job(jobId),
+                listOf(stage(stageId, "idem-idle-$index", 1L, jobId)),
+            )
+            generationDao.transitionJob(
+                jobId,
+                GenerationJobStatus.CREATED,
+                JobEvent.VALIDATION_PASSED,
+                2L,
+            )
+            generationDao.acquireJobLease(jobId, "job-worker-$index", leaseAt)
+            generationDao.transitionStage(
+                stageId,
+                GenerationStageStatus.PENDING,
+                StageEvent.DEPENDENCIES_SATISFIED,
+                updatedAt = 2L,
+            )
+        }
+
+        val scan = GenerationMaintenanceRepository(database).scanExpiredIdleJobLeases(
+            observedAt = 60_005L,
+            limit = 2,
+        )
+
+        assertEquals(listOf("job-idle-a", "job-idle-b"), scan.candidates.map { it.jobId })
+        assertEquals(listOf(3L, 4L), scan.candidates.map { it.jobLeaseHeartbeatAt })
+        assertEquals(true, scan.hasMore)
+    }
+
+    @Test
+    fun runnerQueueScanIsBoundedStableAndRespectsObservedAt() = runBlocking {
+        readyJob("job-run-a", "stage-run-a", "idem-run-a", at = 2L)
+        readyJob("job-run-b", "stage-run-b", "idem-run-b", at = 2L)
+        readyJob("job-run-c", "stage-run-c", "idem-run-c", at = 3L)
+        readyJob("job-run-future", "stage-run-future", "idem-run-future", at = 5L)
+        readyJob("job-run-malformed-lease", "stage-run-malformed-lease", "idem-run-malformed-lease", at = 2L)
+        database.openHelper.writableDatabase.execSQL(
+            """
+            UPDATE generation_job
+            SET lease_owner_id = 'stale-runner', lease_acquired_at = 2, lease_heartbeat_at = 2
+            WHERE job_id = 'job-run-malformed-lease'
+            """.trimIndent(),
+        )
+        generationDao.createJob(
+            job("job-run-stage-future"),
+            listOf(stage("stage-run-stage-future", "idem-run-stage-future", 1L, "job-run-stage-future")),
+        )
+        generationDao.transitionJob(
+            "job-run-stage-future",
+            GenerationJobStatus.CREATED,
+            JobEvent.VALIDATION_PASSED,
+            3L,
+        )
+        generationDao.transitionStage(
+            "stage-run-stage-future",
+            GenerationStageStatus.PENDING,
+            StageEvent.DEPENDENCIES_SATISFIED,
+            updatedAt = 5L,
+        )
+        val repository = GenerationRunnerQueueRepository(database)
+
+        val page = repository.scanReadyJobs(observedAt = 4L, limit = 2)
+        assertEquals(listOf("job-run-a", "job-run-b"), page.candidates.map { it.jobId })
+        assertEquals(listOf(2L, 2L), page.candidates.map { it.jobUpdatedAt })
+        assertEquals(true, page.hasMore)
+
+        val full = repository.scanReadyJobs(observedAt = 4L, limit = 10)
+        assertEquals(listOf("job-run-a", "job-run-b", "job-run-c"), full.candidates.map { it.jobId })
+        assertEquals(false, full.hasMore)
+
+        val first = full.candidates.first()
+        assertEquals("job-run-a", first.jobId)
+        assertEquals(GenerationJobStatus.READY, first.jobStatus)
+        assertEquals("stage-run-a", first.currentStageId)
+        assertEquals(GenerationStageStatus.READY, first.currentStageStatus)
+        assertEquals(2L, first.jobUpdatedAt)
+        assertEquals(2L, first.stageUpdatedAt)
+        assertEquals(false, first.toString().contains("job-run-a"))
+        assertEquals(false, first.toString().contains("stage-run-a"))
+
+        assertEquals(emptyList<Any>(), repository.scanReadyJobs(observedAt = 1L).candidates)
+    }
+
+    @Test
+    fun concurrentRunnerClaimsOfTheSameReadyJobSucceedExactlyOnce() = runBlocking {
+        readyJob(JOB_ID, "stage-1", "idem-1", at = 2L)
+        val repository = GenerationRunnerQueueRepository(database)
+        val candidate = repository.scanReadyJobs(observedAt = 4L).candidates.single()
+
+        val claims = coroutineScope {
+            listOf(
+                async(Dispatchers.IO) {
+                    runCatching { repository.claimReadyJob(candidate, "runner-a", claimedAt = 3L) }
+                },
+                async(Dispatchers.IO) {
+                    runCatching { repository.claimReadyJob(candidate, "runner-b", claimedAt = 3L) }
+                },
+            ).awaitAll()
+        }
+
+        assertEquals(1, claims.count { it.isSuccess })
+        assertEquals(1, claims.count { it.isFailure })
+        val loser = claims.first { it.isFailure }.exceptionOrNull()
+        assertTrue(loser is StaleGenerationStateException)
+
+        val job = requireNotNull(generationDao.findJob(JOB_ID))
+        assertEquals(GenerationJobStatus.RUNNING, job.status)
+        assertTrue(job.leaseOwnerId == "runner-a" || job.leaseOwnerId == "runner-b")
+        assertEquals(3L, job.leaseAcquiredAt)
+        assertEquals(3L, job.leaseHeartbeatAt)
+        assertEquals("stage-1", job.currentStageId)
+        val stage = requireNotNull(generationDao.findStage("stage-1"))
+        assertEquals(GenerationStageStatus.READY, stage.status)
+        assertEquals(0, stage.attemptCount)
+        assertEquals(null, stage.leaseOwnerId)
+        assertEquals(0, generationDao.attemptsForStage("stage-1").size)
+    }
+
+    @Test
+    fun runnerClaimStaleFailsWhenJobOrStageEvidenceChangesAfterScan() = runBlocking {
+        val repository = GenerationRunnerQueueRepository(database)
+
+        // Job updatedAt changed after the scan.
+        readyJob("job-ev-a", "stage-ev-a", "idem-ev-a", at = 2L)
+        val candidateA = repository.scanReadyJobs(observedAt = 4L).candidates.single { it.jobId == "job-ev-a" }
+        generationDao.setCurrentStage("job-ev-a", "stage-ev-a", 4L)
+        val errorA = expectFailure { repository.claimReadyJob(candidateA, "runner-a", claimedAt = 5L) }
+        assertTrue(errorA is StaleGenerationStateException)
+        assertEquals(GenerationJobStatus.READY, generationDao.findJob("job-ev-a")?.status)
+        assertEquals(null, generationDao.findJob("job-ev-a")?.leaseOwnerId)
+        assertEquals(4L, generationDao.findJob("job-ev-a")?.updatedAt)
+
+        // Job current stage changed after the scan.
+        generationDao.createJob(
+            job("job-ev-b"),
+            listOf(
+                stage("stage-ev-b", "idem-ev-b", 1L, "job-ev-b"),
+                stage("stage-ev-b2", "idem-ev-b2", 1L, "job-ev-b"),
+            ),
+        )
+        generationDao.transitionJob("job-ev-b", GenerationJobStatus.CREATED, JobEvent.VALIDATION_PASSED, 2L)
+        generationDao.transitionStage(
+            "stage-ev-b",
+            GenerationStageStatus.PENDING,
+            StageEvent.DEPENDENCIES_SATISFIED,
+            updatedAt = 2L,
+        )
+        generationDao.transitionStage(
+            "stage-ev-b2",
+            GenerationStageStatus.PENDING,
+            StageEvent.DEPENDENCIES_SATISFIED,
+            updatedAt = 2L,
+        )
+        val candidateB = repository.scanReadyJobs(observedAt = 4L).candidates.single { it.jobId == "job-ev-b" }
+        assertEquals("stage-ev-b", candidateB.currentStageId)
+        generationDao.setCurrentStage("job-ev-b", "stage-ev-b2", 4L)
+        val errorB = expectFailure { repository.claimReadyJob(candidateB, "runner-a", claimedAt = 5L) }
+        assertTrue(errorB is StaleGenerationStateException)
+        val jobB = requireNotNull(generationDao.findJob("job-ev-b"))
+        assertEquals("stage-ev-b2", jobB.currentStageId)
+        assertEquals(GenerationJobStatus.READY, jobB.status)
+        assertEquals(null, jobB.leaseOwnerId)
+
+        // Stage status and lease changed after the scan.
+        readyJob("job-ev-c", "stage-ev-c", "idem-ev-c", at = 2L)
+        val candidateC = repository.scanReadyJobs(observedAt = 4L).candidates.single { it.jobId == "job-ev-c" }
+        generationDao.acquireStageLease("stage-ev-c", "worker-b", 3L)
+        val errorC = expectFailure { repository.claimReadyJob(candidateC, "runner-a", claimedAt = 5L) }
+        assertTrue(errorC is StaleGenerationStateException)
+        val jobC = requireNotNull(generationDao.findJob("job-ev-c"))
+        assertEquals(GenerationJobStatus.READY, jobC.status)
+        assertEquals(null, jobC.leaseOwnerId)
+        val stageC = requireNotNull(generationDao.findStage("stage-ev-c"))
+        assertEquals(GenerationStageStatus.PREPARING, stageC.status)
+        assertEquals("worker-b", stageC.leaseOwnerId)
+
+        // Stage updatedAt changed after the scan while status and lease stayed READY-free.
+        readyJob("job-ev-d", "stage-ev-d", "idem-ev-d", at = 2L)
+        val candidateD = repository.scanReadyJobs(observedAt = 4L).candidates.single { it.jobId == "job-ev-d" }
+        database.openHelper.writableDatabase.execSQL(
+            "UPDATE generation_stage SET updated_at = 4 WHERE stage_id = 'stage-ev-d'",
+        )
+        val errorD = expectFailure { repository.claimReadyJob(candidateD, "runner-a", claimedAt = 5L) }
+        assertTrue(errorD is StaleGenerationStateException)
+        assertEquals(GenerationJobStatus.READY, generationDao.findJob("job-ev-d")?.status)
+        assertEquals(4L, generationDao.findStage("stage-ev-d")?.updatedAt)
+
+        // A hand-crafted candidate that no longer matches the persisted facts also fails closed.
+        val tampered = candidateA.copy(jobUpdatedAt = candidateA.jobUpdatedAt - 1L)
+        val tamperError = expectFailure { repository.claimReadyJob(tampered, "runner-a", claimedAt = 5L) }
+        assertTrue(tamperError is StaleGenerationStateException)
+        assertEquals(GenerationJobStatus.READY, generationDao.findJob("job-ev-a")?.status)
+    }
+
+    @Test
+    fun runnerClaimOnlyChangesTheJobToRunningWithLease() = runBlocking {
+        readyJob(JOB_ID, "stage-1", "idem-1", at = 2L)
+        val repository = GenerationRunnerQueueRepository(database)
+        val candidate = repository.scanReadyJobs(observedAt = 4L).candidates.single()
+        assertEquals(false, candidate.toString().contains(JOB_ID))
+        assertEquals(false, candidate.toString().contains("stage-1"))
+
+        val result = repository.claimReadyJob(candidate, "runner-a", claimedAt = 3L)
+
+        assertEquals(JOB_ID, result.jobId)
+        assertEquals(GenerationJobStatus.RUNNING, result.jobStatus)
+        assertEquals(GenerationLeaseToken("runner-a", 3L), result.jobLeaseToken)
+        assertEquals("stage-1", result.currentStage.stageId)
+        assertEquals(GenerationPhase.DRAFT_CHAPTER, result.currentStage.phase)
+        assertEquals(GenerationTargetType.CHAPTER, result.currentStage.targetType)
+        assertEquals(GenerationStageStatus.READY, result.currentStage.status)
+        assertEquals(0, result.currentStage.attemptCount)
+        assertEquals(3, result.currentStage.maxAttempts)
+        assertEquals(false, result.toString().contains(JOB_ID))
+        assertEquals(false, result.toString().contains("stage-1"))
+        assertEquals(false, result.toString().contains("runner-a"))
+
+        val job = requireNotNull(generationDao.findJob(JOB_ID))
+        assertEquals(GenerationJobStatus.RUNNING, job.status)
+        assertEquals("runner-a", job.leaseOwnerId)
+        assertEquals(3L, job.leaseAcquiredAt)
+        assertEquals(3L, job.leaseHeartbeatAt)
+        assertEquals(3L, job.startedAt)
+        assertEquals(3L, job.updatedAt)
+        assertEquals("stage-1", job.currentStageId)
+
+        val stage = requireNotNull(generationDao.findStage("stage-1"))
+        assertEquals(GenerationStageStatus.READY, stage.status)
+        assertEquals(0, stage.attemptCount)
+        assertEquals(2L, stage.updatedAt)
+        assertEquals(null, stage.leaseOwnerId)
+        assertEquals(null, stage.leaseAcquiredAt)
+        assertEquals(null, stage.leaseHeartbeatAt)
+        assertEquals(null, stage.standardErrorCode)
+        assertEquals(null, stage.nextRetryAt)
+        assertEquals(0, generationDao.attemptsForStage("stage-1").size)
+    }
+
+    @Test
+    fun runnerHeartbeatReadsTheCurrentStageAndFollowsBusinessStageHandoff() = runBlocking {
+        generationDao.createJob(
+            job(),
+            listOf(stage("stage-1", "idem-1", 1L), stage("stage-2", "idem-2", 1L)),
+        )
+        generationDao.transitionJob(JOB_ID, GenerationJobStatus.CREATED, JobEvent.VALIDATION_PASSED, 2L)
+        generationDao.transitionStage(
+            "stage-1",
+            GenerationStageStatus.PENDING,
+            StageEvent.DEPENDENCIES_SATISFIED,
+            updatedAt = 2L,
+        )
+        generationDao.transitionStage(
+            "stage-2",
+            GenerationStageStatus.PENDING,
+            StageEvent.DEPENDENCIES_SATISFIED,
+            updatedAt = 2L,
+        )
+        val repository = GenerationRunnerQueueRepository(database)
+        val candidate = repository.scanReadyJobs(observedAt = 4L).candidates.single()
+        assertEquals("stage-1", candidate.currentStageId)
+
+        val claim = repository.claimReadyJob(candidate, "runner-a", claimedAt = 4L)
+        val token = claim.jobLeaseToken
+        assertEquals(GenerationLeaseToken("runner-a", 4L), token)
+
+        val before = repository.heartbeatAndLoadCurrentStage(JOB_ID, token, heartbeatAt = 5L)
+        assertEquals(GenerationJobStatus.RUNNING, before.jobStatus)
+        assertEquals("stage-1", before.currentStage.stageId)
+        assertEquals(GenerationStageStatus.READY, before.currentStage.status)
+        assertEquals(0, before.currentStage.attemptCount)
+        assertEquals(false, before.toString().contains("stage-1"))
+
+        // A business commit marks stage-1 succeeded and advances the cursor to stage-2.
+        assertEquals(1, generationDao.compareAndAdvanceJobStage(JOB_ID, "stage-1", "stage-2", 6L))
+
+        val after = repository.heartbeatAndLoadCurrentStage(JOB_ID, token, heartbeatAt = 7L)
+        assertEquals(GenerationJobStatus.RUNNING, after.jobStatus)
+        assertEquals("stage-2", after.currentStage.stageId)
+        assertEquals(GenerationStageStatus.READY, after.currentStage.status)
+        assertEquals(0, after.currentStage.attemptCount)
+
+        // The job was resumed by the same token, never re-claimed.
+        val job = requireNotNull(generationDao.findJob(JOB_ID))
+        assertEquals(GenerationJobStatus.RUNNING, job.status)
+        assertEquals("runner-a", job.leaseOwnerId)
+        assertEquals(4L, job.leaseAcquiredAt)
+        assertEquals(7L, job.leaseHeartbeatAt)
+        assertEquals("stage-2", job.currentStageId)
+    }
+
+    @Test
+    fun runnerHeartbeatRejectsWrongOwnerWrongAcquiredAtAndExpiredLeases() = runBlocking {
+        readyJob(JOB_ID, "stage-1", "idem-1", at = 2L)
+        val repository = GenerationRunnerQueueRepository(database)
+        val claim = repository.claimReadyJob(
+            repository.scanReadyJobs(observedAt = 4L).candidates.single(),
+            "runner-a",
+            claimedAt = 3L,
+        )
+        val token = claim.jobLeaseToken
+        assertEquals(GenerationLeaseToken("runner-a", 3L), token)
+
+        val wrongOwner = GenerationLeaseToken(ownerId = "runner-b", acquiredAt = token.acquiredAt)
+        val wrongOwnerError = expectFailure {
+            repository.heartbeatAndLoadCurrentStage(JOB_ID, wrongOwner, heartbeatAt = 10L)
+        }
+        assertTrue(wrongOwnerError is StaleGenerationStateException)
+
+        val wrongAcquiredAt = GenerationLeaseToken(ownerId = token.ownerId, acquiredAt = token.acquiredAt - 1L)
+        val wrongAcquiredError = expectFailure {
+            repository.heartbeatAndLoadCurrentStage(JOB_ID, wrongAcquiredAt, heartbeatAt = 10L)
+        }
+        assertTrue(wrongAcquiredError is StaleGenerationStateException)
+
+        val expiredError = expectFailure {
+            repository.heartbeatAndLoadCurrentStage(JOB_ID, token, heartbeatAt = 60_003L)
+        }
+        assertTrue(expiredError is StaleGenerationStateException)
+
+        // Nothing was revived: the lease is still the original one with the original heartbeat.
+        val job = requireNotNull(generationDao.findJob(JOB_ID))
+        assertEquals(GenerationJobStatus.RUNNING, job.status)
+        assertEquals("runner-a", job.leaseOwnerId)
+        assertEquals(3L, job.leaseAcquiredAt)
+        assertEquals(3L, job.leaseHeartbeatAt)
+
+        // An old token is never adopted by owner string after the lease was requeued and reclaimed.
+        val maintenance = GenerationMaintenanceRepository(database)
+        val idleCandidate = maintenance.scanExpiredIdleJobLeases(observedAt = 60_003L).candidates.single()
+        maintenance.requeueExpiredIdleJobLease(idleCandidate, observedAt = 60_003L)
+        val newCandidate = repository.scanReadyJobs(observedAt = 60_004L).candidates.single()
+        val newClaim = repository.claimReadyJob(newCandidate, "runner-b", claimedAt = 60_004L)
+        assertEquals("runner-b", newClaim.jobLeaseToken.ownerId)
+
+        val adoptionError = expectFailure {
+            repository.heartbeatAndLoadCurrentStage(JOB_ID, token, heartbeatAt = 60_005L)
+        }
+        assertTrue(adoptionError is StaleGenerationStateException)
+
+        val resumed = repository.heartbeatAndLoadCurrentStage(JOB_ID, newClaim.jobLeaseToken, heartbeatAt = 60_005L)
+        assertEquals(GenerationJobStatus.RUNNING, resumed.jobStatus)
+        assertEquals("stage-1", resumed.currentStage.stageId)
+        val jobAfter = requireNotNull(generationDao.findJob(JOB_ID))
+        assertEquals("runner-b", jobAfter.leaseOwnerId)
+        assertEquals(60_004L, jobAfter.leaseAcquiredAt)
+        assertEquals(60_005L, jobAfter.leaseHeartbeatAt)
+    }
+
+    @Test
+    fun runnerQueueRejectsInvalidOwnerIdsLimitsAndBackwardsTime() = runBlocking {
+        readyJob(JOB_ID, "stage-1", "idem-1", at = 2L)
+        val repository = GenerationRunnerQueueRepository(database)
+        val candidate = repository.scanReadyJobs(observedAt = 4L).candidates.single()
+
+        for (badOwner in listOf("", "a".repeat(129), "runner with space", "runner@host", "runner,one", "跑者")) {
+            val error = expectFailure { repository.claimReadyJob(candidate, badOwner, claimedAt = 3L) }
+            assertTrue(error is IllegalArgumentException)
+        }
+        assertEquals(GenerationJobStatus.READY, generationDao.findJob(JOB_ID)?.status)
+        assertEquals(null, generationDao.findJob(JOB_ID)?.leaseOwnerId)
+
+        expectFailure { repository.scanReadyJobs(observedAt = -1L) }
+        expectFailure { repository.scanReadyJobs(observedAt = 4L, limit = 0) }
+        expectFailure { repository.scanReadyJobs(observedAt = 4L, limit = 101) }
+        expectFailure { repository.claimReadyJob(candidate, "runner-a", claimedAt = -1L) }
+        val backwardsClaim = expectFailure { repository.claimReadyJob(candidate, "runner-a", claimedAt = 2L) }
+        assertTrue(backwardsClaim is IllegalArgumentException)
+        assertEquals(GenerationJobStatus.READY, generationDao.findJob(JOB_ID)?.status)
+
+        // Boundary owners of one and 128 characters are accepted.
+        val oneChar = repository.claimReadyJob(candidate, "r", claimedAt = 3L)
+        assertEquals(GenerationLeaseToken("r", 3L), oneChar.jobLeaseToken)
+        readyJob("job-max-owner", "stage-max-owner", "idem-max-owner", at = 2L)
+        val maxCandidate = repository.scanReadyJobs(observedAt = 4L).candidates.single { it.jobId == "job-max-owner" }
+        val maxOwner = repository.claimReadyJob(maxCandidate, "a".repeat(128), claimedAt = 3L)
+        assertEquals("a".repeat(128), maxOwner.jobLeaseToken.ownerId)
+
+        // Heartbeat time cannot move backwards.
+        val heartbeatBackwards = expectFailure {
+            repository.heartbeatAndLoadCurrentStage(JOB_ID, oneChar.jobLeaseToken, heartbeatAt = 1L)
+        }
+        assertTrue(heartbeatBackwards is IllegalArgumentException)
+        val negativeHeartbeat = expectFailure {
+            repository.heartbeatAndLoadCurrentStage(JOB_ID, oneChar.jobLeaseToken, heartbeatAt = -1L)
+        }
+        assertTrue(negativeHeartbeat is IllegalArgumentException)
+    }
+
+    @Test
+    fun runnerExecutionLeaseAtomicallyAcquiresOnlyTheCurrentStage() = runBlocking {
+        readyJob(JOB_ID, "stage-1", "idem-1", at = 2L)
+        val queue = GenerationRunnerQueueRepository(database)
+        val jobClaim = queue.claimReadyJob(
+            queue.scanReadyJobs(observedAt = 3L).candidates.single(),
+            runnerOwnerId = "runner-a",
+            claimedAt = 3L,
+        )
+        val repository = GenerationRunnerExecutionLeaseRepository(database)
+
+        val acquired = repository.acquireCurrentStageLease(
+            jobId = JOB_ID,
+            jobLeaseToken = jobClaim.jobLeaseToken,
+            stageId = "stage-1",
+            runnerOwnerId = "runner-a",
+            acquiredAt = 4L,
+        )
+
+        assertEquals(GenerationJobStatus.RUNNING, acquired.jobStatus)
+        assertEquals(GenerationLeaseToken("runner-a", 3L), acquired.jobLeaseToken)
+        assertEquals(4L, acquired.jobHeartbeatAt)
+        assertEquals(GenerationStageStatus.PREPARING, acquired.stageStatus)
+        assertEquals(GenerationLeaseToken("runner-a", 4L), acquired.stageLeaseToken)
+        assertEquals(4L, acquired.stageHeartbeatAt)
+        assertEquals(false, acquired.toString().contains(JOB_ID))
+        assertEquals(false, acquired.toString().contains("stage-1"))
+        assertEquals(false, acquired.toString().contains("runner-a"))
+
+        val job = requireNotNull(generationDao.findJob(JOB_ID))
+        val stage = requireNotNull(generationDao.findStage("stage-1"))
+        assertEquals("stage-1", job.currentStageId)
+        assertEquals(3L, job.leaseAcquiredAt)
+        assertEquals(4L, job.leaseHeartbeatAt)
+        assertEquals(0, stage.attemptCount)
+        assertEquals(null, stage.standardErrorCode)
+        assertEquals(0, generationDao.attemptsForStage("stage-1").size)
+    }
+
+    @Test
+    fun concurrentRunnerExecutionLeaseAcquisitionSucceedsExactlyOnce() = runBlocking {
+        readyJob(JOB_ID, "stage-1", "idem-1", at = 2L)
+        val queue = GenerationRunnerQueueRepository(database)
+        val jobToken = queue.claimReadyJob(
+            queue.scanReadyJobs(observedAt = 3L).candidates.single(),
+            "runner-a",
+            claimedAt = 3L,
+        ).jobLeaseToken
+        val repository = GenerationRunnerExecutionLeaseRepository(database)
+
+        val attempts = coroutineScope {
+            listOf(
+                async(Dispatchers.IO) {
+                    runCatching {
+                        repository.acquireCurrentStageLease(JOB_ID, jobToken, "stage-1", "runner-a", 4L)
+                    }
+                },
+                async(Dispatchers.IO) {
+                    runCatching {
+                        repository.acquireCurrentStageLease(JOB_ID, jobToken, "stage-1", "runner-a", 4L)
+                    }
+                },
+            ).awaitAll()
+        }
+
+        assertEquals(1, attempts.count { it.isSuccess })
+        assertEquals(1, attempts.count { it.isFailure })
+        assertTrue(attempts.first { it.isFailure }.exceptionOrNull() is StaleGenerationStateException)
+        assertEquals(4L, generationDao.findJob(JOB_ID)?.leaseHeartbeatAt)
+        assertEquals(GenerationStageStatus.PREPARING, generationDao.findStage("stage-1")?.status)
+        assertEquals(4L, generationDao.findStage("stage-1")?.leaseHeartbeatAt)
+    }
+
+    @Test
+    fun runnerExecutionLeaseAcquireFailureRollsBackJobHeartbeat() = runBlocking {
+        readyJob(JOB_ID, "stage-1", "idem-1", at = 2L)
+        database.openHelper.writableDatabase.execSQL(
+            "UPDATE generation_stage SET updated_at = 5 WHERE stage_id = 'stage-1'",
+        )
+        val queue = GenerationRunnerQueueRepository(database)
+        val jobToken = queue.claimReadyJob(
+            queue.scanReadyJobs(observedAt = 5L).candidates.single(),
+            "runner-a",
+            claimedAt = 3L,
+        ).jobLeaseToken
+        val repository = GenerationRunnerExecutionLeaseRepository(database)
+
+        val stageClockAhead = expectFailure {
+            repository.acquireCurrentStageLease(JOB_ID, jobToken, "stage-1", "runner-a", acquiredAt = 4L)
+        }
+        assertTrue(stageClockAhead is IllegalArgumentException)
+        assertEquals(3L, generationDao.findJob(JOB_ID)?.leaseHeartbeatAt)
+        assertEquals(GenerationStageStatus.READY, generationDao.findStage("stage-1")?.status)
+        assertEquals(null, generationDao.findStage("stage-1")?.leaseOwnerId)
+        assertEquals(5L, generationDao.findStage("stage-1")?.updatedAt)
+
+        val wrongOwner = expectFailure {
+            repository.acquireCurrentStageLease(JOB_ID, jobToken, "stage-1", "runner-b", acquiredAt = 6L)
+        }
+        assertTrue(wrongOwner is IllegalArgumentException)
+        assertEquals(3L, generationDao.findJob(JOB_ID)?.leaseHeartbeatAt)
+    }
+
+    @Test
+    fun runnerExecutionLeaseHeartbeatIsAtomicForBothTokens() = runBlocking {
+        readyJob(JOB_ID, "stage-1", "idem-1", at = 2L)
+        val queue = GenerationRunnerQueueRepository(database)
+        val jobToken = queue.claimReadyJob(
+            queue.scanReadyJobs(observedAt = 3L).candidates.single(),
+            "runner-a",
+            claimedAt = 3L,
+        ).jobLeaseToken
+        val repository = GenerationRunnerExecutionLeaseRepository(database)
+        val acquired = repository.acquireCurrentStageLease(
+            JOB_ID,
+            jobToken,
+            "stage-1",
+            "runner-a",
+            acquiredAt = 4L,
+        )
+
+        val heartbeat = repository.heartbeatCurrentExecutionLeases(
+            JOB_ID,
+            jobToken,
+            "stage-1",
+            acquired.stageLeaseToken,
+            heartbeatAt = 10L,
+        )
+        assertEquals(10L, heartbeat.jobHeartbeatAt)
+        assertEquals(10L, heartbeat.stageHeartbeatAt)
+
+        val wrongStageToken = acquired.stageLeaseToken.copy(acquiredAt = 5L)
+        val stageFailure = expectFailure {
+            repository.heartbeatCurrentExecutionLeases(
+                JOB_ID,
+                jobToken,
+                "stage-1",
+                wrongStageToken,
+                heartbeatAt = 20L,
+            )
+        }
+        assertTrue(stageFailure is StaleGenerationStateException)
+        assertEquals(10L, generationDao.findJob(JOB_ID)?.leaseHeartbeatAt)
+        assertEquals(10L, generationDao.findStage("stage-1")?.leaseHeartbeatAt)
+
+        val mixedOwner = expectFailure {
+            repository.heartbeatCurrentExecutionLeases(
+                JOB_ID,
+                jobToken,
+                "stage-1",
+                GenerationLeaseToken("runner-b", acquired.stageLeaseToken.acquiredAt),
+                heartbeatAt = 20L,
+            )
+        }
+        assertTrue(mixedOwner is IllegalArgumentException)
+        assertEquals(10L, generationDao.findJob(JOB_ID)?.leaseHeartbeatAt)
+        assertEquals(10L, generationDao.findStage("stage-1")?.leaseHeartbeatAt)
+    }
+
+    @Test
+    fun runnerExecutionLeaseExpiryAndCursorChangesFailWithoutPartialHeartbeat() = runBlocking {
+        generationDao.createJob(
+            job(),
+            listOf(stage("stage-1", "idem-1", 1L), stage("stage-2", "idem-2", 1L)),
+        )
+        generationDao.transitionJob(JOB_ID, GenerationJobStatus.CREATED, JobEvent.VALIDATION_PASSED, 2L)
+        generationDao.transitionStage(
+            "stage-1",
+            GenerationStageStatus.PENDING,
+            StageEvent.DEPENDENCIES_SATISFIED,
+            updatedAt = 2L,
+        )
+        generationDao.transitionStage(
+            "stage-2",
+            GenerationStageStatus.PENDING,
+            StageEvent.DEPENDENCIES_SATISFIED,
+            updatedAt = 2L,
+        )
+        val queue = GenerationRunnerQueueRepository(database)
+        val jobToken = queue.claimReadyJob(
+            queue.scanReadyJobs(observedAt = 3L).candidates.single(),
+            "runner-a",
+            claimedAt = 3L,
+        ).jobLeaseToken
+        val repository = GenerationRunnerExecutionLeaseRepository(database)
+        val acquired = repository.acquireCurrentStageLease(
+            JOB_ID,
+            jobToken,
+            "stage-1",
+            "runner-a",
+            acquiredAt = 4L,
+        )
+
+        GenerationStateRepository(database).heartbeatJobLease(JOB_ID, jobToken, now = 50_000L)
+        val stageExpired = expectFailure {
+            repository.heartbeatCurrentExecutionLeases(
+                JOB_ID,
+                jobToken,
+                "stage-1",
+                acquired.stageLeaseToken,
+                heartbeatAt = 60_004L,
+            )
+        }
+        assertTrue(stageExpired is StaleGenerationStateException)
+        assertEquals(50_000L, generationDao.findJob(JOB_ID)?.leaseHeartbeatAt)
+        assertEquals(4L, generationDao.findStage("stage-1")?.leaseHeartbeatAt)
+
+        assertEquals(1, generationDao.compareAndAdvanceJobStage(JOB_ID, "stage-1", "stage-2", 60_005L))
+        val cursorChanged = expectFailure {
+            repository.heartbeatCurrentExecutionLeases(
+                JOB_ID,
+                jobToken,
+                "stage-1",
+                acquired.stageLeaseToken,
+                heartbeatAt = 60_006L,
+            )
+        }
+        assertTrue(cursorChanged is StaleGenerationStateException)
+        assertEquals(50_000L, generationDao.findJob(JOB_ID)?.leaseHeartbeatAt)
+        assertEquals(4L, generationDao.findStage("stage-1")?.leaseHeartbeatAt)
+        assertEquals("stage-2", generationDao.findJob(JOB_ID)?.currentStageId)
+    }
+
+    @Test
+    fun runnerCurrentStageRouteBindsAuthoritativeContractToExactReadOnlyLeaseSnapshot() = runBlocking {
+        readyMemoryRouteJob(JOB_ID, "stage-route")
+        val queue = GenerationRunnerQueueRepository(database)
+        val jobToken = queue.claimReadyJob(
+            queue.scanReadyJobs(observedAt = 3L).candidates.single(),
+            "runner-route",
+            claimedAt = 3L,
+        ).jobLeaseToken
+        val repository = GenerationRunnerExecutionLeaseRepository(database)
+        val acquired = repository.acquireCurrentStageLease(
+            JOB_ID,
+            jobToken,
+            "stage-route",
+            "runner-route",
+            acquiredAt = 4L,
+        )
+        val beforeJob = requireNotNull(generationDao.findJob(JOB_ID))
+        val beforeStage = requireNotNull(generationDao.findStage("stage-route"))
+
+        val resolved = repository.resolveCurrentStageRoute(
+            jobId = JOB_ID,
+            jobLeaseToken = jobToken,
+            stageId = "stage-route",
+            stageLeaseToken = acquired.stageLeaseToken,
+            observedAt = 5L,
+        )
+
+        assertEquals(GenerationRunnerStageRoute.FORMAL_CHAPTER_MEMORY_V1, resolved.route)
+        assertEquals(acquired, resolved.executionLease)
+        assertEquals(0, resolved.attemptCount)
+        assertEquals(2, resolved.maxAttempts)
+        assertEquals(beforeJob, generationDao.findJob(JOB_ID))
+        assertEquals(beforeStage, generationDao.findStage("stage-route"))
+        assertEquals(0, generationDao.attemptsForStage("stage-route").size)
+        assertEquals(false, resolved.toString().contains(JOB_ID))
+        assertEquals(false, resolved.toString().contains("stage-route"))
+        assertEquals(false, resolved.toString().contains("runner-route"))
+    }
+
+    @Test
+    fun runnerCurrentStageRouteRejectsWrongTokensMixedOwnerAndNonCurrentStage() = runBlocking {
+        readyMemoryRouteJob(JOB_ID, "stage-route")
+        val queue = GenerationRunnerQueueRepository(database)
+        val jobToken = queue.claimReadyJob(
+            queue.scanReadyJobs(observedAt = 3L).candidates.single(),
+            "runner-route",
+            claimedAt = 3L,
+        ).jobLeaseToken
+        val repository = GenerationRunnerExecutionLeaseRepository(database)
+        val acquired = repository.acquireCurrentStageLease(
+            JOB_ID,
+            jobToken,
+            "stage-route",
+            "runner-route",
+            acquiredAt = 4L,
+        )
+        val beforeJob = requireNotNull(generationDao.findJob(JOB_ID))
+        val beforeStage = requireNotNull(generationDao.findStage("stage-route"))
+
+        val wrongJobToken = expectFailure {
+            repository.resolveCurrentStageRoute(
+                JOB_ID,
+                jobToken.copy(acquiredAt = jobToken.acquiredAt + 1L),
+                "stage-route",
+                acquired.stageLeaseToken,
+                observedAt = 5L,
+            )
+        }
+        assertTrue(wrongJobToken is StaleGenerationStateException)
+        val wrongStageToken = expectFailure {
+            repository.resolveCurrentStageRoute(
+                JOB_ID,
+                jobToken,
+                "stage-route",
+                acquired.stageLeaseToken.copy(acquiredAt = acquired.stageLeaseToken.acquiredAt + 1L),
+                observedAt = 5L,
+            )
+        }
+        assertTrue(wrongStageToken is StaleGenerationStateException)
+        val mixedOwner = expectFailure {
+            repository.resolveCurrentStageRoute(
+                JOB_ID,
+                jobToken,
+                "stage-route",
+                GenerationLeaseToken("runner-other", acquired.stageLeaseToken.acquiredAt),
+                observedAt = 5L,
+            )
+        }
+        assertTrue(mixedOwner is IllegalArgumentException)
+
+        readyMemoryRouteJob("job-other-route", "stage-other-route")
+        val nonCurrent = expectFailure {
+            repository.resolveCurrentStageRoute(
+                JOB_ID,
+                jobToken,
+                "stage-other-route",
+                acquired.stageLeaseToken,
+                observedAt = 5L,
+            )
+        }
+        assertTrue(nonCurrent is StaleGenerationStateException)
+        assertEquals(beforeJob, generationDao.findJob(JOB_ID))
+        assertEquals(beforeStage, generationDao.findStage("stage-route"))
+        assertEquals(0, generationDao.attemptsForStage("stage-route").size)
+    }
+
+    @Test
+    fun runnerCurrentStageRouteRejectsBackwardsExpiredAndPausingEvidence() = runBlocking {
+        readyMemoryRouteJob(JOB_ID, "stage-route")
+        val queue = GenerationRunnerQueueRepository(database)
+        val jobToken = queue.claimReadyJob(
+            queue.scanReadyJobs(observedAt = 3L).candidates.single(),
+            "runner-route",
+            claimedAt = 3L,
+        ).jobLeaseToken
+        val repository = GenerationRunnerExecutionLeaseRepository(database)
+        val acquired = repository.acquireCurrentStageLease(
+            JOB_ID,
+            jobToken,
+            "stage-route",
+            "runner-route",
+            acquiredAt = 4L,
+        )
+
+        val backwards = expectFailure {
+            repository.resolveCurrentStageRoute(
+                JOB_ID,
+                jobToken,
+                "stage-route",
+                acquired.stageLeaseToken,
+                observedAt = 3L,
+            )
+        }
+        assertTrue(backwards is IllegalArgumentException)
+        val expiredAtBoundary = expectFailure {
+            repository.resolveCurrentStageRoute(
+                JOB_ID,
+                jobToken,
+                "stage-route",
+                acquired.stageLeaseToken,
+                observedAt = 60_004L,
+            )
+        }
+        assertTrue(expiredAtBoundary is StaleGenerationStateException)
+
+        // Fault injection isolates the dispatcher guard: a control request can leave a
+        // lease-owned Job in PAUSING while a network-active Stage reaches its safe point.
+        database.openHelper.writableDatabase.execSQL(
+            "UPDATE generation_job SET status = 'PAUSING', updated_at = 5 WHERE job_id = 'job-1'",
+        )
+        val pausing = expectFailure {
+            repository.resolveCurrentStageRoute(
+                JOB_ID,
+                jobToken,
+                "stage-route",
+                acquired.stageLeaseToken,
+                observedAt = 5L,
+            )
+        }
+        assertTrue(pausing is StaleGenerationStateException)
+        assertEquals(GenerationJobStatus.PAUSING, generationDao.findJob(JOB_ID)?.status)
+        assertEquals(GenerationStageStatus.PREPARING, generationDao.findStage("stage-route")?.status)
+        assertEquals(0, generationDao.attemptsForStage("stage-route").size)
+    }
+
+    @Test
+    fun runnerCurrentStageRouteRejectsAlreadyRequestOwnedStageWithoutWrites() = runBlocking {
+        readyMemoryRouteJob(JOB_ID, "stage-route")
+        val queue = GenerationRunnerQueueRepository(database)
+        val jobToken = queue.claimReadyJob(
+            queue.scanReadyJobs(observedAt = 3L).candidates.single(),
+            "runner-route",
+            claimedAt = 3L,
+        ).jobLeaseToken
+        val repository = GenerationRunnerExecutionLeaseRepository(database)
+        val acquired = repository.acquireCurrentStageLease(
+            JOB_ID,
+            jobToken,
+            "stage-route",
+            "runner-route",
+            acquiredAt = 4L,
+        )
+        generationDao.recordRequestIntent(
+            intent(
+                attemptId = "attempt-route",
+                ledgerId = "ledger-route",
+                stageId = "stage-route",
+                createdAt = 5L,
+            ),
+            acquired.stageLeaseToken,
+        )
+        val beforeJob = requireNotNull(generationDao.findJob(JOB_ID))
+        val beforeStage = requireNotNull(generationDao.findStage("stage-route"))
+        val beforeAttempts = generationDao.attemptsForStage("stage-route")
+
+        val error = expectFailure {
+            repository.resolveCurrentStageRoute(
+                JOB_ID,
+                jobToken,
+                "stage-route",
+                acquired.stageLeaseToken,
+                observedAt = 6L,
+            )
+        }
+
+        assertTrue(error is StaleGenerationStateException)
+        assertEquals(beforeJob, generationDao.findJob(JOB_ID))
+        assertEquals(beforeStage, generationDao.findStage("stage-route"))
+        assertEquals(beforeAttempts, generationDao.attemptsForStage("stage-route"))
+    }
+
+    @Test
+    fun runnerCurrentStageRouteRejectsMalformedFrozenContractWithoutLeaseMutation() = runBlocking {
+        readyMemoryRouteJob(JOB_ID, "stage-route")
+        val queue = GenerationRunnerQueueRepository(database)
+        val jobToken = queue.claimReadyJob(
+            queue.scanReadyJobs(observedAt = 3L).candidates.single(),
+            "runner-route",
+            claimedAt = 3L,
+        ).jobLeaseToken
+        val repository = GenerationRunnerExecutionLeaseRepository(database)
+        val acquired = repository.acquireCurrentStageLease(
+            JOB_ID,
+            jobToken,
+            "stage-route",
+            "runner-route",
+            acquiredAt = 4L,
+        )
+        database.openHelper.writableDatabase.execSQL(
+            "UPDATE generation_stage SET input_sources_json = '{}' WHERE stage_id = 'stage-route'",
+        )
+        val beforeJob = requireNotNull(generationDao.findJob(JOB_ID))
+        val beforeStage = requireNotNull(generationDao.findStage("stage-route"))
+
+        val error = expectFailure {
+            repository.resolveCurrentStageRoute(
+                JOB_ID,
+                jobToken,
+                "stage-route",
+                acquired.stageLeaseToken,
+                observedAt = 5L,
+            )
+        }
+
+        assertTrue(error is IllegalArgumentException)
+        assertEquals(beforeJob, generationDao.findJob(JOB_ID))
+        assertEquals(beforeStage, generationDao.findStage("stage-route"))
+        assertEquals(0, generationDao.attemptsForStage("stage-route").size)
+    }
+
     private suspend fun seedBook() {
         val snapshot = BookCreationSnapshotEntity(
             snapshotId = "snapshot-1",
@@ -2138,6 +3355,63 @@ class GenerationDatabaseTest {
         generationDao.acquireJobLease(JOB_ID, "job-worker", 3L)
     }
 
+    private suspend fun readyJob(
+        jobId: String,
+        stageId: String,
+        idempotencyKey: String,
+        at: Long,
+    ) {
+        generationDao.createJob(job(jobId), listOf(stage(stageId, idempotencyKey, 1L, jobId)))
+        generationDao.transitionJob(
+            jobId,
+            GenerationJobStatus.CREATED,
+            JobEvent.VALIDATION_PASSED,
+            at,
+        )
+        generationDao.transitionStage(
+            stageId,
+            GenerationStageStatus.PENDING,
+            StageEvent.DEPENDENCIES_SATISFIED,
+            updatedAt = at,
+        )
+    }
+
+    private suspend fun readyMemoryRouteJob(
+        jobId: String,
+        stageId: String,
+    ) {
+        GenerationJobSetupRepository(database).create(
+            ChapterMemoryExtractionJobFactory.create(
+                ChapterMemoryExtractionJobSpec(
+                    jobId = jobId,
+                    stageId = stageId,
+                    bookId = BOOK_ID,
+                    userIntentJson = "{}",
+                    budgetSnapshotJson = "{\"schema\":1}",
+                    source = ChapterMemoryExtractionSourceV1(
+                        chapterVersionId = "chapter.version.route",
+                        chapterContentHash = "a".repeat(64),
+                        chapterId = "chapter.route",
+                        chapterIndex = 1,
+                    ),
+                    createdAt = 1L,
+                ),
+            ),
+        )
+        generationDao.transitionJob(
+            jobId,
+            GenerationJobStatus.CREATED,
+            JobEvent.VALIDATION_PASSED,
+            2L,
+        )
+        generationDao.transitionStage(
+            stageId,
+            GenerationStageStatus.PENDING,
+            StageEvent.DEPENDENCIES_SATISFIED,
+            updatedAt = 2L,
+        )
+    }
+
     private suspend fun completeStreamingResponse(
         drafts: GenerationStreamingDraftRepository,
         outputs: GenerationOutputValidationRepository,
@@ -2156,6 +3430,7 @@ class GenerationDatabaseTest {
                 createdAt = createdAt,
                 retryParent = retryParentAttemptId,
             ),
+            BudgetedRequestTestSupport.budgetedDraft(attemptId),
             stageLease("stage-1"),
         )
         val claimed = drafts.claimForProviderOpen(prepared, validatedAt = createdAt + 1L)
@@ -2268,7 +3543,6 @@ class GenerationDatabaseTest {
         protocolSnapshotJson = "{\"protocol\":\"fixture\"}",
         inputHash = "a".repeat(64),
         streamDraftRef = streamDraftRef,
-        dailyPeriodKey = "2026-08-02|Asia/Shanghai",
         createdAt = createdAt,
     )
 
@@ -2276,6 +3550,24 @@ class GenerationDatabaseTest {
         artifactStore.unlockAfterAuthentication()
         artifactStore.listArtifactReferenceIds().forEach(artifactStore::delete)
     }
+
+    private suspend fun GenerationStreamingDraftRepository.claimForProviderOpen(
+        request: PersistedStreamingRequest,
+        validatedAt: Long,
+    ) = claimForProviderOpen(
+        request,
+        validatedAt,
+        BudgetedRequestTestSupport.budgetedDestinationEvidence(),
+    )
+
+    private suspend fun GenerationRequestAuditRepository.claimForProviderOpen(
+        permit: PersistedRequestSendPermit,
+        validatedAt: Long,
+    ) = claimForProviderOpen(
+        permit,
+        validatedAt,
+        BudgetedRequestTestSupport.budgetedDestinationEvidence(),
+    )
 
     private fun usage(
         source: UsageSource,

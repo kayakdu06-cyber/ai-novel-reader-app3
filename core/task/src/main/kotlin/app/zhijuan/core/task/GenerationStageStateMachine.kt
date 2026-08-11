@@ -26,6 +26,8 @@ enum class StageEvent {
     PROVIDER_CONFIRMED_NOT_EXECUTED,
     PAUSE_AT_SAFE_POINT,
     PARENT_STOPPED,
+    DAILY_BUDGET_PERIOD_EXPIRED_BEFORE_SEND,
+    DAILY_BUDGET_ATTEMPTS_EXHAUSTED_BEFORE_SEND,
 }
 
 object GenerationStageStateMachine {
@@ -38,6 +40,8 @@ object GenerationStageStateMachine {
         (GenerationStageStatus.PREPARING to StageEvent.INPUT_FROZEN) to GenerationStageStatus.REQUEST_INTENT_RECORDED,
         (GenerationStageStatus.REQUEST_INTENT_RECORDED to StageEvent.REQUEST_SENT) to GenerationStageStatus.STREAMING,
         (GenerationStageStatus.REQUEST_INTENT_RECORDED to StageEvent.RESULT_UNCERTAIN) to GenerationStageStatus.UNKNOWN_RESULT,
+        (GenerationStageStatus.REQUEST_INTENT_RECORDED to StageEvent.DAILY_BUDGET_PERIOD_EXPIRED_BEFORE_SEND) to GenerationStageStatus.READY,
+        (GenerationStageStatus.REQUEST_INTENT_RECORDED to StageEvent.DAILY_BUDGET_ATTEMPTS_EXHAUSTED_BEFORE_SEND) to GenerationStageStatus.NEEDS_ACTION,
         (GenerationStageStatus.STREAMING to StageEvent.RESPONSE_COMPLETED) to GenerationStageStatus.VALIDATING,
         (GenerationStageStatus.STREAMING to StageEvent.RETRYABLE_FAILURE) to GenerationStageStatus.RETRY_WAIT,
         (GenerationStageStatus.STREAMING to StageEvent.RESULT_UNCERTAIN) to GenerationStageStatus.UNKNOWN_RESULT,
@@ -47,6 +51,7 @@ object GenerationStageStateMachine {
         (GenerationStageStatus.VALIDATING to StageEvent.RETRYABLE_FAILURE) to GenerationStageStatus.RETRY_WAIT,
         (GenerationStageStatus.VALIDATING to StageEvent.USER_ACTION_REQUIRED) to GenerationStageStatus.NEEDS_ACTION,
         (GenerationStageStatus.COMMITTING to StageEvent.COMMIT_SUCCEEDED) to GenerationStageStatus.SUCCEEDED,
+        (GenerationStageStatus.COMMITTING to StageEvent.USER_ACTION_REQUIRED) to GenerationStageStatus.NEEDS_ACTION,
         (GenerationStageStatus.COMMITTING to StageEvent.COMMIT_UNCERTAIN) to GenerationStageStatus.RECOVERY_REQUIRED,
         (GenerationStageStatus.VALIDATING to StageEvent.RECOVERY_AUDIT_REQUIRED) to GenerationStageStatus.RECOVERY_REQUIRED,
         (GenerationStageStatus.COMMITTING to StageEvent.RECOVERY_AUDIT_REQUIRED) to GenerationStageStatus.RECOVERY_REQUIRED,

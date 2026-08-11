@@ -1,9 +1,42 @@
 package app.zhijuan.core.model
 
+import java.time.Instant
+import java.time.ZoneId
+
 enum class BudgetScope {
     REQUEST,
     BOOK,
     DAILY,
+}
+
+enum class BudgetReservationStatus {
+    RESERVED,
+    SETTLED,
+    RELEASED,
+}
+
+/**
+ * Deterministic daily budget period key for one persisted IANA zone.
+ *
+ * The only accepted input is a non-negative epoch millisecond plus an explicit
+ * IANA zone id; the system default zone is never consulted. The output format
+ * is `yyyy-MM-dd|ZoneId` and intentionally contains no data other than the
+ * derived calendar date and the zone that produced it.
+ */
+object BudgetDailyPeriodKeyV1 {
+    private const val MAX_ZONE_ID_LENGTH = 64
+    private val zoneIds: Set<String> = ZoneId.getAvailableZoneIds()
+
+    fun isSupportedZoneId(zoneId: String): Boolean =
+        zoneId.isNotBlank() && zoneId.length <= MAX_ZONE_ID_LENGTH && zoneIds.contains(zoneId)
+
+    fun create(epochMillis: Long, zoneId: String): String {
+        require(epochMillis >= 0) { "Epoch millis must be non-negative." }
+        require(isSupportedZoneId(zoneId)) { "Unsupported IANA zone id." }
+        val zone = ZoneId.of(zoneId)
+        val date = Instant.ofEpochMilli(epochMillis).atZone(zone).toLocalDate()
+        return "$date|$zoneId"
+    }
 }
 
 data class BudgetLimit(

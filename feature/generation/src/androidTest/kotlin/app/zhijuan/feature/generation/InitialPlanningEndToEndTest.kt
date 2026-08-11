@@ -25,6 +25,7 @@ import app.zhijuan.core.database.generation.InitialPlanningJobSpec
 import app.zhijuan.core.database.generation.InitialPlanningStageIds
 import app.zhijuan.core.database.generation.PostFirstChapterPlanningJobFactory
 import app.zhijuan.core.database.generation.PostFirstChapterPlanningJobSpec
+import app.zhijuan.core.database.generation.PersistedStreamingRequest
 import app.zhijuan.core.database.generation.RequestIntentDraft
 import app.zhijuan.core.model.AdultStatus
 import app.zhijuan.core.model.GenerationJobStatus
@@ -93,6 +94,11 @@ class InitialPlanningEndToEndTest {
             .build()
             .also { it.openHelper.writableDatabase }
         seedBook()
+        BudgetedGenerationTestSupport.seedBudgetedRequestEnvironment(
+            database = database,
+            bookId = BOOK_ID,
+            connectionId = "connection.fixture",
+        )
         GenerationJobSetupRepository(database).create(
             InitialPlanningJobFactory.create(
                 InitialPlanningJobSpec(
@@ -207,6 +213,7 @@ class InitialPlanningEndToEndTest {
         )
         assertEquals(1L, scalarLong("SELECT COUNT(*) FROM story_entity"))
         assertEquals(2L, scalarLong("SELECT COUNT(*) FROM canon_fact"))
+        assertEquals(3L, scalarLong("SELECT COUNT(*) FROM memory_search_document"))
         assertEquals(AdultStatus.CONFIRMED_ADULT.name, scalarString("SELECT adult_status FROM story_entity"))
         assertEquals(22L, scalarLong("SELECT age_years FROM story_entity"))
         assertEquals(80L, outline.targetChapterCount.toLong())
@@ -550,6 +557,10 @@ class InitialPlanningEndToEndTest {
         )
         val prepared = drafts.prepareBeforeSend(
             requestIntent("attempt.fast.chapter1", GUARDED_FIRST_STAGE, 45L),
+            BudgetedGenerationTestSupport.budgetedDraft(
+                attemptId = "attempt.fast.chapter1",
+                connectionId = "connection.fixture",
+            ),
             requireNotNull(states.findStage(GUARDED_FIRST_STAGE)?.leaseToken),
         )
         drafts.claimForProviderOpen(prepared, 46L)
@@ -688,6 +699,10 @@ class InitialPlanningEndToEndTest {
         )
         val blockedPrepared = drafts.prepareBeforeSend(
             requestIntent("attempt.fast.chapter2", GUARDED_SECOND_STAGE, 113L),
+            BudgetedGenerationTestSupport.budgetedDraft(
+                attemptId = "attempt.fast.chapter2",
+                connectionId = "connection.fixture",
+            ),
             requireNotNull(states.findStage(GUARDED_SECOND_STAGE)?.leaseToken),
         )
         expectFailure { drafts.claimForProviderOpen(blockedPrepared, 114L) }
@@ -704,6 +719,10 @@ class InitialPlanningEndToEndTest {
         )
         val unlockedPrepared = drafts.prepareBeforeSend(
             requestIntent("attempt.fast.chapter2.unlocked", GUARDED_UNLOCKED_SECOND_STAGE, 123L),
+            BudgetedGenerationTestSupport.budgetedDraft(
+                attemptId = "attempt.fast.chapter2.unlocked",
+                connectionId = "connection.fixture",
+            ),
             requireNotNull(states.findStage(GUARDED_UNLOCKED_SECOND_STAGE)?.leaseToken),
         )
         val unlockedClaim = drafts.claimForProviderOpen(unlockedPrepared, 124L)
@@ -802,8 +821,11 @@ class InitialPlanningEndToEndTest {
                 protocolSnapshotJson = "{\"protocol\":\"fixture\"}",
                 inputHash = "b".repeat(64),
                 streamDraftRef = null,
-                dailyPeriodKey = "2026-08-02|Asia/Shanghai",
                 createdAt = acquiredAt,
+            ),
+            BudgetedGenerationTestSupport.budgetedDraft(
+                attemptId = attemptId,
+                connectionId = "connection.fixture",
             ),
             token,
         )
@@ -917,7 +939,6 @@ class InitialPlanningEndToEndTest {
         protocolSnapshotJson = "{\"protocol\":\"fixture\"}",
         inputHash = "d".repeat(64),
         streamDraftRef = null,
-        dailyPeriodKey = "2026-08-03|Asia/Shanghai",
         createdAt = createdAt,
     )
 
@@ -1132,6 +1153,15 @@ class InitialPlanningEndToEndTest {
         artifactStore.unlockAfterAuthentication()
         artifactStore.listArtifactReferenceIds().forEach(artifactStore::delete)
     }
+
+    private suspend fun GenerationStreamingDraftRepository.claimForProviderOpen(
+        request: PersistedStreamingRequest,
+        validatedAt: Long,
+    ) = claimForProviderOpen(
+        request,
+        validatedAt,
+        BudgetedGenerationTestSupport.budgetedDestinationEvidence("connection.fixture"),
+    )
 
     private fun sha256(value: ByteArray): String = java.security.MessageDigest.getInstance("SHA-256")
         .digest(value)

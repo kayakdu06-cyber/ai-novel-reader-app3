@@ -10,15 +10,15 @@ class SearchIndexTextTest {
     @Test
     fun `Chinese query becomes overlapping deterministic bigrams`() {
         assertEquals(
-            "c7384 c94c1 c5251 g7384_94c1 g94c1_5251",
+            "c7384 c94c1 c5251 g7384x94c1 g94c1x5251",
             SearchIndexText.indexTerms("玄铁剑"),
         )
     }
 
     @Test
-    fun `query uses AND so all overlapping bigrams are required`() {
+    fun `query uses portable implicit AND so all overlapping bigrams are required`() {
         assertEquals(
-            "g7384_94c1 AND g94c1_5251",
+            "g7384x94c1 g94c1x5251",
             SearchIndexText.matchExpression("玄铁剑"),
         )
     }

@@ -6,6 +6,7 @@ import app.zhijuan.core.database.memory.ChapterTrackingProjectionEntity
 import app.zhijuan.core.database.memory.ForeshadowItemEntity
 import app.zhijuan.core.database.memory.ForeshadowTransitionEntity
 import app.zhijuan.core.database.memory.TimelineEventEntity
+import app.zhijuan.core.database.search.MemorySearchIndexWriterV1
 import app.zhijuan.core.model.BookStatus
 import app.zhijuan.core.model.DerivedDataStatus
 import app.zhijuan.core.model.ForeshadowStatus
@@ -75,6 +76,7 @@ class ChapterTrackingProjectionCommitRepository(
             val generation = database.generationDao()
             val library = database.libraryDao()
             val memory = database.memoryDao()
+            val revisionWriter = ForeshadowProjectionRevisionWriterV1(memory)
             val stage = requireNotNull(generation.findStage(permit.stageId)) { "Story-tracking stage no longer exists." }
             val attempt = requireNotNull(generation.findAttempt(permit.attemptId)) { "Story-tracking attempt no longer exists." }
             val job = requireNotNull(generation.findJob(stage.jobId)) { "Story-tracking job no longer exists." }
@@ -101,12 +103,39 @@ class ChapterTrackingProjectionCommitRepository(
             require(generation.findUsageForAttempt(attempt.attemptId)?.bookId == book.bookId)
             require(draft.projection.modelSnapshotJson == attempt.modelSnapshotJson)
             require(ChapterTrackingProjectionJobFactory.parseAndVerify(stage) == draft.source)
+            val rebuildBound = ChapterEditRebuildStageRepository(database).requireCommitAllowedIfBound(
+                stage = stage,
+                job = job,
+                observedAt = draft.committedAt,
+            )
 
             if (stage.status == GenerationStageStatus.SUCCEEDED) {
                 require(stage.outputReferenceJson == outputReference) { "Completed story-tracking stage does not match replay." }
                 require(memory.findTrackingProjectionForVersion(version.chapterVersionId) == draft.projection)
                 require(memory.timelineEventsForVersion(version.chapterVersionId) == draft.timelineEvents.sortedWith(TIMELINE_ORDER))
                 require(memory.foreshadowTransitionsForStage(stage.stageId) == draft.foreshadowTransitions.sortedWith(TRANSITION_ORDER))
+                revisionWriter.requireStoredAfterStates(
+                    bookId = book.bookId,
+                    chapterIndex = draft.source.chapterIndex,
+                    sourceChapterVersionId = version.chapterVersionId,
+                    generationStageId = stage.stageId,
+                    transitions = draft.foreshadowTransitions,
+                )
+                if (rebuildBound) {
+                    check(
+                        ChapterEditRebuildStageRepository(database).commitAggregateAfterTrackingIfBound(
+                            stage = stage,
+                            job = job,
+                            committedAt = draft.committedAt,
+                            replayed = true,
+                        ),
+                    )
+                }
+                MemorySearchIndexWriterV1.replaceStoryTrackingTimelines(
+                    search = database.memorySearchDao(),
+                    chapterIndex = draft.source.chapterIndex,
+                    timelineEvents = draft.timelineEvents,
+                )
                 generation.recordUsage(attempt.attemptId, draft.usage.toFinalUpdate(draft.committedAt))
                 return@withTransaction result(stage.stageId, draft, replayed = true)
             }
@@ -117,7 +146,12 @@ class ChapterTrackingProjectionCommitRepository(
                     job.currentStageId == stage.stageId,
             ) { "Story-tracking job is not running the validated stage." }
             requireActiveLease(stage, permit.leaseToken, draft.committedAt)
-            ChapterTrackingProjectionSourceRepository(database).requireCurrentMatches(draft.source, book.bookId)
+            val sourceRepository = ChapterTrackingProjectionSourceRepository(database)
+            if (rebuildBound) {
+                sourceRepository.requireCurrentMatchesForEditRebuild(draft.source, book.bookId)
+            } else {
+                sourceRepository.requireCurrentMatches(draft.source, book.bookId)
+            }
             require(memory.timelineEventsForVersion(version.chapterVersionId).isEmpty()) {
                 "The current chapter version already has timeline events without a matching projection header."
             }
@@ -140,7 +174,36 @@ class ChapterTrackingProjectionCommitRepository(
                 ) { "A foreshadow changed after the projection source was frozen." }
             }
             if (draft.foreshadowTransitions.isNotEmpty()) memory.insertForeshadowTransitions(draft.foreshadowTransitions)
+            revisionWriter.persistAfterStates(
+                bookId = book.bookId,
+                chapterIndex = draft.source.chapterIndex,
+                sourceChapterVersionId = version.chapterVersionId,
+                generationStageId = stage.stageId,
+                transitions = draft.foreshadowTransitions,
+            )
             memory.insertTrackingProjection(draft.projection)
+            MemorySearchIndexWriterV1.replaceStoryTracking(
+                search = database.memorySearchDao(),
+                chapterIndex = draft.source.chapterIndex,
+                timelineEvents = draft.timelineEvents,
+                foreshadows = (
+                    draft.newForeshadows + draft.existingForeshadowUpdates.map { update ->
+                        requireNotNull(memory.findForeshadow(update.foreshadowItemId)) {
+                            "Updated foreshadow disappeared during story-tracking commit."
+                        }
+                    }
+                ).sortedBy { it.foreshadowItemId },
+            )
+            if (rebuildBound) {
+                check(
+                    ChapterEditRebuildStageRepository(database).commitAggregateAfterTrackingIfBound(
+                        stage = stage,
+                        job = job,
+                        committedAt = draft.committedAt,
+                        replayed = false,
+                    ),
+                )
+            }
             generation.recordUsage(attempt.attemptId, draft.usage.toFinalUpdate(draft.committedAt))
             check(
                 GenerationStageStateMachine.transition(stage.status, StageEvent.COMMIT_SUCCEEDED) ==

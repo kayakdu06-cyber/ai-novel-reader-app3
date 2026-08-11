@@ -5,6 +5,7 @@ import app.zhijuan.core.database.ZhijuanDatabase
 import app.zhijuan.core.database.memory.CanonFactEntity
 import app.zhijuan.core.database.memory.ChapterSummaryEntity
 import app.zhijuan.core.database.memory.EntityEventEntity
+import app.zhijuan.core.database.search.MemorySearchIndexWriterV1
 import app.zhijuan.core.model.BookStatus
 import app.zhijuan.core.model.CanonLevel
 import app.zhijuan.core.model.DerivedDataStatus
@@ -118,6 +119,11 @@ class ChapterMemoryExtractionCommitRepository(
                 "Chapter-memory summary model snapshot does not match the extraction Attempt."
             }
             require(ChapterMemoryExtractionJobFactory.parseAndVerify(stage) == draft.source)
+            ChapterEditRebuildStageRepository(database).requireCommitAllowedIfBound(
+                stage = stage,
+                job = job,
+                observedAt = draft.committedAt,
+            )
 
             if (stage.status == GenerationStageStatus.SUCCEEDED) {
                 require(stage.outputReferenceJson == outputReference) {
@@ -126,6 +132,12 @@ class ChapterMemoryExtractionCommitRepository(
                 require(memory.findSummaryForVersion(version.chapterVersionId) == draft.summary)
                 require(memory.entityEventsForVersion(version.chapterVersionId) == draft.entityEvents.sortedWith(EVENT_ORDER))
                 require(memory.canonFactsForVersion(version.chapterVersionId) == draft.canonFacts.sortedBy { it.canonFactId })
+                MemorySearchIndexWriterV1.replaceChapterMemory(
+                    search = database.memorySearchDao(),
+                    summary = draft.summary,
+                    entityEvents = draft.entityEvents,
+                    canonFacts = draft.canonFacts,
+                )
                 generation.recordUsage(attempt.attemptId, draft.usage.toFinalUpdate(draft.committedAt))
                 return@withTransaction result(stage.stageId, draft, replayed = true)
             }
@@ -145,6 +157,12 @@ class ChapterMemoryExtractionCommitRepository(
             memory.insertSummary(draft.summary)
             if (draft.entityEvents.isNotEmpty()) memory.insertEntityEvents(draft.entityEvents)
             if (draft.canonFacts.isNotEmpty()) memory.insertCanonFacts(draft.canonFacts)
+            MemorySearchIndexWriterV1.replaceChapterMemory(
+                search = database.memorySearchDao(),
+                summary = draft.summary,
+                entityEvents = draft.entityEvents,
+                canonFacts = draft.canonFacts,
+            )
             generation.recordUsage(attempt.attemptId, draft.usage.toFinalUpdate(draft.committedAt))
             check(
                 GenerationStageStateMachine.transition(stage.status, StageEvent.COMMIT_SUCCEEDED) ==

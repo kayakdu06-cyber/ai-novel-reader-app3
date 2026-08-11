@@ -10,6 +10,7 @@ import app.zhijuan.core.database.memory.EntityEventEntity
 import app.zhijuan.core.database.memory.ForeshadowItemEntity
 import app.zhijuan.core.database.memory.StaleCascadeResult
 import app.zhijuan.core.database.memory.TimelineEventEntity
+import app.zhijuan.core.database.search.MemorySearchIndexWriterV1
 import app.zhijuan.core.model.BookStatus
 import app.zhijuan.core.model.CanonLevel
 import app.zhijuan.core.model.ChapterStatus
@@ -82,6 +83,7 @@ data class ChapterStaleCascade(
     val timelineEvents: Int,
     val foreshadows: Int,
     val trackingProjections: Int,
+    val foreshadowProjectionRevisions: Int,
     val foreshadowTransitions: Int,
     val aggregateStates: Int,
     val futureContexts: Int,
@@ -199,6 +201,9 @@ class ChapterGenerationCommitRepository(
                 "Usage ledger is missing or belongs to another book."
             }
 
+            val replacedSearchIdentities = draft.expectedCurrentVersionId?.let { replacedVersionId ->
+                MemorySearchIndexWriterV1.identitiesForReplacedChapter(memory, book.bookId, replacedVersionId)
+            }
             val staleCascade = draft.expectedCurrentVersionId?.let { replacedVersionId ->
                 memory.markDerivedDataStaleForReplacedChapter(
                     bookId = book.bookId,
@@ -225,6 +230,21 @@ class ChapterGenerationCommitRepository(
             if (draft.canonFacts.isNotEmpty()) memory.insertCanonFacts(draft.canonFacts)
             if (draft.timelineEvents.isNotEmpty()) memory.insertTimelineEvents(draft.timelineEvents)
             if (draft.foreshadows.isNotEmpty()) memory.insertForeshadows(draft.foreshadows)
+
+            val search = database.memorySearchDao()
+            replacedSearchIdentities?.let { search.deleteSources(it) }
+            MemorySearchIndexWriterV1.replaceChapterMemory(
+                search = search,
+                summary = draft.summary,
+                entityEvents = draft.entityEvents,
+                canonFacts = draft.canonFacts,
+            )
+            MemorySearchIndexWriterV1.replaceStoryTracking(
+                search = search,
+                chapterIndex = chapter.chapterIndex,
+                timelineEvents = draft.timelineEvents,
+                foreshadows = draft.foreshadows,
+            )
 
             if (
                 library.compareAndSetGeneratedCurrentVersion(
@@ -690,6 +710,7 @@ internal fun StaleCascadeResult.toPublic() = ChapterStaleCascade(
     timelineEvents = timelineEvents,
     foreshadows = foreshadows,
     trackingProjections = trackingProjections,
+    foreshadowProjectionRevisions = foreshadowProjectionRevisions,
     foreshadowTransitions = foreshadowTransitions,
     aggregateStates = aggregateStates,
     futureContexts = futureContexts,

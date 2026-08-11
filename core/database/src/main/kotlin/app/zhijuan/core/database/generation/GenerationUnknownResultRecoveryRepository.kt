@@ -291,7 +291,10 @@ class GenerationUnknownResultRecoveryRepository(
                 updatedAt = updatedAt,
             ) == 1,
         ) { "Provider-proof attempt requeue lost a concurrent update." }
-        finalizeUsage(evidence.dao, evidence.usage, providerUsage = null, updatedAt)
+        evidence.dao.finalizeUsageAndReleaseReservationAfterProviderProof(
+            attemptId = evidence.attempt.attemptId,
+            update = evidence.usage.toFinalUpdate(updatedAt),
+        )
         check(
             evidence.dao.compareAndSetStageStatus(
                 evidence.stage.stageId,

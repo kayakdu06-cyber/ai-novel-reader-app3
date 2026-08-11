@@ -499,6 +499,430 @@ object ZhijuanMigrations {
         }
     }
 
+    val MIGRATION_8_9: Migration = object : Migration(8, 9) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `memory_search_document` (
+                    `rowid` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `document_id` TEXT NOT NULL,
+                    `book_id` TEXT NOT NULL,
+                    `source_type` TEXT NOT NULL,
+                    `source_id` TEXT NOT NULL,
+                    `chapter_index` INTEGER,
+                    `story_order` INTEGER,
+                    `importance` INTEGER NOT NULL,
+                    `source_content_hash` TEXT NOT NULL,
+                    `search_terms` TEXT NOT NULL,
+                    `updated_at` INTEGER NOT NULL,
+                    FOREIGN KEY(`book_id`) REFERENCES `book`(`book_id`) ON UPDATE NO ACTION ON DELETE RESTRICT
+                )
+                """.trimIndent(),
+            )
+            listOf(
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_memory_search_document_document_id` ON `memory_search_document` (`document_id`)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_memory_search_document_book_id_source_type_source_id` ON `memory_search_document` (`book_id`, `source_type`, `source_id`)",
+                "CREATE INDEX IF NOT EXISTS `index_memory_search_document_book_id_source_type_chapter_index` ON `memory_search_document` (`book_id`, `source_type`, `chapter_index`)",
+                "CREATE INDEX IF NOT EXISTS `index_memory_search_document_book_id_story_order` ON `memory_search_document` (`book_id`, `story_order`)",
+            ).forEach(db::execSQL)
+            db.execSQL(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS `memory_search_document_fts` USING FTS4(`search_terms` TEXT NOT NULL, content=`memory_search_document`)",
+            )
+            listOf(
+                "CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_memory_search_document_fts_BEFORE_UPDATE BEFORE UPDATE ON `memory_search_document` BEGIN DELETE FROM `memory_search_document_fts` WHERE `docid`=OLD.`rowid`; END",
+                "CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_memory_search_document_fts_BEFORE_DELETE BEFORE DELETE ON `memory_search_document` BEGIN DELETE FROM `memory_search_document_fts` WHERE `docid`=OLD.`rowid`; END",
+                "CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_memory_search_document_fts_AFTER_UPDATE AFTER UPDATE ON `memory_search_document` BEGIN INSERT INTO `memory_search_document_fts`(`docid`, `search_terms`) VALUES (NEW.`rowid`, NEW.`search_terms`); END",
+                "CREATE TRIGGER IF NOT EXISTS room_fts_content_sync_memory_search_document_fts_AFTER_INSERT AFTER INSERT ON `memory_search_document` BEGIN INSERT INTO `memory_search_document_fts`(`docid`, `search_terms`) VALUES (NEW.`rowid`, NEW.`search_terms`); END",
+            ).forEach(db::execSQL)
+            LibraryDatabaseGuards.install(db)
+        }
+    }
+
+    val MIGRATION_9_10: Migration = object : Migration(9, 10) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `memory_search_backfill_state` (
+                    `book_id` TEXT NOT NULL,
+                    `index_schema_version` INTEGER NOT NULL,
+                    `completed_at` INTEGER NOT NULL,
+                    PRIMARY KEY(`book_id`),
+                    FOREIGN KEY(`book_id`) REFERENCES `book`(`book_id`) ON UPDATE NO ACTION ON DELETE RESTRICT
+                )
+                """.trimIndent(),
+            )
+            LibraryDatabaseGuards.install(db)
+        }
+    }
+
+    val MIGRATION_10_11: Migration = object : Migration(10, 11) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            listOf(
+                "index_chapter_summary_chapter_version_id" to
+                    "CREATE INDEX `index_chapter_summary_chapter_version_id` ON `chapter_summary` (`chapter_version_id`)",
+                "index_chapter_tracking_projection_chapter_version_id" to
+                    "CREATE INDEX `index_chapter_tracking_projection_chapter_version_id` ON `chapter_tracking_projection` (`chapter_version_id`)",
+                "index_aggregate_state_projection_book_id_through_chapter_index" to
+                    "CREATE INDEX `index_aggregate_state_projection_book_id_through_chapter_index` ON `aggregate_state_projection` (`book_id`, `through_chapter_index`)",
+                "index_foreshadow_transition_foreshadow_item_id_source_chapter_version_id" to
+                    "CREATE INDEX `index_foreshadow_transition_foreshadow_item_id_source_chapter_version_id` ON `foreshadow_transition` (`foreshadow_item_id`, `source_chapter_version_id`)",
+            ).forEach { (indexName, createSql) ->
+                db.execSQL("DROP INDEX IF EXISTS `$indexName`")
+                db.execSQL(createSql)
+            }
+            LibraryDatabaseGuards.install(db)
+        }
+    }
+
+    val MIGRATION_11_12: Migration = object : Migration(11, 12) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `foreshadow_projection_revision` (
+                    `revision_id` TEXT NOT NULL,
+                    `book_id` TEXT NOT NULL,
+                    `foreshadow_item_id` TEXT NOT NULL,
+                    `source_chapter_version_id` TEXT NOT NULL,
+                    `generation_stage_id` TEXT NOT NULL,
+                    `transition_id` TEXT NOT NULL,
+                    `chapter_index` INTEGER NOT NULL,
+                    `story_order` INTEGER NOT NULL,
+                    `snapshot_schema_version` INTEGER NOT NULL,
+                    `snapshot_json` TEXT NOT NULL,
+                    `snapshot_hash` TEXT NOT NULL,
+                    `status` TEXT NOT NULL,
+                    `created_at` INTEGER NOT NULL,
+                    PRIMARY KEY(`revision_id`),
+                    FOREIGN KEY(`book_id`) REFERENCES `book`(`book_id`) ON UPDATE NO ACTION ON DELETE RESTRICT,
+                    FOREIGN KEY(`book_id`, `foreshadow_item_id`) REFERENCES `foreshadow_item`(`book_id`, `foreshadow_item_id`) ON UPDATE NO ACTION ON DELETE RESTRICT,
+                    FOREIGN KEY(`source_chapter_version_id`) REFERENCES `chapter_version`(`chapter_version_id`) ON UPDATE NO ACTION ON DELETE RESTRICT,
+                    FOREIGN KEY(`generation_stage_id`) REFERENCES `generation_stage`(`stage_id`) ON UPDATE NO ACTION ON DELETE RESTRICT,
+                    FOREIGN KEY(`transition_id`) REFERENCES `foreshadow_transition`(`transition_id`) ON UPDATE NO ACTION ON DELETE RESTRICT
+                )
+                """.trimIndent(),
+            )
+            listOf(
+                "CREATE INDEX IF NOT EXISTS `index_foreshadow_projection_revision_book_id_foreshadow_item_id` ON `foreshadow_projection_revision` (`book_id`, `foreshadow_item_id`)",
+                "CREATE INDEX IF NOT EXISTS `index_foreshadow_projection_revision_source_chapter_version_id` ON `foreshadow_projection_revision` (`source_chapter_version_id`)",
+                "CREATE INDEX IF NOT EXISTS `index_foreshadow_projection_revision_generation_stage_id` ON `foreshadow_projection_revision` (`generation_stage_id`)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_foreshadow_projection_revision_transition_id` ON `foreshadow_projection_revision` (`transition_id`)",
+                "CREATE INDEX IF NOT EXISTS `index_foreshadow_projection_revision_book_id_chapter_index_status` ON `foreshadow_projection_revision` (`book_id`, `chapter_index`, `status`)",
+                "CREATE INDEX IF NOT EXISTS `index_foreshadow_projection_revision_book_id_foreshadow_item_id_story_order_status` ON `foreshadow_projection_revision` (`book_id`, `foreshadow_item_id`, `story_order`, `status`)",
+                "CREATE INDEX IF NOT EXISTS `index_foreshadow_projection_revision_status` ON `foreshadow_projection_revision` (`status`)",
+            ).forEach(db::execSQL)
+            LibraryDatabaseGuards.install(db)
+        }
+    }
+
+    val MIGRATION_12_13: Migration = object : Migration(12, 13) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `foreshadow_projection_rewind` (
+                    `rewind_id` TEXT NOT NULL,
+                    `book_id` TEXT NOT NULL,
+                    `edited_chapter_id` TEXT NOT NULL,
+                    `edited_chapter_version_id` TEXT NOT NULL,
+                    `replaced_chapter_version_id` TEXT NOT NULL,
+                    `first_affected_chapter_index` INTEGER NOT NULL,
+                    `last_affected_chapter_index` INTEGER NOT NULL,
+                    `plan_hash` TEXT NOT NULL,
+                    `before_projection_set_hash` TEXT NOT NULL,
+                    `trusted_baseline_set_hash` TEXT NOT NULL,
+                    `after_projection_set_hash` TEXT NOT NULL,
+                    `affected_item_count` INTEGER NOT NULL,
+                    `baseline_item_count` INTEGER NOT NULL,
+                    `absent_item_count` INTEGER NOT NULL,
+                    `stale_revision_count` INTEGER NOT NULL,
+                    `stale_transition_count` INTEGER NOT NULL,
+                    `policy_version` TEXT NOT NULL,
+                    `created_at` INTEGER NOT NULL,
+                    PRIMARY KEY(`rewind_id`),
+                    FOREIGN KEY(`book_id`) REFERENCES `book`(`book_id`) ON UPDATE NO ACTION ON DELETE RESTRICT,
+                    FOREIGN KEY(`book_id`, `edited_chapter_id`) REFERENCES `chapter`(`book_id`, `chapter_id`) ON UPDATE NO ACTION ON DELETE RESTRICT,
+                    FOREIGN KEY(`edited_chapter_version_id`) REFERENCES `chapter_version`(`chapter_version_id`) ON UPDATE NO ACTION ON DELETE RESTRICT,
+                    FOREIGN KEY(`replaced_chapter_version_id`) REFERENCES `chapter_version`(`chapter_version_id`) ON UPDATE NO ACTION ON DELETE RESTRICT
+                )
+                """.trimIndent(),
+            )
+            listOf(
+                "CREATE INDEX IF NOT EXISTS `index_foreshadow_projection_rewind_book_id_edited_chapter_id` ON `foreshadow_projection_rewind` (`book_id`, `edited_chapter_id`)",
+                "CREATE INDEX IF NOT EXISTS `index_foreshadow_projection_rewind_edited_chapter_version_id` ON `foreshadow_projection_rewind` (`edited_chapter_version_id`)",
+                "CREATE INDEX IF NOT EXISTS `index_foreshadow_projection_rewind_replaced_chapter_version_id` ON `foreshadow_projection_rewind` (`replaced_chapter_version_id`)",
+                "CREATE INDEX IF NOT EXISTS `index_foreshadow_projection_rewind_book_id_first_affected_chapter_index_created_at` ON `foreshadow_projection_rewind` (`book_id`, `first_affected_chapter_index`, `created_at`)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_foreshadow_projection_rewind_plan_hash` ON `foreshadow_projection_rewind` (`plan_hash`)",
+                "CREATE INDEX IF NOT EXISTS `index_foreshadow_projection_revision_book_id_foreshadow_item_id_chapter_index_story_order_status` ON `foreshadow_projection_revision` (`book_id`, `foreshadow_item_id`, `chapter_index`, `story_order`, `status`)",
+            ).forEach(db::execSQL)
+            LibraryDatabaseGuards.install(db)
+        }
+    }
+
+    val MIGRATION_13_14: Migration = object : Migration(13, 14) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `chapter_edit_rebuild_execution` (
+                    `execution_id` TEXT NOT NULL,
+                    `book_id` TEXT NOT NULL,
+                    `edited_chapter_id` TEXT NOT NULL,
+                    `edited_chapter_version_id` TEXT NOT NULL,
+                    `replaced_chapter_version_id` TEXT NOT NULL,
+                    `rewind_id` TEXT NOT NULL,
+                    `first_affected_chapter_index` INTEGER NOT NULL,
+                    `last_affected_chapter_index` INTEGER NOT NULL,
+                    `future_chapter_policy` TEXT NOT NULL,
+                    `plan_schema_version` INTEGER NOT NULL,
+                    `initial_plan_hash` TEXT NOT NULL,
+                    `stable_fence_hash` TEXT NOT NULL,
+                    `policy_version` TEXT NOT NULL,
+                    `status` TEXT NOT NULL,
+                    `prepared_at` INTEGER NOT NULL,
+                    PRIMARY KEY(`execution_id`),
+                    FOREIGN KEY(`book_id`) REFERENCES `book`(`book_id`) ON UPDATE NO ACTION ON DELETE RESTRICT,
+                    FOREIGN KEY(`book_id`, `edited_chapter_id`) REFERENCES `chapter`(`book_id`, `chapter_id`) ON UPDATE NO ACTION ON DELETE RESTRICT,
+                    FOREIGN KEY(`edited_chapter_version_id`) REFERENCES `chapter_version`(`chapter_version_id`) ON UPDATE NO ACTION ON DELETE RESTRICT,
+                    FOREIGN KEY(`replaced_chapter_version_id`) REFERENCES `chapter_version`(`chapter_version_id`) ON UPDATE NO ACTION ON DELETE RESTRICT,
+                    FOREIGN KEY(`rewind_id`) REFERENCES `foreshadow_projection_rewind`(`rewind_id`) ON UPDATE NO ACTION ON DELETE RESTRICT
+                )
+                """.trimIndent(),
+            )
+            listOf(
+                "CREATE INDEX IF NOT EXISTS `index_chapter_edit_rebuild_execution_book_id_edited_chapter_id` ON `chapter_edit_rebuild_execution` (`book_id`, `edited_chapter_id`)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_chapter_edit_rebuild_execution_edited_chapter_version_id` ON `chapter_edit_rebuild_execution` (`edited_chapter_version_id`)",
+                "CREATE INDEX IF NOT EXISTS `index_chapter_edit_rebuild_execution_replaced_chapter_version_id` ON `chapter_edit_rebuild_execution` (`replaced_chapter_version_id`)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_chapter_edit_rebuild_execution_rewind_id` ON `chapter_edit_rebuild_execution` (`rewind_id`)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_chapter_edit_rebuild_execution_stable_fence_hash` ON `chapter_edit_rebuild_execution` (`stable_fence_hash`)",
+                "CREATE INDEX IF NOT EXISTS `index_chapter_edit_rebuild_execution_book_id_status_prepared_at` ON `chapter_edit_rebuild_execution` (`book_id`, `status`, `prepared_at`)",
+            ).forEach(db::execSQL)
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `chapter_edit_rebuild_step` (
+                    `execution_id` TEXT NOT NULL,
+                    `step_ordinal` INTEGER NOT NULL,
+                    `book_id` TEXT NOT NULL,
+                    `chapter_id` TEXT NOT NULL,
+                    `chapter_index` INTEGER NOT NULL,
+                    `source_chapter_version_id` TEXT NOT NULL,
+                    `source_content_hash` TEXT NOT NULL,
+                    `step_type` TEXT NOT NULL,
+                    `needs_provider` INTEGER NOT NULL,
+                    `prepared_state` TEXT NOT NULL,
+                    `baseline_summary_id` TEXT,
+                    `baseline_summary_fingerprint` TEXT,
+                    `baseline_tracking_projection_id` TEXT,
+                    `baseline_tracking_fingerprint` TEXT,
+                    `baseline_aggregate_state_id` TEXT,
+                    `baseline_aggregate_fingerprint` TEXT,
+                    `created_at` INTEGER NOT NULL,
+                    PRIMARY KEY(`execution_id`, `step_ordinal`),
+                    FOREIGN KEY(`execution_id`) REFERENCES `chapter_edit_rebuild_execution`(`execution_id`) ON UPDATE NO ACTION ON DELETE RESTRICT,
+                    FOREIGN KEY(`book_id`) REFERENCES `book`(`book_id`) ON UPDATE NO ACTION ON DELETE RESTRICT,
+                    FOREIGN KEY(`book_id`, `chapter_id`) REFERENCES `chapter`(`book_id`, `chapter_id`) ON UPDATE NO ACTION ON DELETE RESTRICT,
+                    FOREIGN KEY(`source_chapter_version_id`) REFERENCES `chapter_version`(`chapter_version_id`) ON UPDATE NO ACTION ON DELETE RESTRICT,
+                    FOREIGN KEY(`baseline_summary_id`) REFERENCES `chapter_summary`(`chapter_summary_id`) ON UPDATE NO ACTION ON DELETE RESTRICT,
+                    FOREIGN KEY(`baseline_tracking_projection_id`) REFERENCES `chapter_tracking_projection`(`projection_id`) ON UPDATE NO ACTION ON DELETE RESTRICT,
+                    FOREIGN KEY(`baseline_aggregate_state_id`) REFERENCES `aggregate_state_projection`(`aggregate_state_id`) ON UPDATE NO ACTION ON DELETE RESTRICT
+                )
+                """.trimIndent(),
+            )
+            listOf(
+                "CREATE INDEX IF NOT EXISTS `index_chapter_edit_rebuild_step_book_id_chapter_id` ON `chapter_edit_rebuild_step` (`book_id`, `chapter_id`)",
+                "CREATE INDEX IF NOT EXISTS `index_chapter_edit_rebuild_step_source_chapter_version_id` ON `chapter_edit_rebuild_step` (`source_chapter_version_id`)",
+                "CREATE INDEX IF NOT EXISTS `index_chapter_edit_rebuild_step_baseline_summary_id` ON `chapter_edit_rebuild_step` (`baseline_summary_id`)",
+                "CREATE INDEX IF NOT EXISTS `index_chapter_edit_rebuild_step_baseline_tracking_projection_id` ON `chapter_edit_rebuild_step` (`baseline_tracking_projection_id`)",
+                "CREATE INDEX IF NOT EXISTS `index_chapter_edit_rebuild_step_baseline_aggregate_state_id` ON `chapter_edit_rebuild_step` (`baseline_aggregate_state_id`)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_chapter_edit_rebuild_step_execution_id_step_type_chapter_index` ON `chapter_edit_rebuild_step` (`execution_id`, `step_type`, `chapter_index`)",
+                "CREATE INDEX IF NOT EXISTS `index_chapter_edit_rebuild_step_execution_id_prepared_state_step_ordinal` ON `chapter_edit_rebuild_step` (`execution_id`, `prepared_state`, `step_ordinal`)",
+            ).forEach(db::execSQL)
+            LibraryDatabaseGuards.install(db)
+        }
+    }
+
+    val MIGRATION_14_15: Migration = object : Migration(14, 15) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `chapter_edit_rebuild_tracking_retirement` (
+                    `execution_id` TEXT NOT NULL,
+                    `step_ordinal` INTEGER NOT NULL,
+                    `book_id` TEXT NOT NULL,
+                    `chapter_id` TEXT NOT NULL,
+                    `chapter_index` INTEGER NOT NULL,
+                    `source_chapter_version_id` TEXT NOT NULL,
+                    `baseline_tracking_projection_id` TEXT NOT NULL,
+                    `baseline_tracking_fingerprint` TEXT NOT NULL,
+                    `retired_tracking_fingerprint` TEXT NOT NULL,
+                    `baseline_timeline_event_count` INTEGER NOT NULL,
+                    `baseline_timeline_event_ids_json` TEXT NOT NULL,
+                    `baseline_timeline_fingerprint` TEXT NOT NULL,
+                    `replacement_job_id` TEXT NOT NULL,
+                    `replacement_stage_id` TEXT NOT NULL,
+                    `policy_version` TEXT NOT NULL,
+                    `retired_at` INTEGER NOT NULL,
+                    PRIMARY KEY(`execution_id`, `step_ordinal`),
+                    FOREIGN KEY(`execution_id`, `step_ordinal`) REFERENCES `chapter_edit_rebuild_step`(`execution_id`, `step_ordinal`) ON UPDATE NO ACTION ON DELETE RESTRICT,
+                    FOREIGN KEY(`book_id`) REFERENCES `book`(`book_id`) ON UPDATE NO ACTION ON DELETE RESTRICT,
+                    FOREIGN KEY(`book_id`, `chapter_id`) REFERENCES `chapter`(`book_id`, `chapter_id`) ON UPDATE NO ACTION ON DELETE RESTRICT,
+                    FOREIGN KEY(`source_chapter_version_id`) REFERENCES `chapter_version`(`chapter_version_id`) ON UPDATE NO ACTION ON DELETE RESTRICT,
+                    FOREIGN KEY(`baseline_tracking_projection_id`) REFERENCES `chapter_tracking_projection`(`projection_id`) ON UPDATE NO ACTION ON DELETE RESTRICT,
+                    FOREIGN KEY(`replacement_job_id`) REFERENCES `generation_job`(`job_id`) ON UPDATE NO ACTION ON DELETE RESTRICT,
+                    FOREIGN KEY(`replacement_stage_id`) REFERENCES `generation_stage`(`stage_id`) ON UPDATE NO ACTION ON DELETE RESTRICT
+                )
+                """.trimIndent(),
+            )
+            listOf(
+                "CREATE INDEX IF NOT EXISTS `index_chapter_edit_rebuild_tracking_retirement_book_id_chapter_id` ON `chapter_edit_rebuild_tracking_retirement` (`book_id`, `chapter_id`)",
+                "CREATE INDEX IF NOT EXISTS `index_chapter_edit_rebuild_tracking_retirement_source_chapter_version_id` ON `chapter_edit_rebuild_tracking_retirement` (`source_chapter_version_id`)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_chapter_edit_rebuild_tracking_retirement_baseline_tracking_projection_id` ON `chapter_edit_rebuild_tracking_retirement` (`baseline_tracking_projection_id`)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_chapter_edit_rebuild_tracking_retirement_replacement_job_id` ON `chapter_edit_rebuild_tracking_retirement` (`replacement_job_id`)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_chapter_edit_rebuild_tracking_retirement_replacement_stage_id` ON `chapter_edit_rebuild_tracking_retirement` (`replacement_stage_id`)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_chapter_edit_rebuild_tracking_retirement_execution_id_chapter_index` ON `chapter_edit_rebuild_tracking_retirement` (`execution_id`, `chapter_index`)",
+            ).forEach(db::execSQL)
+            LibraryDatabaseGuards.install(db)
+        }
+    }
+
+    val MIGRATION_15_16: Migration = object : Migration(15, 16) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `generation_timing_event` (
+                    `event_id` TEXT NOT NULL,
+                    `phase` TEXT NOT NULL,
+                    `milestone` TEXT NOT NULL,
+                    `outcome` TEXT,
+                    `occurred_epoch_millis` INTEGER NOT NULL,
+                    `occurred_elapsed_realtime_millis` INTEGER NOT NULL,
+                    `boot_fingerprint` TEXT NOT NULL,
+                    `run_fingerprint` TEXT NOT NULL,
+                    `book_fingerprint` TEXT NOT NULL,
+                    `job_fingerprint` TEXT,
+                    `stage_fingerprint` TEXT,
+                    `attempt_fingerprint` TEXT,
+                    `attempt_no` INTEGER,
+                    `character_count` INTEGER,
+                    `input_token_count` INTEGER,
+                    `output_token_count` INTEGER,
+                    `total_token_count` INTEGER,
+                    `connection_fingerprint` TEXT,
+                    `model_fingerprint` TEXT,
+                    PRIMARY KEY(`event_id`)
+                )
+                """.trimIndent(),
+            )
+            listOf(
+                "CREATE INDEX IF NOT EXISTS `index_generation_timing_event_run_fingerprint_occurred_elapsed_realtime_millis` ON `generation_timing_event` (`run_fingerprint`, `occurred_elapsed_realtime_millis`)",
+                "CREATE INDEX IF NOT EXISTS `index_generation_timing_event_stage_fingerprint_phase_milestone` ON `generation_timing_event` (`stage_fingerprint`, `phase`, `milestone`)",
+                "CREATE INDEX IF NOT EXISTS `index_generation_timing_event_attempt_fingerprint_phase_milestone` ON `generation_timing_event` (`attempt_fingerprint`, `phase`, `milestone`)",
+                "CREATE INDEX IF NOT EXISTS `index_generation_timing_event_boot_fingerprint_occurred_elapsed_realtime_millis` ON `generation_timing_event` (`boot_fingerprint`, `occurred_elapsed_realtime_millis`)",
+            ).forEach(db::execSQL)
+            LibraryDatabaseGuards.install(db)
+        }
+    }
+
+    val MIGRATION_16_17: Migration = object : Migration(16, 17) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            // Legacy attempt rows stay at enforcement version 0 with no
+            // reservation; Phase 3 wires new intents to version 1.
+            db.execSQL(
+                "ALTER TABLE `request_attempt` ADD COLUMN `budget_enforcement_version` " +
+                    "INTEGER NOT NULL DEFAULT 0",
+            )
+            db.execSQL(
+                "ALTER TABLE `request_attempt` ADD COLUMN `budget_reservation_id` TEXT",
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `budget_policy_revision` (
+                    `budget_policy_id` TEXT NOT NULL,
+                    `scope` TEXT NOT NULL,
+                    `scope_key` TEXT NOT NULL,
+                    `revision_no` INTEGER NOT NULL,
+                    `parent_budget_policy_id` TEXT,
+                    `book_id` TEXT,
+                    `daily_zone_id` TEXT,
+                    `max_tokens` INTEGER NOT NULL,
+                    `max_cost_micros` INTEGER,
+                    `currency` TEXT,
+                    `policy_version` TEXT NOT NULL,
+                    `created_at` INTEGER NOT NULL,
+                    PRIMARY KEY(`budget_policy_id`),
+                    FOREIGN KEY(`parent_budget_policy_id`) REFERENCES `budget_policy_revision`(`budget_policy_id`) ON UPDATE NO ACTION ON DELETE RESTRICT,
+                    FOREIGN KEY(`book_id`) REFERENCES `book`(`book_id`) ON UPDATE NO ACTION ON DELETE RESTRICT
+                )
+                """.trimIndent(),
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `budget_policy_head` (
+                    `scope` TEXT NOT NULL,
+                    `scope_key` TEXT NOT NULL,
+                    `current_budget_policy_id` TEXT NOT NULL,
+                    `updated_at` INTEGER NOT NULL,
+                    PRIMARY KEY(`scope`, `scope_key`),
+                    FOREIGN KEY(`current_budget_policy_id`) REFERENCES `budget_policy_revision`(`budget_policy_id`) ON UPDATE NO ACTION ON DELETE RESTRICT
+                )
+                """.trimIndent(),
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS `request_budget_reservation` (
+                    `budget_reservation_id` TEXT NOT NULL,
+                    `attempt_id` TEXT NOT NULL,
+                    `job_id` TEXT NOT NULL,
+                    `stage_id` TEXT NOT NULL,
+                    `book_id` TEXT NOT NULL,
+                    `status` TEXT NOT NULL,
+                    `request_max_tokens` INTEGER NOT NULL,
+                    `request_max_cost_micros` INTEGER,
+                    `request_currency` TEXT,
+                    `estimated_tokens` INTEGER NOT NULL,
+                    `estimated_cost_micros` INTEGER,
+                    `estimated_currency` TEXT,
+                    `estimate_source_version` TEXT,
+                    `accounted_tokens` INTEGER NOT NULL,
+                    `accounted_cost_micros` INTEGER,
+                    `accounted_currency` TEXT,
+                    `book_policy_id` TEXT NOT NULL,
+                    `daily_policy_id` TEXT NOT NULL,
+                    `daily_period_key` TEXT NOT NULL,
+                    `connection_id` TEXT NOT NULL,
+                    `normalized_destination` TEXT NOT NULL,
+                    `protocol_id` TEXT NOT NULL,
+                    `disclosure_version` INTEGER NOT NULL,
+                    `disclosure_binding_hash` TEXT NOT NULL,
+                    `disclosure_accepted_at` INTEGER NOT NULL,
+                    `settled_at` INTEGER,
+                    `released_at` INTEGER,
+                    `created_at` INTEGER NOT NULL,
+                    `updated_at` INTEGER NOT NULL,
+                    PRIMARY KEY(`budget_reservation_id`),
+                    FOREIGN KEY(`job_id`, `stage_id`) REFERENCES `generation_stage`(`job_id`, `stage_id`) ON UPDATE NO ACTION ON DELETE RESTRICT,
+                    FOREIGN KEY(`book_id`) REFERENCES `book`(`book_id`) ON UPDATE NO ACTION ON DELETE RESTRICT,
+                    FOREIGN KEY(`book_policy_id`) REFERENCES `budget_policy_revision`(`budget_policy_id`) ON UPDATE NO ACTION ON DELETE RESTRICT,
+                    FOREIGN KEY(`daily_policy_id`) REFERENCES `budget_policy_revision`(`budget_policy_id`) ON UPDATE NO ACTION ON DELETE RESTRICT
+                )
+                """.trimIndent(),
+            )
+            listOf(
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_budget_policy_revision_scope_scope_key_revision_no` ON `budget_policy_revision` (`scope`, `scope_key`, `revision_no`)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_budget_policy_revision_parent_budget_policy_id` ON `budget_policy_revision` (`parent_budget_policy_id`)",
+                "CREATE INDEX IF NOT EXISTS `index_budget_policy_revision_book_id` ON `budget_policy_revision` (`book_id`)",
+                "CREATE INDEX IF NOT EXISTS `index_budget_policy_revision_created_at` ON `budget_policy_revision` (`created_at`)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_budget_policy_head_current_budget_policy_id` ON `budget_policy_head` (`current_budget_policy_id`)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_request_budget_reservation_attempt_id` ON `request_budget_reservation` (`attempt_id`)",
+                "CREATE INDEX IF NOT EXISTS `index_request_budget_reservation_book_id_status_created_at` ON `request_budget_reservation` (`book_id`, `status`, `created_at`)",
+                "CREATE INDEX IF NOT EXISTS `index_request_budget_reservation_daily_period_key_status_created_at` ON `request_budget_reservation` (`daily_period_key`, `status`, `created_at`)",
+                "CREATE INDEX IF NOT EXISTS `index_request_budget_reservation_job_id_stage_id` ON `request_budget_reservation` (`job_id`, `stage_id`)",
+                "CREATE INDEX IF NOT EXISTS `index_request_budget_reservation_book_policy_id` ON `request_budget_reservation` (`book_policy_id`)",
+                "CREATE INDEX IF NOT EXISTS `index_request_budget_reservation_daily_policy_id` ON `request_budget_reservation` (`daily_policy_id`)",
+                "CREATE INDEX IF NOT EXISTS `index_request_budget_reservation_status_updated_at` ON `request_budget_reservation` (`status`, `updated_at`)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS `index_request_attempt_budget_reservation_id` ON `request_attempt` (`budget_reservation_id`)",
+            ).forEach(db::execSQL)
+            LibraryDatabaseGuards.install(db)
+        }
+    }
+
     /**
      * The single production migration registry. Keep every supported adjacent
      * migration here so application startup and migration tests cannot drift.
@@ -512,6 +936,15 @@ object ZhijuanMigrations {
             MIGRATION_5_6,
             MIGRATION_6_7,
             MIGRATION_7_8,
+            MIGRATION_8_9,
+            MIGRATION_9_10,
+            MIGRATION_10_11,
+            MIGRATION_11_12,
+            MIGRATION_12_13,
+            MIGRATION_13_14,
+            MIGRATION_14_15,
+            MIGRATION_15_16,
+            MIGRATION_16_17,
         )
 
     fun pathFrom(

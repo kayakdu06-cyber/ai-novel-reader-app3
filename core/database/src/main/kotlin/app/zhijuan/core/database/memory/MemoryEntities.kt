@@ -33,7 +33,7 @@ import app.zhijuan.core.model.StoryEntityType
         ),
     ],
     indices = [
-        Index(value = ["chapter_version_id"], unique = true),
+        Index(value = ["chapter_version_id"]),
         Index(value = ["book_id", "chapter_index"]),
         Index(value = ["status"]),
     ],
@@ -221,7 +221,7 @@ data class ForeshadowItemEntity(
         ForeignKey(entity = GenerationStageEntity::class, parentColumns = ["stage_id"], childColumns = ["generation_stage_id"], onDelete = ForeignKey.RESTRICT),
     ],
     indices = [
-        Index(value = ["chapter_version_id"], unique = true),
+        Index(value = ["chapter_version_id"]),
         Index(value = ["generation_stage_id"], unique = true),
         Index(value = ["book_id", "chapter_index"]),
         Index(value = ["status"]),
@@ -264,7 +264,7 @@ data class ChapterTrackingProjectionEntity(
         Index(value = ["source_chapter_version_id"]),
         Index(value = ["generation_stage_id"]),
         Index(value = ["book_id", "story_order"]),
-        Index(value = ["foreshadow_item_id", "source_chapter_version_id"], unique = true),
+        Index(value = ["foreshadow_item_id", "source_chapter_version_id"]),
         Index(value = ["status"]),
     ],
 )

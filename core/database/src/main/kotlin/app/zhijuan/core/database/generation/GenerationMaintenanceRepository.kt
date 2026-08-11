@@ -31,6 +31,29 @@ data class GenerationMaintenanceScan(
 )
 
 /**
+ * A scanned, persisted candidate whose job lease expired while the current stage was still READY
+ * with no stage lease: the crash window between job lease acquisition and stage lease acquisition.
+ * Identifiers are redacted from [toString].
+ */
+data class GenerationIdleJobLeaseCandidate(
+    val jobId: String,
+    val jobStatus: GenerationJobStatus,
+    val currentStageId: String,
+    val currentStageStatus: GenerationStageStatus,
+    val observedJobLease: GenerationLeaseToken,
+    val jobLeaseHeartbeatAt: Long,
+) {
+    override fun toString(): String =
+        "GenerationIdleJobLeaseCandidate(jobStatus=$jobStatus, currentStageStatus=$currentStageStatus, " +
+            "identifiers=redacted)"
+}
+
+data class GenerationIdleJobLeaseScan(
+    val candidates: List<GenerationIdleJobLeaseCandidate>,
+    val hasMore: Boolean,
+)
+
+/**
  * Finds only persisted, expired execution leases. It does not acquire a lease, create an attempt,
  * inspect connection data, or provide any network capability.
  */
@@ -119,6 +142,92 @@ class GenerationMaintenanceRepository(
         }
     }
 
+    /**
+     * Scans only persisted, expired idle RUNNING jobs: the job lease exists and is expired while the
+     * current stage is still READY with no stage lease, meaning the job was claimed but never reached
+     * stage execution before a crash. Bounded and stably ordered like the execution-lease scan.
+     */
+    suspend fun scanExpiredIdleJobLeases(
+        observedAt: Long,
+        limit: Int = DEFAULT_BATCH_LIMIT,
+    ): GenerationIdleJobLeaseScan {
+        require(observedAt >= 0L) { "Maintenance time is invalid." }
+        require(limit in 1..MAX_BATCH_LIMIT) { "Maintenance batch limit is invalid." }
+        if (observedAt < leasePolicy.timeoutMillis) {
+            return GenerationIdleJobLeaseScan(emptyList(), hasMore = false)
+        }
+        return database.withTransaction {
+            val dao = database.generationDao()
+            val rows = dao.expiredIdleRunningJobsForMaintenance(
+                expiredAtOrBefore = observedAt - leasePolicy.timeoutMillis,
+                observedAt = observedAt,
+                limit = limit + 1,
+            )
+            val candidates = mutableListOf<GenerationIdleJobLeaseCandidate>()
+            for (job in rows.take(limit)) {
+                job.toIdleJobLeaseCandidateOrNull(observedAt)?.let(candidates::add)
+            }
+            GenerationIdleJobLeaseScan(
+                candidates = candidates,
+                hasMore = rows.size > limit,
+            )
+        }
+    }
+
+    /**
+     * Requeues one scanned idle RUNNING job back to READY inside a single Room transaction. Re-reads
+     * and verifies the exact candidate evidence (job lease, RUNNING status, current stage still READY
+     * with no stage lease) before running the dedicated exact CAS. The stage itself is never modified.
+     */
+    suspend fun requeueExpiredIdleJobLease(
+        candidate: GenerationIdleJobLeaseCandidate,
+        observedAt: Long,
+    ) = database.withTransaction {
+        require(observedAt >= 0L) { "Maintenance time is invalid." }
+        val dao = database.generationDao()
+        val job = requireNotNull(dao.findJob(candidate.jobId)) { "Maintenance job is missing." }
+        val stage = requireNotNull(dao.findStage(candidate.currentStageId)) { "Maintenance stage is missing." }
+        if (
+            candidate.jobStatus != GenerationJobStatus.RUNNING ||
+            candidate.currentStageStatus != GenerationStageStatus.READY ||
+            job.status != GenerationJobStatus.RUNNING ||
+            job.leaseTokenOrNull() != candidate.observedJobLease ||
+            job.currentStageId != stage.stageId ||
+            stage.jobId != job.jobId ||
+            stage.status != GenerationStageStatus.READY ||
+            stage.leaseTokenOrNull() != null
+        ) {
+            throw StaleGenerationStateException("Idle job maintenance evidence changed.")
+        }
+        val jobHeartbeat = requireNotNull(job.leaseHeartbeatAt)
+        if (jobHeartbeat != candidate.jobLeaseHeartbeatAt) {
+            throw StaleGenerationStateException("Idle job maintenance heartbeat evidence changed.")
+        }
+        require(leasePolicy.isExpired(jobHeartbeat, observedAt)) {
+            "Active generation execution cannot be reclaimed."
+        }
+        require(observedAt >= job.updatedAt && observedAt >= stage.updatedAt) {
+            "Maintenance time cannot move backwards."
+        }
+        val nextJob = GenerationJobStateMachine.transition(
+            job.status,
+            JobEvent.RECOVERY_REQUEUED,
+        )
+        if (
+            dao.compareAndRequeueExpiredIdleJobLease(
+                jobId = job.jobId,
+                leaseOwnerId = candidate.observedJobLease.ownerId,
+                leaseAcquiredAt = candidate.observedJobLease.acquiredAt,
+                expectedHeartbeatAt = candidate.jobLeaseHeartbeatAt,
+                currentStageId = job.currentStageId,
+                nextStatus = nextJob,
+                now = observedAt,
+            ) != 1
+        ) {
+            throw StaleGenerationStateException("Idle job maintenance lost a concurrent update.")
+        }
+    }
+
     private suspend fun GenerationStageEntity.toMaintenanceCandidateOrNull(
         dao: GenerationDao,
         observedAt: Long,
@@ -142,6 +251,22 @@ class GenerationMaintenanceRepository(
             jobLeaseHeartbeatAt = jobHeartbeatAt,
             observedLease = lease,
             leaseHeartbeatAt = heartbeatAt,
+        )
+    }
+
+    private fun GenerationJobEntity.toIdleJobLeaseCandidateOrNull(
+        observedAt: Long,
+    ): GenerationIdleJobLeaseCandidate? {
+        val lease = leaseTokenOrNull() ?: return null
+        val heartbeatAt = leaseHeartbeatAt ?: return null
+        if (!leasePolicy.isExpired(heartbeatAt, observedAt)) return null
+        return GenerationIdleJobLeaseCandidate(
+            jobId = jobId,
+            jobStatus = status,
+            currentStageId = requireNotNull(currentStageId),
+            currentStageStatus = GenerationStageStatus.READY,
+            observedJobLease = lease,
+            jobLeaseHeartbeatAt = heartbeatAt,
         )
     }
 

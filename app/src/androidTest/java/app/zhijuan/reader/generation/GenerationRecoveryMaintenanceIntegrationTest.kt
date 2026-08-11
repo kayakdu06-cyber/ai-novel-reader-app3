@@ -3,8 +3,11 @@ package app.zhijuan.reader.generation
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import app.zhijuan.core.database.EncryptedZhijuanDatabaseFactory
+import app.zhijuan.core.database.connection.ConnectionProfileEntity
 import app.zhijuan.core.database.generation.GenerationJobSetup
 import app.zhijuan.core.database.generation.GenerationJobSetupRepository
+import app.zhijuan.core.database.generation.PersistentBudgetPolicyRepository
+import app.zhijuan.core.database.generation.RequestBudgetReservationDraft
 import app.zhijuan.core.database.generation.GenerationStageSetup
 import app.zhijuan.core.database.generation.GenerationStateRepository
 import app.zhijuan.core.database.generation.GenerationStreamingDraftRepository
@@ -14,6 +17,7 @@ import app.zhijuan.core.database.library.BookCreationSnapshotEntity
 import app.zhijuan.core.database.library.BookEntity
 import app.zhijuan.core.model.BookLengthMode
 import app.zhijuan.core.model.BookStatus
+import app.zhijuan.core.model.BudgetLimit
 import app.zhijuan.core.model.GenerationJobStatus
 import app.zhijuan.core.model.GenerationJobType
 import app.zhijuan.core.model.GenerationPhase
@@ -75,8 +79,14 @@ class GenerationRecoveryMaintenanceIntegrationTest {
                         protocolSnapshotJson = "{}",
                         inputHash = "a".repeat(64),
                         streamDraftRef = null,
-                        dailyPeriodKey = "2026-08-02|Asia/Shanghai",
                         createdAt = fixture.leaseAt + 1L,
+                    ),
+                    budget = RequestBudgetReservationDraft(
+                        reservationId = "maint-reservation-${fixture.suffix}",
+                        requestMaxTokens = 1_000_000L,
+                        estimatedTokens = 1L,
+                        estimateSourceVersion = "zhijuan.estimate.v1",
+                        connectionId = fixture.connectionId,
                     ),
                     leaseToken = requireNotNull(stage.leaseToken),
                 )
@@ -114,6 +124,7 @@ class GenerationRecoveryMaintenanceIntegrationTest {
         val bookId = "maint-book-$suffix"
         val jobId = "maint-job-$suffix"
         val stageId = "maint-stage-$suffix"
+        val connectionId = "maint-connection-$suffix"
         EncryptedZhijuanDatabaseFactory(context).open(ZHIJUAN_DATABASE_NAME).use { handle ->
             BookCreationRepository(handle.database).create(
                 BookCreationSnapshotEntity(
@@ -144,6 +155,44 @@ class GenerationRecoveryMaintenanceIntegrationTest {
                     createdAt = createdAt,
                     updatedAt = createdAt,
                 ),
+            )
+            PersistentBudgetPolicyRepository(handle.database).activateBookPolicy(
+                policyId = "maint-book-policy-$suffix",
+                bookId = bookId,
+                limit = BudgetLimit(maxTokens = 1_000_000_000L),
+                activatedAt = createdAt,
+            )
+            PersistentBudgetPolicyRepository(handle.database).activateDailyPolicy(
+                policyId = "maint-daily-policy-$suffix",
+                zoneId = "UTC",
+                limit = BudgetLimit(maxTokens = 1_000_000_000L),
+                activatedAt = createdAt + 1L,
+            )
+            handle.database.connectionDao().insertConnection(
+                ConnectionProfileEntity(
+                    connectionId = connectionId,
+                    displayName = "Maintenance budget test connection",
+                    serviceId = "DEEPSEEK",
+                    protocolId = "OPENAI_CHAT_COMPAT",
+                    baseUrl = "https://example.invalid",
+                    normalizedDestination = "https://example.invalid:443",
+                    secretRefId = "maint-secret-ref-$suffix",
+                    secretLastFour = "0000",
+                    selectedModelId = "fixture-model",
+                    availableModelsJson = "[\"fixture-model\"]",
+                    modelVerification = "DISCOVERED",
+                    basicVerifiedAt = createdAt + 1L,
+                    fullVerifiedAt = null,
+                    dataDisclosureVersion = null,
+                    dataDisclosureAcceptedAt = null,
+                    dataDisclosureBindingHash = null,
+                    createdAt = createdAt,
+                    updatedAt = createdAt,
+                ),
+            )
+            handle.database.connectionDao().acceptDataDisclosureForCurrentDestination(
+                connectionId = connectionId,
+                acceptedAt = createdAt + 1L,
             )
             GenerationJobSetupRepository(handle.database).create(
                 GenerationJobSetup(
@@ -184,13 +233,14 @@ class GenerationRecoveryMaintenanceIntegrationTest {
             )
             states.acquireStageLease(stageId, "maint-stage-worker-$suffix", leaseAt)
         }
-        return Fixture(suffix, jobId, stageId, leaseAt)
+        return Fixture(suffix, jobId, stageId, connectionId, leaseAt)
     }
 
     private data class Fixture(
         val suffix: String,
         val jobId: String,
         val stageId: String,
+        val connectionId: String,
         val leaseAt: Long,
     )
 }

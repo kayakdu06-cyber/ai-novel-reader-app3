@@ -11,6 +11,7 @@ enum class AttemptEvent {
     POLICY_REFUSED,
     CANCELLED,
     RESULT_UNCERTAIN,
+    DAILY_BUDGET_PERIOD_EXPIRED,
 }
 
 object RequestAttemptStateMachine {
@@ -18,6 +19,10 @@ object RequestAttemptStateMachine {
         put(RequestAttemptStatus.INTENT_RECORDED to AttemptEvent.REQUEST_SENT, RequestAttemptStatus.SENT)
         put(RequestAttemptStatus.INTENT_RECORDED to AttemptEvent.RESULT_UNCERTAIN, RequestAttemptStatus.UNKNOWN_RESULT)
         put(RequestAttemptStatus.INTENT_RECORDED to AttemptEvent.CANCELLED, RequestAttemptStatus.CANCELLED)
+        put(
+            RequestAttemptStatus.INTENT_RECORDED to AttemptEvent.DAILY_BUDGET_PERIOD_EXPIRED,
+            RequestAttemptStatus.FAILED_RETRYABLE,
+        )
 
         put(RequestAttemptStatus.SENT to AttemptEvent.STREAM_STARTED, RequestAttemptStatus.STREAMING)
         put(RequestAttemptStatus.SENT to AttemptEvent.RESPONSE_COMPLETED, RequestAttemptStatus.SUCCEEDED)

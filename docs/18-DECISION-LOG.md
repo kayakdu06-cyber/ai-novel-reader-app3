@@ -306,6 +306,174 @@
 - 原因：让同一个模型既检查又直接覆盖正文会失去原稿、混淆费用和来源，也容易把风格偏好升级成硬错误；只给总分又无法证明关键过程、位置、身体和余波连续性已经逐项检查。本地前置还能在显然无效或成年门禁不通过时避免额外付费。
 - 后果：普通用户不新增操作；系统拥有可审计、可重放的检查结果，并能准确区分“允许进入提交候选”和“已经正式发布”。代价是 TASK-059 必须在每次修订后使旧记忆/追踪/检查全部失效并重新生成，不能复用旧 hash 的结论。固定负例集只能证明契约，真实中文识别效果仍需后续低成本 A/B。
 
+## DEC-052 可靠性优先，章节速度成为独立 P0 闸门
+
+- 状态：用户已确认实施路线；TASK-061 已完成，进入 TASK-062
+- 决策：不以快速拼接页面为目标。先完成 TASK-061，再建立脱敏时序、固定延迟 Fake、全阶段 runner、生成中正文投影和慢服务 watchdog。普通参考章分别验收首段、正文结束和正式提交；5 分钟进入慢服务安全处置，10 分钟仍未结束阻断发布。
+- 原因：当前候选章仍有 BODY、MEMORY、TRACKING、CONSISTENCY、可选修订等多段远程关键路径。只展示流式初稿不能证明整章完成够快；没有逐段测量就直接并行，又可能破坏来源、费用和恢复。
+- 后果：总 runner 接线前增加 TASK-062～069；真实 Provider 速度校准晚于预算和数据目的地门禁。未通过固定参考负载的模型/连接组合不能成为默认推荐，但用户仍可在高级区选择并承担外部服务差异。
+
+## DEC-053 取消应用锁与屏幕遮挡
+
+- 状态：用户已确认
+- 决策：不实现应用锁、生物识别、`FLAG_SECURE` 或最近任务缩略图遮挡；取消 FEAT-081、FEAT-082、TASK-097 和 TEST-089。
+- 原因：用户明确表示这组功能不需要，不应继续占用设计、开发、测试和维护成本。
+- 后果：数据库/草稿/备份/密钥加密、系统备份排除、脱敏日志、通用隐私通知和远程传输安全保持不变。设备已解锁后的截图、录屏和系统最近任务缩略图不由 App 额外保护。
+
+## DEC-054 编辑重建 execution 保持不可变准备证据，完成性动态推导
+
+- 状态：已确认并在 TASK-061 Phase 2B3B2E 落地
+- 决策：`chapter_edit_rebuild_execution` 不新增可变 `COMPLETED` 状态。retained tracking 使用显式 ordinal 4/6/8…，每步证明直接前驱 tracking+aggregate、时间下界和连续 retirement evidence；全部冻结 memory/tracking/aggregate 是否完成由权威 planner 从业务表重新推导。自动选步、重启游标、双执行器和跨 phase 调度统一由 TASK-064 total runner 持久化。
+- 原因：execution ledger 的职责是冻结编辑点、版本范围、rewind 和准备基线。把调度进度复制进同一不可变证据，或只为显示“完成”添加可变字段，会产生 planner 已回退但状态仍显示完成的双事实源；提前创建未来 Stage 又会迫使不可变输入引用尚不存在的前驱输出。
+- 后果：TASK-061 可以独立证明失效、逐章重建、回滚和 replay，schema 保持 v15；10 章 TEST-033 以权威 planner 与上下文选择器关闭。产品仍需 TASK-064 才能自动执行整条链，文档不得把底层原语描述成可日用的 total runner。
+
+## DEC-055 长篇性能采用 SQLCipher 追加时序账本与 boot-bound monotonic duration
+
+- 状态：已确认并在 TASK-062 落地
+- 决策：性能报告的权威来源是 schema v16 `generation_timing_event`，现有滚动诊断只保留故障窗口。事件只保存有限 phase/milestone/outcome、非负计数、epoch、elapsedRealtime、boot 指纹和域分离关联指纹；同 boot duration 才可计算，跨 boot 明确不可用。
+- 原因：Job/Stage 的墙上时间不足以区分排队、首段、正文、派生和提交，系统调时会造成负耗时；把长篇全部事件塞进 512 条诊断环又会覆盖历史。独立加密追加表可长期汇总，同时避免保存正文、提示词、端点和密钥。
+- 后果：TASK-063～068 必须复用同一时序契约；失败、拒绝、暂停、取消和未知结果写有限终态，不用自由文本。TASK-064 负责全阶段生产发射，TASK-062 本身不声称已有 total runner 或真实模型速度数据。
+
+## DEC-056 Fake 延迟使用虚拟时钟，基准报告保留全部失败样本
+
+- 状态：已确认并在 TASK-063 落地
+- 决策：固定延迟、5 分钟慢流和断流测试使用独立 `provider:fake` 脚本与协程可取消虚拟时钟，不真实等待几分钟。P50/P95/最慢值由正式时序报告聚合，报告同时保留总样本、NotApplicable 和每种不可用原因；不能只对成功样本报快值后隐藏失败。
+- 原因：真实长等待会让回归慢且容易受机器调度影响；只报成功样本又会把断流、跨 boot 或缺提交伪装成更快的性能。Fake adapter 必须可复用，但不能获得重试、预算、状态机或 watchdog 权力。
+- 后果：TASK-063 能在秒级测试时间内证明 BODY 延迟和 UNKNOWN 语义。正式提交、第一章和自动慢服务处置仍需 TASK-064/066，不因 Fake BODY 达标而提前关闭。
+
+## DEC-057 total runner 复用现有持久游标，先关闭双租约崩溃窗口
+
+- 状态：已确认，TASK-064 Phase 1A 已落地
+- 决策：不增加 runner table 或第二游标。`generation_job.current_stage_id`、Job/Stage 状态、租约与 Attempt 链继续是唯一恢复事实；runner 只领取和分发，业务仓库继续原子提交与推进。Job lease 已领取但 Stage lease 尚未领取的崩溃窗口，使用 current Stage READY+无 lease 的有界扫描和 exact CAS 恢复。
+- 原因：现有提交仓库已经把 Stage 成功、动态后继、后继激活和 Job 游标推进放在单一事务中；新增第二游标只会增加漂移。相反，原维护器从有 lease 的 Stage 起扫，确实漏掉了 Job-only lease 崩溃窗口，可能永久停在 RUNNING。
+- 后果：空闲 RUNNING Job 可在 60 秒默认租约到期后安全回到 READY，且不能抢走已领取 Stage 的执行。正常多阶段续跑、heartbeat、contract-aware dispatcher、RETRY_WAIT 和 UNKNOWN 仍需 TASK-064 后续子阶段，不能因本决策提前宣布 runner 完成。
+
+## DEC-058 runner 持有一个 Job token 跨 Stage 续跑，不按 owner 收养旧租约
+
+- 状态：已确认，TASK-064 Phase 1B 已落地
+- 决策：READY queue 只领取 Job lease；业务提交推进 current Stage 后，同一运行实例继续用原 `GenerationLeaseToken` heartbeat 并读取新 Stage。进程重启不通过 owner 字符串扫描或收养旧 lease，等待 Phase 1A 的超时维护路径精确回收后重新领取。
+- 原因：正常多阶段 Job 在 Stage 交接时保持 RUNNING；每 Stage 重领 Job 会违反状态机。反过来，持久 owner 不是足够的进程身份，仅凭相同字符串收养旧 lease 会让新旧进程同时自认拥有执行权。
+- 后果：Job token 是运行实例内的连续执行凭证，Stage token 仍由后续 executor 层独立获取和 heartbeat。queue 不拥有业务提交、Attempt 或 Provider 权限；双层 heartbeat 和 contract-aware dispatcher 仍是 TASK-064 后续工作。
+
+## DEC-059 current Stage 领取与双 lease heartbeat 必须单事务
+
+- 状态：已确认，TASK-064 Phase 1C 已落地
+- 决策：只有持精确 Job token 的 runner 可以领取该 Job 的 current READY Stage；领取事务先续 Job 再取得 Stage lease。活跃执行续租同样在一个 Room 事务内更新 Job/Stage，两 token 必须为同一 runner owner，任一失败整笔回滚。
+- 原因：单独调用 Stage acquire 无法证明调用者仍拥有 Job 或 Stage 仍是 current；分别 heartbeat 又可能留下只有一层前进的部分状态，干扰维护和恢复判断。
+- 后果：既有 executor 不需要复制或迁移业务事务，只在 runner 预领 Stage 后按 same-owner resume。Phase 1C 仍是原语，不等于已有定时 heartbeat 协程、dispatcher 或完整 total runner。
+
+## DEC-060 heartbeat stale 必须区分 lease 丢失与业务 durable handoff
+
+- 状态：已确认，TASK-064 Phase 1D 已落地
+- 决策：heartbeat envelope 在 action 存活时定时调用原子双 heartbeat。失败后若权威 Job 证明原 token 下 cursor 已推进，或 Job 已进入清 lease 的完成/等待终态，则停止旧 heartbeat并等待 action；否则取消 action并传播 lease 失败。
+- 原因：业务提交可能先原子推进 cursor/完成 Job，action 协程随后才返回。此窗口中旧 Stage heartbeat 必然 stale；若一律取消，会把已成功的提交报告为 lease 丢失并触发不必要恢复。反之，当前 Stage 未变而 token 丢失时继续 action 会造成双执行器风险。
+- 后果：runner 可安全包裹本地提交或流式 executor，但 durable boundary 后长时间不返回仍需 watchdog。dispatcher 必须提供精确 Job/Stage token，不得绕过 envelope 直接启动长 action。
+
+## DEC-061 dispatcher route 必须由冻结 source policy 的权威 parser 决定
+
+- 状态：已确认，TASK-064 Phase 2A 已落地派生链 identity
+- 决策：dispatcher 不按 `GenerationPhase` 单独选择 executor。它只用严格 `sourcePolicyVersion` 选择唯一权威 parser，完整 parser 成功后才返回有限 route；memory/tracking 重建还必须以正式 rebuild binding 区分，candidate 必须以完整 `artifactRole + phase` 穷举，未知或冲突输入不提供 fallback route。
+- 原因：`EXTRACT_MEMORY` 同时承载 memory 与 tracking，phase-only 路由会把不同请求合同、校验器和提交事务接错；靠字段存在性猜测又可能在损坏 JSON 上误发付费请求。
+- 后果：当前只覆盖已经有严格冻结来源合同的派生链和 final commit。planning/context/普通 draft 必须先补同等强度的 route identity；下一层还要把 route 与 current exact Job/Stage lease 绑定，不能让调用方用内存伪造 Stage 直接分发。
+
+## DEC-062 executor route 必须绑定 current 双租约事实
+
+- 状态：已确认，TASK-064 Phase 2B 已落地
+- 决策：executor registry 不能接受裸 route 或调用方手工构造的 Stage。route 只能由数据库 repository 在同一事务验证 current Job/Stage、`RUNNING + PREPARING`、精确同 owner 双 token、未过期 heartbeat、单调时间和剩余 attempts 后返回；绑定快照构造器与原始 resolver 不对 feature 层开放。
+- 原因：Phase 2A 只能证明 contract 自身合法，不能证明它仍是此刻有权执行的 current Stage。缺少租约绑定时，暂停、游标推进、token 被抢占或请求已经落库后仍可能重复分发。
+- 后果：Phase 2B 入口是只读授权证明，不续租、不创建 Attempt、不联网。下一阶段有限 registry 必须消费该快照并沿用其中 exact tokens；UNKNOWN/恢复路径不得回到 PREPARING route 重新发送。
+
+## DEC-063 total runner 的 final commit 只能消费 exact-token bound 入口
+
+- 状态：已确认，TASK-064 Phase 2C2 已落地
+- 决策：未来 registry 对 `FINAL_CHAPTER_COMMIT_V3` 只能调用 `ChapterFinalCandidateCommitStageExecutorV1.executeBound`，并传入 Phase 2B 快照中的 exact Stage token。不能调用只接 ownerId 的兼容入口，也不能绕过 Stage executor 直接调用 coordinator/repository。
+- 原因：ownerId 可在不同 acquiredAt 的租约之间复用。重新读取“同 owner 当前 token”会把旧 route 授权漂移到新租约，破坏 exact lease identity。
+- 后果：bound 入口拒绝 READY、错误 acquiredAt、超时和非持租约状态；SUCCEEDED 只读返回 replay。旧 owner-only 入口继续兼容非 total-runner 调用，但不构成 registry 权限。
+
+## DEC-064 executor registry 采用显式白名单，已识别但未就绪的 route 一律失败关闭
+
+- 状态：已确认，TASK-064 Phase 2C3 已落地
+- 决策：registry 的公开入口只消费数据库绑定快照；当前白名单只包含 `FINAL_CHAPTER_COMMIT_V3`。其余九条已识别 remote route 必须在穷举分支中显式抛出有限未注册错误，不提供 `else`、通用 Provider executor、phase fallback 或“最接近”适配。
+- 原因：route parser 只能证明冻结合同属于哪类工作，不能证明该类工作的生产输入装配、seal/commit、恢复、UNKNOWN 和防重复发送已经完整。提前注册会把“能识别”误当成“可安全执行”。
+- 后果：最小 registry 可以安全形成 total-runner 的本地执行切片，同时保持所有远程请求关闭。新增 route 必须以独立测试证明 exact token 传递、零旁路和失败恢复后，才可修改白名单。
+
+## DEC-065 initial draft 不得使用依赖尚未生成正文身份的 candidate source contract
+
+- 状态：已确认，TASK-064 Phase 2D1 审计结论
+- 决策：`CANDIDATE_CHAPTER_DRAFT_V1` 在现合同下继续不注册。initial DRAFT 的冻结身份必须只引用 Provider 请求前已经持久化并可重验的 planning/context/scene 证据；不得预填 candidate version/hash、伪造 predecessor 或放宽 revision-only guard。
+- 原因：`ChapterCandidateStageBindingV1` 描述的是已有候选正文后的派生/修订链。初次正文输出尚不存在时无法构造真实 candidate hash；resolver、Provider-open、seal 和 recovery 对 BODY+DRAFT 的解释也不一致。
+- 后果：下一步先建立独立 initial-draft source contract 和生产 Stage factory，再实现 exact-token streaming adapter。旧的候选派生/修订合同保持不变，避免为了初稿破坏已验证的 revision lineage。
+
+## DEC-066 本地 context route 先建立严格身份，再单独建立 exact-token 执行权
+
+- 状态：已确认，TASK-064 Phase 2D2 已落地 route identity
+- 决策：`ASSEMBLE_CONTEXT` 使用独立 source policy 和唯一严格 parser，repository 与 resolver 共享解析结果；route identity 完成后仍保持 registry 未注册，直到 repository 有消费 Phase 2B exact 双租约快照的 bound 入口。
+- 原因：现有 context assembly 是纯本地完整事务，但其旧入口只接 Stage token，不能证明调用方仍持有 route snapshot 对应的 exact Job token。把“可识别”和“可执行”分开，能避免 owner 相同但 token 已更新、cursor 已推进或 lease 已过期时误执行本地提交。
+- 后果：Phase 2D2 不改变业务事务、Stage 数量、chapter-plan 激活或 Provider 行为。Phase 2D3 负责 exact-token adapter、registry 注册和双 API real Room 证据；未知或损坏合同继续失败关闭。
+
+## DEC-067 本地 context 执行复核与业务提交必须同事务
+
+- 状态：已确认，TASK-064 Phase 2D3 已落地
+- 决策：total runner 只能通过 `ChapterContextAssemblyRepository.assembleBound` 执行 context；exact Job/Stage token、current cursor、状态、heartbeat、租约和 attempt 边界的复核必须与 context snapshot、Stage/Job 和后继 cursor 写入属于同一个 Room 事务。旧入口保留，但 registry 不调用它。
+- 原因：如果 registry 先在只读事务验证绑定快照，再结束事务调用旧的 Stage-token 入口，Job token 或 cursor 可以在两次事务之间变化，造成陈旧 runner 仍提交本地业务状态。
+- 后果：registry 可安全把 context 加入本地白名单；成功 replay 仍只读，九条 remote route保持关闭。后续 chapter-plan 和 initial draft 必须各自取得同等级别的冻结身份与 exact-token 执行证据，不能借用 context 注册权。
+
+## DEC-068 普通 chapter-plan 的长期来源冻结进 initial DRAFT，而不是依赖成功 artifact
+
+- 状态：已确认，TASK-064 Phase 2E1 审计结论
+- 决策：普通 `chapter-plan.v1` 成功后，由 plan commit 严格解析并规范化有界 scene execution plan，在同一 SQLCipher 事务中动态创建 initial DRAFT Stage，并把规范计划、plan Stage/Attempt、raw/canonical hash 与 context/progression 证据冻结到 DRAFT 的不可变 `inputSourcesJson`。plan Stage output reference 保存核对 hash 与 DRAFT Stage ID。规范计划目标不超过 48 KiB，完整 DRAFT envelope 继续遵守 64 KiB 上限。
+- 原因：成功远程输出使用的 `STREAM_DRAFT` artifact 默认 24 小时后可以清理，只保存 artifact/output reference 会使延后执行的初稿丢失计划。窗口级 `OutlineRevision` 的 CHAPTER 节点又不是章内场景合同；新增专表会带来不必要 migration 和第二套生命周期。
+- 后果：artifact 保持提交时证据并可按策略清理；initial DRAFT 获得加密、持久、可重放的请求前来源，无需 schema migration。plan 提交、DRAFT 创建、Usage/Stage/cursor 推进必须原子完成；在严格输入 route、输出合同、目的地/预算、exact-token 执行和 replay 全部通过前不得注册 plan route。
+
+## DEC-069 普通 chapter-plan route 只冻结最小请求前身份且保持未注册
+
+- 状态：已确认，TASK-064 Phase 2E2 已落地
+- 决策：`zhijuan.chapter-plan-source.v1` 在既有 plan root 上增加独立 source policy，并严格验证bundle/schema、唯一context Stage依赖、context input/policy/manifest和progression gate；不额外复制bookId、chapterId或可确定推导的contextSnapshotId。resolver新增`CHAPTER_PLAN_V1`，registry继续显式拒绝执行。
+- 原因：Stage/Job已经保存target与book，progression gate保存自哈希chapterId/index，context snapshot由context Stage确定并在Provider-open重验。再复制这些值会产生可漂移的第二份事实，且route identity本身不应冒充数据库currentness或发送权限。
+- 后果：普通plan可以被有限、严格地识别，同时仍保持零联网。后续exact-token executor必须重新读取Job/Stage/context权威事实，并在输出合同、目的地与三层预算门禁完成前保持registry关闭。
+
+## DEC-070 chapter-plan 输出采用结构合同与动态业务 expectation 双层校验
+
+- 状态：已确认，TASK-064 Phase 2E3 已落地
+- 决策：`chapter-plan.v1` 先经过48 KiB严格结构合同，再用请求前权威 expectation核对章节/context、人物、成年人虚构门禁和场景执行策略。严格相关场景至少冻结3个有序过程节点，每节点保存动作、反应、空间、身体、衣着/物品与感官变化，相关余波必填；全章节点不超过64。规范 JSON 递归排序 object key并保持数组顺序。
+- 原因：单靠 JSON schema 无法知道哪些人物已确认成年、当前章节是否应有相关场景，也无法防止模型用空节点或把字段顺序差异制造成不同 hash；单靠提示词又不能给后续 DRAFT/consistency 提供可核对的持久过程身份。
+- 后果：结构正确但身份、门禁、相关性或严格连续性不符的输出仍失败关闭；非严格场景不得伪造过程节点。该合同不调用 Provider、不提交 Stage，也不自动扩大 registry；目的地/预算、exact-token executor 和 DEC-068 原子提交仍需后续阶段完成。
+
+## DEC-071 远程 plan 接线必须先完成持久目的地确认与原子三层预算预留
+
+- 状态：已确认，TASK-064 Phase 2E4A 审计结论
+- 决策：`CHAPTER_PLAN_V1` 在目的地确认和 TASK-083 持久预算完成前继续不注册。`budgetSnapshotJson` 只是不变意图快照，不是余额或 reservation；真正 reservation 必须与 RequestIntent、Attempt 和初始 Usage 在同一事务中写入。目的地确认采用版本化 scheme/host/effective-port/protocol binding，动态校验而不是只依赖 UI 清空字段。
+- 原因：当前内存 `BudgetEngine` 没有生产调用，不能抵御进程重启或并发 Job；disclosure 字段也没有生产写入/读取。若直接接远程 plan，会留下并发超支和 host 改变后沿用旧同意的 P0 缺口。
+- 后果：实现顺序固定为目的地确认内核、持久预算 reservation、plan 请求绑定/exact-token executor、DEC-068 原子提交。正常章节不逐章打扰用户；确认按目的地复用，runner 每次无交互复核。任何前置证据缺失都在 Provider-open 前失败关闭且不创建请求事实。
+
+## DEC-072 目的地确认绑定 canonical origin、disclosure 版本与 Provider protocol
+
+- 状态：已确认，TASK-064 Phase 2E4B 已落地内核
+- 决策：目的地身份为小写 `scheme://host:effectivePort`，忽略 request path 并规范默认端口、尾斜杠与 DNS 尾点；binding hash 同时覆盖 policy/disclosure version 和 protocol ID。新连接默认未确认，接受操作用数据库当前 endpoint 计算并 CAS 写入，每次使用前动态重算。
+- 原因：path 变化没有改变数据接收方，不应反复打扰用户；host、端口、scheme、协议或说明的数据类别版本变化则会实质改变发送含义，不能沿用旧同意。仅由 UI 主动清空字段无法防止数据库竞态、迁移错误或损坏。
+- 后果：同目的地只确认一次，真实变化失败关闭并要求一次新确认。返回的 evidence 不是跨事务发送许可；后续 TASK-083 必须在预算 reservation+RequestIntent 事务中再次复核它。现有 schema v16 不变，plan route 继续未注册。
+
+## DEC-073 持久预算以不可删除 reservation 为事实源并在 Usage 唯一入口结算
+
+- 状态：已确认，TASK-083 Phase 1 设计冻结
+- 决策：schema v17 使用不可变 policy revision+CAS head 和每 Attempt 唯一 reservation；book/daily 占用聚合同范围全部非 RELEASED reservation，不增加可漂移余额计数器。候选 reservation 必须先在 RequestIntent 写事务中取得数据库写竞争权，再把自身计入三层检查，超限整笔回滚。所有 FINAL Usage 与迟到 Provider 升级统一在 `GenerationDao.recordUsage` 事务内按终值结算；UNKNOWN 保留估计，只有 Provider 明确证明未执行才 RELEASED。
+- 原因：锁外“先查余额再插入”无法证明跨连接并发安全；把结算散落到二十多个仓库会造成永久占用或重复累计。reservation 明细同时承担并发竞争、重启恢复和审计事实，策略 head 变化不能删除或重置旧用量。
+- 后果：实现必须有同库双 Room 实例竞争、跨日、重启、UNKNOWN、迟到 usage、超预留真实用量和 RELEASED 恢复测试。v16 历史 Attempt 标为 enforcement v0，只能继续本地恢复/结算，不能重新打开 Provider；因 v17 前真实 Provider 调用为0，不为旧 UNKNOWN 测试行伪造预算值。plan route 继续未注册。
+
+## DEC-074 普通 chapter-plan 的 RequestIntent 必须消费 exact 双租约快照
+
+- 状态：已确认，TASK-064 Phase 2E5A 已落地
+- 决策：普通 `CHAPTER_PLAN_V1` 的首次请求和换日替代请求只能使用数据库签发的 route snapshot 进入 bound preparation；通用 Stage-token prepare 必须拒绝普通 plan。exact Job/Stage token、current cursor、route、heartbeat 与 attempt 边界必须和 reservation、Attempt、Usage、Stage 推进在同一 Room 事务内复核。
+- 原因：route snapshot 已经证明调用方持有某一时刻的 Job+Stage 双租约。若随后只把 Stage token 交给通用 RequestIntent 入口，Job token、cursor 或 attempt 边界可以在两步之间漂移，形成 TOCTOU 和 total-runner 授权旁路。
+- 后果：普通 plan 的加密草稿可在数据库事务前创建，但任何 bound 复核或预算失败都删除新工件且数据库零写入。首章 bootstrap 旧合同保持兼容；plan route 在请求工厂、expectation、Fake执行、严格解析与DEC-068提交完成前继续未注册。
+
+## DEC-075 普通 chapter-plan 的逐章场景意图只由 arc-window v2 授权
+
+- 状态：已确认，TASK-064 Phase 2E5B 设计冻结
+- 决策：逐章 brief 显式冻结 `NOT_APPLICABLE|PLANNED`、精确相关场景数量和参与人物 ID；不可变 CHAPTER OutlineNode 是唯一权威来源。chapter-plan Stage 只消费从目标 node、当前 Story Bible、Prompt Bundle 和 context/progression 重算出的规范 expectation，并在 create/open/commit 三处比对冻结 hash。
+- 原因：全书内容呈现档或存在成年人物不能证明每章相关；让 chapter-plan 自决则无法防止模型擅自加戏、删戏或在重启后漂移。新建独立意图表会制造双事实源。
+- 后果：`arc-plan.v2`、窗口策略 v2 和 CHAPTER node schema 2 成为普通 plan 前置条件；旧 v1 数据不猜测、不静默解释为无相关场景，只能重建窗口。计划相关场景必须数量精确且覆盖全部计划参与者，未知、非人物、未确认成年、年龄缺失或未满18岁的参与者在联网前失败关闭。首章 fast-lane 保持独立。
+
 ## ADR 执行状态
 
 | ID | 问题 | 截止 |

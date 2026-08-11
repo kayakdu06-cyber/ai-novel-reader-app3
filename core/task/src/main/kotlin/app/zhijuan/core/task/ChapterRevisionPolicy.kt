@@ -64,6 +64,7 @@ enum class ChapterRevisionNeedsActionReasonV1 {
 sealed interface ChapterRevisionPolicyDecisionV1 {
     data class AcceptCandidate(
         val candidateContentHash: String,
+        val maximumAutomaticRevisions: Int,
     ) : ChapterRevisionPolicyDecisionV1
 
     class ReviseAutomatically internal constructor(
@@ -104,18 +105,16 @@ object ChapterRevisionPolicyV1 {
     const val MAXIMUM_AUTOMATIC_REVISIONS = 2
 
     fun evaluate(input: ChapterRevisionPolicyInputV1): ChapterRevisionPolicyDecisionV1 {
+        val limit = automaticRevisionLimit(input.sceneContract.mode)
         val actionableIssues = input.issues.filter {
             it.severity == ConsistencyIssueSeverity.BLOCKER ||
                 it.severity == ConsistencyIssueSeverity.MAJOR
         }
         if (actionableIssues.isEmpty()) {
-            return ChapterRevisionPolicyDecisionV1.AcceptCandidate(input.currentCandidateContentHash)
-        }
-        val limit = when (input.sceneContract.mode) {
-            ChapterSceneConsistencyModeV1.STRICT -> MAXIMUM_AUTOMATIC_REVISIONS
-            ChapterSceneConsistencyModeV1.NOT_APPLICABLE,
-            ChapterSceneConsistencyModeV1.PROPORTIONAL,
-            -> 1
+            return ChapterRevisionPolicyDecisionV1.AcceptCandidate(
+                candidateContentHash = input.currentCandidateContentHash,
+                maximumAutomaticRevisions = limit,
+            )
         }
         if (input.completedAutomaticRevisions >= limit || input.totalRevisionAttemptsUsed >= limit) {
             return ChapterRevisionPolicyDecisionV1.NeedsAction(
@@ -149,6 +148,83 @@ object ChapterRevisionPolicyV1 {
             priorCandidateContentHashes = input.candidateContentHashHistory.toList(),
             minimumBodyCodePoints = input.minimumBodyCodePoints,
         )
+    }
+
+    private fun automaticRevisionLimit(mode: ChapterSceneConsistencyModeV1): Int = when (mode) {
+        ChapterSceneConsistencyModeV1.STRICT -> MAXIMUM_AUTOMATIC_REVISIONS
+        ChapterSceneConsistencyModeV1.NOT_APPLICABLE,
+        ChapterSceneConsistencyModeV1.PROPORTIONAL,
+        -> 1
+    }
+
+    /** Stable, content-free commitment to the complete input and resulting finite route. */
+    fun routingBindingHash(input: ChapterRevisionPolicyInputV1): String {
+        val decision = evaluate(input)
+        val digest = MessageDigest.getInstance("SHA-256")
+        fun put(value: Any?) {
+            val bytes = (value?.toString() ?: "<null>").toByteArray(Charsets.UTF_8)
+            digest.update(ByteBuffer.allocate(Int.SIZE_BYTES).putInt(bytes.size).array())
+            digest.update(bytes)
+            bytes.fill(0)
+        }
+        put(POLICY_VERSION)
+        put(input.currentCandidateContentHash)
+        input.candidateContentHashHistory.forEach(::put)
+        put(input.bodyCodePointCount)
+        put(input.minimumBodyCodePoints)
+        put(input.completedAutomaticRevisions)
+        put(input.totalRevisionAttemptsUsed)
+        put(input.stageMaximumAttempts)
+        with(input.sceneContract) {
+            put(mode.name)
+            put(intimacyDetailLevel)
+            put(fadePolicy?.name)
+            put(requiredKeyProcessCoveragePercent)
+            put(fadeSubstitutionAllowed)
+            put(requiresStateContinuity)
+            put(requiresRelevantAftermath)
+            requiredProcessNodeIds.forEach(::put)
+            expectedCriteria.forEach { put(it.name) }
+            put(contractHash)
+        }
+        input.issues.sortedWith(
+            compareBy<ChapterRevisionIssueRefV1>(
+                { it.startCodePointInclusive },
+                { it.endCodePointExclusive },
+                { it.code.ordinal },
+                { it.severity.ordinal },
+                { it.issueId },
+            ),
+        ).forEach { issue ->
+            put(issue.issueId)
+            put(issue.code.name)
+            put(issue.severity.name)
+            put(issue.startCodePointInclusive)
+            put(issue.endCodePointExclusive)
+            put(issue.repairAction.name)
+            issue.relatedEntityIds.sorted().forEach(::put)
+            issue.relatedForeshadowItemIds.sorted().forEach(::put)
+            issue.relatedRequiredProcessNodeIds.sorted().forEach(::put)
+        }
+        when (decision) {
+            is ChapterRevisionPolicyDecisionV1.AcceptCandidate -> {
+                put("ACCEPT")
+                put(decision.candidateContentHash)
+            }
+            is ChapterRevisionPolicyDecisionV1.ReviseAutomatically -> {
+                put("REVISE")
+                put(decision.revisionIndex)
+                put(decision.maximumAutomaticRevisions)
+                put(decision.repairPlanHash)
+            }
+            is ChapterRevisionPolicyDecisionV1.NeedsAction -> {
+                put("NEEDS_ACTION")
+                put(decision.reason.name)
+                put(decision.automaticRevisionsUsed)
+                put(decision.automaticRevisionLimit)
+            }
+        }
+        return digest.digest().toHex()
     }
 
     fun evaluateRevisedCandidate(

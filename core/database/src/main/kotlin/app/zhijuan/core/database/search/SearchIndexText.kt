@@ -15,7 +15,9 @@ object SearchIndexText {
     fun matchExpression(query: String): String? = tokenize(query, forQuery = true)
         .distinct()
         .takeIf(List<String>::isNotEmpty)
-        ?.joinToString(" AND ")
+        // FTS3/4 treats whitespace as implicit AND on every supported Android API. Some older
+        // builds do not enable the optional parser that recognizes an explicit uppercase AND.
+        ?.joinToString(" ")
 
     private fun tokenize(
         input: String,
@@ -33,7 +35,9 @@ object SearchIndexText {
                 hanRun.forEach { point -> tokens += "c${point.toString(16)}" }
             }
             hanRun.windowed(size = 2, step = 1).forEach { pair ->
-                tokens += "g${pair[0].toString(16)}_${pair[1].toString(16)}"
+                // Keep the whole bigram alphanumeric. Android's FTS4 tokenizer may split an
+                // underscore, which would turn an adjacency test into two unrelated fragments.
+                tokens += "g${pair[0].toString(16)}x${pair[1].toString(16)}"
             }
             hanRun.clear()
         }

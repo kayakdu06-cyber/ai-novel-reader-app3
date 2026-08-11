@@ -1,10 +1,14 @@
 package app.zhijuan.core.database.generation
 
+import app.zhijuan.core.database.library.ChapterEditRebuildExecutionStepType
 import app.zhijuan.core.model.GenerationJobType
 import app.zhijuan.core.model.GenerationPhase
 import app.zhijuan.core.model.GenerationTargetType
+import kotlinx.serialization.json.int
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotEquals
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
 
@@ -20,6 +24,45 @@ class ChapterMemoryExtractionJobFactoryTest {
         assertEquals("chapter.1", stage.targetId)
         assertEquals(2, stage.maxAttempts)
         assertEquals(source(), ChapterMemoryExtractionJobFactory.parseAndVerify(stage.toEntity()))
+        assertNull(ChapterMemoryExtractionJobFactory.parseRebuildBindingIfPresent(stage.toEntity()))
+        assertFalse(stage.inputSourcesJson.contains("chapterEditRebuild"))
+        assertEquals(1, kotlinx.serialization.json.Json.parseToJsonElement(stage.inputSourcesJson)
+            .let { it as kotlinx.serialization.json.JsonObject }
+            .getValue("schemaVersion")
+            .let { it as kotlinx.serialization.json.JsonPrimitive }
+            .int)
+    }
+
+    @Test
+    fun rebuildBindingUsesStrictV2InputAndParticipatesInTheStageHash() {
+        val binding = ChapterEditRebuildStageBindingV1(
+            executionId = "rebuild-execution-${"c".repeat(64)}",
+            stableFenceHash = "d".repeat(64),
+            stepOrdinal = 1,
+            stepType = ChapterEditRebuildExecutionStepType.EDITED_MEMORY,
+            chapterIndex = 1,
+            sourceChapterVersionId = "chapter.version.1",
+            sourceContentHash = "a".repeat(64),
+        )
+        val legacy = ChapterMemoryExtractionJobFactory.create(spec()).stages.single()
+        val bound = ChapterMemoryExtractionJobFactory.create(
+            spec().copy(rebuildBinding = binding),
+        ).stages.single()
+        val entity = bound.toEntity()
+
+        assertEquals(source(), ChapterMemoryExtractionJobFactory.parseAndVerify(entity))
+        assertEquals(binding, ChapterMemoryExtractionJobFactory.parseRebuildBindingIfPresent(entity))
+        assertNotEquals(legacy.inputVersionHash, bound.inputVersionHash)
+        assertNotEquals(legacy.idempotencyKey, bound.idempotencyKey)
+        assertFalse(binding.toString().contains(binding.executionId))
+        assertFalse(binding.toString().contains(binding.stableFenceHash))
+
+        val tampered = entity.copy(
+            inputSourcesJson = entity.inputSourcesJson.replace("\"stepOrdinal\":1", "\"stepOrdinal\":2"),
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            ChapterMemoryExtractionJobFactory.parseRebuildBindingIfPresent(tampered)
+        }
     }
 
     @Test

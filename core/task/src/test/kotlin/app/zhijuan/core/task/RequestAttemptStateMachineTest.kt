@@ -25,6 +25,17 @@ class RequestAttemptStateMachineTest {
     }
 
     @Test
+    fun intentRecordedAttemptFailsRetryableWhenTheDailyBudgetPeriodExpired() {
+        assertEquals(
+            RequestAttemptStatus.FAILED_RETRYABLE,
+            RequestAttemptStateMachine.transition(
+                RequestAttemptStatus.INTENT_RECORDED,
+                AttemptEvent.DAILY_BUDGET_PERIOD_EXPIRED,
+            ),
+        )
+    }
+
+    @Test
     fun terminalAttemptCannotBeRestarted() {
         RequestAttemptStatus.entries
             .filter {

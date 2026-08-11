@@ -4,7 +4,11 @@ import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import app.zhijuan.core.database.LibraryDatabaseGuards
 import app.zhijuan.core.database.ZhijuanDatabase
+import app.zhijuan.core.database.generation.ChapterEditRebuildEditedMemoryStageCommand
+import app.zhijuan.core.database.generation.ChapterEditRebuildStageRepository
+import app.zhijuan.core.database.generation.ChapterEditRebuildTrackingStageCommand
 import app.zhijuan.core.database.generation.ChapterMemoryExtractionCommitDraft
 import app.zhijuan.core.database.generation.ChapterMemoryExtractionCommitRepository
 import app.zhijuan.core.database.generation.ChapterMemoryExtractionJobFactory
@@ -16,6 +20,10 @@ import app.zhijuan.core.database.generation.GenerationOutputValidationRepository
 import app.zhijuan.core.database.generation.GenerationStateRepository
 import app.zhijuan.core.database.generation.GenerationStreamingDraftRepository
 import app.zhijuan.core.database.generation.RequestIntentDraft
+import app.zhijuan.core.database.library.ChapterEditRebuildExecutionPrepareCommand
+import app.zhijuan.core.database.library.ChapterEditRebuildExecutionRepository
+import app.zhijuan.core.database.library.ChapterEditRebuildPlanRequest
+import app.zhijuan.core.database.library.ChapterEditRebuildPlanRepository
 import app.zhijuan.core.model.AdultStatus
 import app.zhijuan.core.model.GenerationJobStatus
 import app.zhijuan.core.model.GenerationStageStatus
@@ -67,12 +75,18 @@ class ChapterMemoryExtractionEndToEndTest {
         cleanArtifacts()
         database = Room.inMemoryDatabaseBuilder(context, ZhijuanDatabase::class.java)
             .allowMainThreadQueries()
+            .addCallback(LibraryDatabaseGuards.callback)
             .build()
             .also { it.openHelper.writableDatabase }
         states = GenerationStateRepository(database)
         drafts = GenerationStreamingDraftRepository(database, artifactStore)
         outputs = GenerationOutputValidationRepository(database, artifactStore)
         seedBookChapterAndEntity()
+        BudgetedGenerationTestSupport.seedBudgetedRequestEnvironment(
+            database = database,
+            bookId = BOOK_ID,
+            connectionId = "connection.memory",
+        )
     }
 
     @After
@@ -132,6 +146,7 @@ class ChapterMemoryExtractionEndToEndTest {
         assertEquals(1L, scalarLong("SELECT COUNT(*) FROM chapter_summary"))
         assertEquals(2L, scalarLong("SELECT COUNT(*) FROM entity_event"))
         assertEquals(2L, scalarLong("SELECT COUNT(*) FROM canon_fact"))
+        assertEquals(5L, scalarLong("SELECT COUNT(*) FROM memory_search_document"))
         assertEquals(VERSION_ID, scalarString("SELECT chapter_version_id FROM chapter_summary"))
         assertEquals(VERSION_ID, scalarString("SELECT source_chapter_version_id FROM entity_event LIMIT 1"))
         assertEquals(VERSION_ID, scalarString("SELECT source_chapter_version_id FROM canon_fact LIMIT 1"))
@@ -141,6 +156,123 @@ class ChapterMemoryExtractionEndToEndTest {
         assertEquals("FINAL", scalarString("SELECT status FROM usage_ledger WHERE attempt_id = 'attempt.memory.valid'"))
         assertEquals(200L, scalarLong("SELECT total_tokens FROM usage_ledger WHERE attempt_id = 'attempt.memory.valid'"))
         assertTrue(requireNotNull(scalarString("SELECT summary_json FROM chapter_summary")).contains("衣袖仍有裂口"))
+    }
+
+    @Test
+    fun completedBoundMemoryStageAuthorizesTheFirstTrackingStage() = runBlocking {
+        val editedSource = replaceCurrentChapterVersionForRebuild()
+        val plan = ChapterEditRebuildPlanRepository(database).plan(
+            ChapterEditRebuildPlanRequest(
+                bookId = BOOK_ID,
+                editedChapterId = CHAPTER_ID,
+                editedVersionId = editedSource.chapterVersionId,
+            ),
+        )
+        val execution = ChapterEditRebuildExecutionRepository(database).prepare(
+            ChapterEditRebuildExecutionPrepareCommand(
+                plan = plan,
+                rewindId = "rewind.memory.e2e",
+                preparedAt = 120L,
+            ),
+        )
+        val rebuild = ChapterEditRebuildStageRepository(database)
+        val memoryStage = rebuild.createEditedMemoryStage(
+            ChapterEditRebuildEditedMemoryStageCommand(
+                executionId = execution.executionId,
+                userIntentJson = "{\"mode\":\"automatic\"}",
+                budgetSnapshotJson = "{\"mode\":\"fixture\"}",
+                createdAt = 130L,
+            ),
+        )
+        states.transitionJob(
+            memoryStage.jobId,
+            GenerationJobStatus.CREATED,
+            JobEvent.VALIDATION_PASSED,
+            131L,
+        )
+        states.transitionStage(
+            memoryStage.stageId,
+            GenerationStageStatus.PENDING,
+            StageEvent.DEPENDENCIES_SATISFIED,
+            131L,
+        )
+        states.acquireJobLease(memoryStage.jobId, "worker.rebuild.memory", 132L)
+        states.acquireStageLease(memoryStage.stageId, "worker.rebuild.memory.stage", 132L)
+        val inputVersionHash = requireNotNull(
+            scalarString(
+                "SELECT input_version_hash FROM generation_stage WHERE stage_id = '${memoryStage.stageId}'",
+            ),
+        )
+        val runtime = ExtractionRuntime(
+            jobId = memoryStage.jobId,
+            stageId = memoryStage.stageId,
+            source = editedSource,
+            inputVersionHash = inputVersionHash,
+        )
+        val prepared = prepare(runtime, "attempt.memory.rebuild", "ledger.memory.rebuild", 133L)
+        val accepted = coordinator(140L).execute(
+            persistedRequest = prepared,
+            adapter = MemoryFakeAdapter(
+                events = successfulEvents(
+                    validMemoryJson(editedSource.chapterVersionId, editedSource.chapterContentHash),
+                ),
+            ),
+            profile = profile(),
+            boundRequest = request(runtime, "attempt.memory.rebuild", EDITED_CHAPTER_CONTENT),
+        )
+        assertTrue(accepted is ChapterMemoryExtractionResult.Accepted)
+        accepted as ChapterMemoryExtractionResult.Accepted
+        val derived = ChapterMemoryExtractionPersistenceMapper.map(
+            memory = accepted.memory,
+            spec = ChapterMemoryExtractionMappingSpec(
+                bookId = BOOK_ID,
+                generationStageId = runtime.stageId,
+                modelSnapshotJson = MODEL_SNAPSHOT,
+                createdAt = 160L,
+            ),
+        )
+        ChapterMemoryExtractionCommitRepository(database, artifactStore).commit(
+            accepted.commitPermit,
+            ChapterMemoryExtractionCommitDraft(
+                source = editedSource,
+                extractionContentHash = derived.extractionContentHash,
+                summary = derived.summary,
+                entityEvents = derived.entityEvents,
+                canonFacts = derived.canonFacts,
+                usage = FinalUsageCommit(
+                    source = UsageSource.PROVIDER_REPORTED,
+                    inputTokens = 120L,
+                    outputTokens = 80L,
+                    cachedTokens = null,
+                    reasoningTokens = null,
+                    totalTokens = 200L,
+                ),
+                committedAt = 160L,
+            ),
+        )
+
+        val tracking = rebuild.createFirstTrackingStage(
+            ChapterEditRebuildTrackingStageCommand(
+                executionId = execution.executionId,
+                userIntentJson = "{\"mode\":\"automatic\"}",
+                budgetSnapshotJson = "{\"mode\":\"fixture\"}",
+                createdAt = 170L,
+            ),
+        )
+        val trackingSources = requireNotNull(
+            scalarString(
+                "SELECT input_sources_json FROM generation_stage WHERE stage_id = '${tracking.stageId}'",
+            ),
+        )
+
+        assertEquals(2, tracking.stepOrdinal)
+        assertTrue(trackingSources.contains("\"stepType\":\"TRACKING\""))
+        assertTrue(trackingSources.contains("\"sourceChapterVersionId\":\"${editedSource.chapterVersionId}\""))
+        assertEquals(2L, scalarLong("SELECT COUNT(*) FROM generation_job"))
+        assertEquals(2L, scalarLong("SELECT COUNT(*) FROM generation_stage"))
+        assertEquals("COMPLETED", scalarString("SELECT status FROM generation_job WHERE job_id = '${runtime.jobId}'"))
+        assertEquals("SUCCEEDED", scalarString("SELECT status FROM generation_stage WHERE stage_id = '${runtime.stageId}'"))
+        assertEquals("FINAL", scalarString("SELECT status FROM usage_ledger WHERE attempt_id = 'attempt.memory.rebuild'"))
     }
 
     @Test
@@ -255,13 +387,20 @@ class ChapterMemoryExtractionEndToEndTest {
             protocolSnapshotJson = "{\"protocol\":\"fixture\"}",
             inputHash = runtime.inputVersionHash,
             streamDraftRef = null,
-            dailyPeriodKey = "2026-08-03|Asia/Shanghai",
             createdAt = createdAt,
+        ),
+        BudgetedGenerationTestSupport.budgetedDraft(
+            attemptId = attemptId,
+            connectionId = "connection.memory",
         ),
         requireNotNull(states.findStage(runtime.stageId)?.leaseToken),
     )
 
-    private fun request(runtime: ExtractionRuntime, attemptId: String) =
+    private fun request(
+        runtime: ExtractionRuntime,
+        attemptId: String,
+        chapterContent: String = CHAPTER_CONTENT,
+    ) =
         ChapterMemoryExtractionRequestFactory.create(
             ChapterMemoryExtractionRequestSpec(
                 requestId = "request.$attemptId",
@@ -273,7 +412,7 @@ class ChapterMemoryExtractionEndToEndTest {
                 sourceChapterContentHash = runtime.source.chapterContentHash,
                 chapterId = runtime.source.chapterId,
                 chapterIndex = runtime.source.chapterIndex,
-                chapterContent = CHAPTER_CONTENT,
+                chapterContent = chapterContent,
                 knownEntities = listOf(
                     ChapterMemoryKnownEntity(
                         entityId = "char.lin",
@@ -311,11 +450,14 @@ class ChapterMemoryExtractionEndToEndTest {
         ProviderStreamEvent.Completed(ProviderFinishReason.STOP),
     )
 
-    private fun validMemoryJson(): String = """
+    private fun validMemoryJson(
+        sourceChapterVersionId: String = VERSION_ID,
+        sourceChapterContentHash: String = CONTENT_HASH,
+    ): String = """
         {
           "schemaVersion":1,
-          "sourceChapterVersionId":"$VERSION_ID",
-          "sourceChapterContentHash":"$CONTENT_HASH",
+          "sourceChapterVersionId":"$sourceChapterVersionId",
+          "sourceChapterContentHash":"$sourceChapterContentHash",
           "chapterId":"$CHAPTER_ID",
           "chapterIndex":1,
           "summary":{
@@ -363,6 +505,24 @@ class ChapterMemoryExtractionEndToEndTest {
         )
         sql.execSQL(
             """
+            INSERT INTO story_bible_revision (
+                bible_revision_id, book_id, revision_no, parent_revision_id, source, schema_version,
+                content_control_schema_version, payload_json, content_hash, generation_stage_id, created_at
+            ) VALUES (
+                'bible.memory.1', '$BOOK_ID', 1, NULL, 'USER', 1, 1, '{}',
+                'bible-memory-hash', NULL, 2
+            )
+            """.trimIndent(),
+        )
+        sql.execSQL(
+            """
+            INSERT INTO book_memory_head (
+                book_id, current_bible_revision_id, current_outline_revision_id, updated_at
+            ) VALUES ('$BOOK_ID', 'bible.memory.1', NULL, 2)
+            """.trimIndent(),
+        )
+        sql.execSQL(
+            """
             INSERT INTO chapter (
                 chapter_id, book_id, chapter_index, planned_title, display_title, status,
                 current_version_id, consistency_status, created_at, updated_at
@@ -387,9 +547,39 @@ class ChapterMemoryExtractionEndToEndTest {
             ) VALUES (
                 'char.lin', '$BOOK_ID', 'CHARACTER', '林澜', '[]',
                 '{"ageYears":22,"adultStatus":"CONFIRMED_ADULT","realIdentifiablePerson":false}',
-                'CONFIRMED_ADULT', 22, NULL, 4, 4, NULL
+                'CONFIRMED_ADULT', 22, 'bible.memory.1', 4, 4, NULL
             )
             """.trimIndent(),
+        )
+    }
+
+    private fun replaceCurrentChapterVersionForRebuild(): ChapterMemoryExtractionSourceV1 {
+        val editedHash = sha256(EDITED_CHAPTER_CONTENT)
+        database.openHelper.writableDatabase.execSQL(
+            """
+            INSERT INTO chapter_version (
+                chapter_version_id, chapter_id, version_no, content, character_count, content_hash,
+                source, parent_version_id, generation_stage_id, model_snapshot_json, created_at
+            ) VALUES (
+                '$EDITED_VERSION_ID', '$CHAPTER_ID', 2, ?, ?, '$editedHash',
+                'USER_EDIT', '$VERSION_ID', NULL, NULL, 100
+            )
+            """.trimIndent(),
+            arrayOf<Any>(EDITED_CHAPTER_CONTENT, EDITED_CHAPTER_CONTENT.length),
+        )
+        database.openHelper.writableDatabase.execSQL(
+            """
+            UPDATE chapter
+            SET current_version_id = '$EDITED_VERSION_ID', status = 'EDITED',
+                consistency_status = 'UNKNOWN', updated_at = 100
+            WHERE chapter_id = '$CHAPTER_ID'
+            """.trimIndent(),
+        )
+        return ChapterMemoryExtractionSourceV1(
+            chapterVersionId = EDITED_VERSION_ID,
+            chapterContentHash = editedHash,
+            chapterId = CHAPTER_ID,
+            chapterIndex = 1,
         )
     }
 
@@ -451,7 +641,9 @@ class ChapterMemoryExtractionEndToEndTest {
         const val BOOK_ID = "book.memory"
         const val CHAPTER_ID = "chapter.memory.1"
         const val VERSION_ID = "version.chapter.1.1"
+        const val EDITED_VERSION_ID = "version.chapter.1.2.rebuild"
         const val CHAPTER_CONTENT = "林澜从档案夹层取出原始纸页。追赶中她的右臂擦伤，衣袖被划破。回到临时住处后，她收到一条只提及原始纸页的匿名警告，确认有人正在追查这份证据。"
+        const val EDITED_CHAPTER_CONTENT = "林澜从档案夹层取出原始纸页。追赶中她的右臂擦伤，衣袖被划破。回到临时住处后，她锁好证据并确认匿名警告来自追查者。"
         const val MODEL_SNAPSHOT = "{\"model\":\"local-fake\"}"
         val CONTENT_HASH: String = sha256(CHAPTER_CONTENT)
 

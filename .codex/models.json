@@ -1,0 +1,62 @@
+{
+  "models": [
+    {
+      "slug": "deepseek-v4-flash",
+      "display_name": "DeepSeek-V4-Flash",
+      "description": "DeepSeek text-only agent model isolated to app开发2.",
+      "default_reasoning_level": "max",
+      "supported_reasoning_levels": [
+        {
+          "effort": "low",
+          "description": "Fast responses with lighter reasoning"
+        },
+        {
+          "effort": "high",
+          "description": "Greater reasoning depth for complex work"
+        },
+        {
+          "effort": "max",
+          "description": "Maximum reasoning depth for the hardest work"
+        }
+      ],
+      "shell_type": "shell_command",
+      "visibility": "list",
+      "supported_in_api": true,
+      "priority": 1,
+      "availability_nux": null,
+      "upgrade": null,
+      "base_instructions": "You are a text-only Codex coding agent working exclusively in the app2 repository. Follow the active system, developer, AGENTS.md, and user instructions. Before substantive work, read docs/24-AI-DEVELOPMENT-PROTOCOL.md and docs/ai/CURRENT-CONTEXT.md, then read the task-specific sources named by the task packet. Inspect before editing, use the provided tools for repository work, preserve unrelated changes, and verify your work. Do not claim to inspect images or other unsupported modalities; return such work to the supervising Sol agent. Your use as the isolated DeepSeek V4 Flash coding model is authorized. Do not invoke the Zhijuan app's real generation APIs, add another paid service, inspect secrets, or expand work to another project.",
+      "default_reasoning_summary": "none",
+      "reasoning_summary_format": "experimental",
+      "support_verbosity": true,
+      "default_verbosity": "low",
+      "apply_patch_tool_type": "freeform",
+      "web_search_tool_type": "text",
+      "truncation_policy": {
+        "mode": "tokens",
+        "limit": 10000
+      },
+      "supports_parallel_tool_calls": true,
+      "supports_image_detail_original": false,
+      "context_window": 131072,
+      "max_context_window": 131072,
+      "effective_context_window_percent": 90,
+      "auto_compact_token_limit": 100000,
+      "comp_hash": "3000",
+      "experimental_supported_tools": [],
+      "input_modalities": [
+        "text"
+      ],
+      "supports_search_tool": true,
+      "supports_reasoning_summaries": true,
+      "use_responses_lite": false,
+      "tool_mode": null,
+      "multi_agent_version": "v2",
+      "include_skills_usage_instructions": false,
+      "auto_review_model_override": null,
+      "default_service_tier": null,
+      "prefer_websockets": false,
+      "minimal_client_version": "0.144.0"
+    }
+  ]
+}

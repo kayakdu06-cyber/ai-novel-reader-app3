@@ -84,6 +84,8 @@ object ExternalRequestRetryPolicy {
         return when (context.code) {
             StandardErrorCode.NETWORK_OFFLINE -> networkOffline(context)
             StandardErrorCode.DNS_FAILED -> retryOnlyWhenNotSent(context, baseDelayMillis = 1_000)
+            StandardErrorCode.DAILY_BUDGET_PERIOD_EXPIRED_BEFORE_SEND ->
+                retryOnlyWhenNotSent(context, baseDelayMillis = 0)
             StandardErrorCode.RATE_LIMITED -> retryOnlyWhenRejected(context, baseDelayMillis = 2_000)
             StandardErrorCode.SERVER_OVERLOADED -> retryOnlyWhenRejected(context, baseDelayMillis = 2_000)
             StandardErrorCode.STREAM_INTERRUPTED -> boundedRetry(context, baseDelayMillis = 1_000)

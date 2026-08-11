@@ -5,6 +5,19 @@ import app.zhijuan.core.database.ZhijuanDatabase
 import app.zhijuan.core.database.memory.ContextSnapshotEntity
 import app.zhijuan.core.database.memory.OutlineNodeEntity
 import app.zhijuan.core.database.memory.OutlineRevisionEntity
+import app.zhijuan.core.database.search.CanonFactSourceV1
+import app.zhijuan.core.database.search.ChapterSummarySourceV1
+import app.zhijuan.core.database.search.EntityEventSourceV1
+import app.zhijuan.core.database.search.ForeshadowSourceV1
+import app.zhijuan.core.database.search.MemoryContextRouteSelectionItemV1
+import app.zhijuan.core.database.search.MemoryContextRouteSelectionRepositoryV1
+import app.zhijuan.core.database.search.MemoryContextRouteSelectionResultV1
+import app.zhijuan.core.database.search.MemoryContextRouteV1
+import app.zhijuan.core.database.search.MemoryContextSelectionStatusV1
+import app.zhijuan.core.database.search.MemorySearchBackfillRepositoryV1
+import app.zhijuan.core.database.search.MemorySearchSourceTypeV1
+import app.zhijuan.core.database.search.StoryEntitySourceV1
+import app.zhijuan.core.database.search.TimelineEventSourceV1
 import app.zhijuan.core.model.CanonLevel
 import app.zhijuan.core.model.DerivedDataStatus
 import app.zhijuan.core.model.GenerationJobStatus
@@ -37,6 +50,19 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
+
+/**
+ * Exact-token chapter-context execution entry for a Phase 2B bound route snapshot. The
+ * implementation must revalidate the persisted Job/Stage tokens, cursor, status, attempt bounds,
+ * operation time and lease expiry inside the same Room transaction that commits business state,
+ * and must never create attempts or open providers.
+ */
+fun interface ChapterContextAssemblyBoundExecutorV1 {
+    suspend fun assembleBound(
+        snapshot: GenerationRunnerCurrentStageRouteSnapshot,
+        assembledAt: Long,
+    ): PersistedChapterContextAssemblyResult
+}
 
 data class ReadyChapterContext(
     val contextSnapshotId: String,
@@ -72,12 +98,15 @@ sealed interface PersistedChapterContextAssemblyResult {
 /**
  * Builds a chapter context only from current persisted sources. This local stage creates no
  * request-attempt or usage rows. The immutable manifest contains enough selected content to
- * reproduce the exact Provider payload without retaining a second mutable copy.
+ * reproduce the exact Provider payload without retaining a second mutable copy. Besides the
+ * legacy [assemble] entry, [assembleBound] executes the exact Phase 2B bound route snapshot and
+ * revalidates both persisted lease tokens, cursor, status, attempt bounds, time and expiry inside
+ * the same transaction before reusing the shared assembly and commit path.
  */
 class ChapterContextAssemblyRepository(
     private val database: ZhijuanDatabase,
     private val leasePolicy: GenerationLeasePolicy = GenerationLeasePolicy(),
-) {
+) : ChapterContextAssemblyBoundExecutorV1 {
     suspend fun assemble(
         stageId: String,
         leaseToken: GenerationLeaseToken,
@@ -87,158 +116,248 @@ class ChapterContextAssemblyRepository(
         require(assembledAt >= 0L) { "Chapter-context assembly time is invalid." }
         return database.withTransaction {
             val generation = database.generationDao()
-            val memory = database.memoryDao()
             val stage = requireNotNull(generation.findStage(stageId)) {
                 "Chapter-context stage does not exist."
             }
             val job = requireNotNull(generation.findJob(stage.jobId)) {
                 "Chapter-context job does not exist."
             }
+            assembleInternal(stage, job, leaseToken, assembledAt)
+        }
+    }
+
+    /**
+     * Bound execution entry for the exact [GenerationRunnerCurrentStageRouteSnapshot] of a
+     * [GenerationRunnerStageRoute.CHAPTER_CONTEXT_ASSEMBLY_V1] stage. The persisted Job/Stage rows
+     * are re-read and every exact-token, cursor, status, attempt-bound, time and lease-expiry fact
+     * is revalidated inside the same Room transaction that commits the shared assembly path, so
+     * there is no read-then-write window between revalidation and business commit. A stage already
+     * SUCCEEDED replays its durable snapshot without writing anything again.
+     */
+    override suspend fun assembleBound(
+        snapshot: GenerationRunnerCurrentStageRouteSnapshot,
+        assembledAt: Long,
+    ): PersistedChapterContextAssemblyResult {
+        require(snapshot.route == GenerationRunnerStageRoute.CHAPTER_CONTEXT_ASSEMBLY_V1) {
+            "bound execution route is not the chapter-context assembly route."
+        }
+        val lease = snapshot.executionLease
+        require(
+            lease.jobStatus == GenerationJobStatus.RUNNING &&
+                lease.stageStatus == GenerationStageStatus.PREPARING &&
+                lease.jobLeaseToken.ownerId == lease.stageLeaseToken.ownerId,
+        ) { "bound execution snapshot is not executable." }
+        require(assembledAt >= 0L) { "bound execution time is invalid." }
+        return database.withTransaction {
+            val generation = database.generationDao()
+            val stage = requireNotNull(generation.findStage(snapshot.executionLease.stageId)) {
+                "bound execution stage does not exist."
+            }
+            val job = requireNotNull(generation.findJob(stage.jobId)) {
+                "bound execution job does not exist."
+            }
+            require(snapshot.executionLease.jobId == stage.jobId) {
+                "bound execution snapshot job identity is inconsistent."
+            }
             if (stage.status == GenerationStageStatus.SUCCEEDED) {
                 return@withTransaction PersistedChapterContextAssemblyResult.Ready(
                     replaySucceeded(stage, job),
                 )
             }
-            require(
-                stage.phase == GenerationPhase.ASSEMBLE_CONTEXT &&
-                    stage.targetType == GenerationTargetType.CHAPTER &&
-                    job.jobType == GenerationJobType.CONTINUE_BOOK &&
-                    job.promptBundleVersion == PromptBundleCatalogV1.BUNDLE_VERSION,
-            ) { "Chapter-context stage contract is invalid." }
-            require(stage.status == GenerationStageStatus.PREPARING) {
-                "Chapter-context assembly can only run from PREPARING."
-            }
-            require(
-                job.status in setOf(GenerationJobStatus.RUNNING, GenerationJobStatus.PAUSING) &&
-                    job.currentStageId == stage.stageId,
-            ) { "Chapter-context job is not running this stage." }
-            requireActiveLeases(stage, job, leaseToken, assembledAt)
-            require(sha256(stage.inputSourcesJson) == stage.inputVersionHash) {
-                "Chapter-context frozen input hash is inconsistent."
-            }
-            ChapterProgressionGateRepository(database).requireContextAssemblyAllowed(stage, job)
+            requireBoundExecutionEvidence(stage, job, snapshot, assembledAt)
+            assembleInternal(stage, job, snapshot.executionLease.stageLeaseToken, assembledAt)
+        }
+    }
 
-            val frozen = parseFrozenInput(stage)
-            val chapter = requireNotNull(database.libraryDao().findChapter(stage.targetId)) {
-                "Chapter-context target chapter is missing."
-            }
-            require(chapter.bookId == job.bookId && chapter.chapterIndex == frozen.targetChapterIndex) {
-                "Chapter-context target changed after job creation."
-            }
-            val bundle = PromptBundleBindingRepository(database).bindForBook(job.bookId)
-            require(bundle.bindingHash == frozen.promptBindingHash) {
-                "Chapter-context Prompt Bundle binding is stale."
-            }
-            val sources = loadAuthoritativeSources(job.bookId, chapter.chapterIndex)
-            val candidates = buildCandidates(bundle, frozen, sources)
-            return@withTransaction when (
-                val assembled = ChapterContextBudgetPolicyV1.assemble(
-                    targetChapterIndex = chapter.chapterIndex,
-                    budget = frozen.budget,
-                    candidates = candidates,
+    /**
+     * Shared single-transaction assembly and commit path used by both [assemble] and
+     * [assembleBound]. It never opens its own transaction and never creates attempts or providers.
+     */
+    private suspend fun assembleInternal(
+        stage: GenerationStageEntity,
+        job: GenerationJobEntity,
+        leaseToken: GenerationLeaseToken,
+        assembledAt: Long,
+    ): PersistedChapterContextAssemblyResult {
+        val generation = database.generationDao()
+        val memory = database.memoryDao()
+        if (stage.status == GenerationStageStatus.SUCCEEDED) {
+            return PersistedChapterContextAssemblyResult.Ready(replaySucceeded(stage, job))
+        }
+        require(
+            stage.phase == GenerationPhase.ASSEMBLE_CONTEXT &&
+                stage.targetType == GenerationTargetType.CHAPTER &&
+                job.jobType == GenerationJobType.CONTINUE_BOOK &&
+                job.promptBundleVersion == PromptBundleCatalogV1.BUNDLE_VERSION,
+        ) { "Chapter-context stage contract is invalid." }
+        require(stage.status == GenerationStageStatus.PREPARING) {
+            "Chapter-context assembly can only run from PREPARING."
+        }
+        require(
+            job.status in setOf(GenerationJobStatus.RUNNING, GenerationJobStatus.PAUSING) &&
+                job.currentStageId == stage.stageId,
+        ) { "Chapter-context job is not running this stage." }
+        requireActiveLeases(stage, job, leaseToken, assembledAt)
+        require(sha256(stage.inputSourcesJson) == stage.inputVersionHash) {
+            "Chapter-context frozen input hash is inconsistent."
+        }
+        ChapterProgressionGateRepository(database).requireContextAssemblyAllowed(stage, job)
+
+        val frozen = parseFrozenInput(stage)
+        val chapter = requireNotNull(database.libraryDao().findChapter(stage.targetId)) {
+            "Chapter-context target chapter is missing."
+        }
+        require(chapter.bookId == job.bookId && chapter.chapterIndex == frozen.targetChapterIndex) {
+            "Chapter-context target changed after job creation."
+        }
+        val bundle = PromptBundleBindingRepository(database).bindForBook(job.bookId)
+        require(bundle.bindingHash == frozen.promptBindingHash) {
+            "Chapter-context Prompt Bundle binding is stale."
+        }
+        val searchBackfill = MemorySearchBackfillRepositoryV1(database)
+        searchBackfill.ensureReady(job.bookId, assembledAt)
+        var sources = loadAuthoritativeSources(
+            bookId = job.bookId,
+            targetChapterIndex = chapter.chapterIndex,
+            userAddition = frozen.userAddition,
+        )
+        if (sources.memorySelection.indexRebuildRequired) {
+            searchBackfill.rebuild(job.bookId, assembledAt)
+            sources = loadAuthoritativeSources(
+                bookId = job.bookId,
+                targetChapterIndex = chapter.chapterIndex,
+                userAddition = frozen.userAddition,
+            )
+        }
+        val memoryBlockReason = when {
+            sources.memorySelection.status == MemoryContextSelectionStatusV1.MANDATORY_OVERFLOW ->
+                ChapterContextBlockReason.MANDATORY_MEMORY_SELECTION_EXCEEDS_LIMIT
+
+            sources.memorySelection.indexRebuildRequired ->
+                ChapterContextBlockReason.MEMORY_SEARCH_INDEX_INVALID
+
+            else -> null
+        }
+        if (memoryBlockReason != null) {
+            val error = memoryBlockReason.toStandardErrorCode()
+            persistBlocked(stage, job, leaseToken, assembledAt, memoryBlockReason, error)
+            return PersistedChapterContextAssemblyResult.Blocked(
+                reason = memoryBlockReason,
+                standardErrorCode = error,
+                effectiveContextLimitTokens = frozen.budget.contextLimitTokens,
+                inputBudgetTokens = null,
+                requiredEstimatedTokens = null,
+                missingKinds = emptySet(),
+            )
+        }
+        val candidates = buildCandidates(bundle, frozen, sources)
+        return when (
+            val assembled = ChapterContextBudgetPolicyV1.assemble(
+                targetChapterIndex = chapter.chapterIndex,
+                budget = frozen.budget,
+                candidates = candidates,
+            )
+        ) {
+            is ChapterContextAssemblyResult.Blocked -> {
+                val error = assembled.reason.toStandardErrorCode()
+                persistBlocked(stage, job, leaseToken, assembledAt, assembled.reason, error)
+                PersistedChapterContextAssemblyResult.Blocked(
+                    reason = assembled.reason,
+                    standardErrorCode = error,
+                    effectiveContextLimitTokens = assembled.effectiveContextLimitTokens,
+                    inputBudgetTokens = assembled.inputBudgetTokens,
+                    requiredEstimatedTokens = assembled.requiredEstimatedTokens,
+                    missingKinds = assembled.missingKinds,
                 )
-            ) {
-                is ChapterContextAssemblyResult.Blocked -> {
-                    val error = assembled.reason.toStandardErrorCode()
-                    persistBlocked(stage, job, leaseToken, assembledAt, assembled.reason, error)
-                    PersistedChapterContextAssemblyResult.Blocked(
-                        reason = assembled.reason,
-                        standardErrorCode = error,
-                        effectiveContextLimitTokens = assembled.effectiveContextLimitTokens,
-                        inputBudgetTokens = assembled.inputBudgetTokens,
-                        requiredEstimatedTokens = assembled.requiredEstimatedTokens,
-                        missingKinds = assembled.missingKinds,
-                    )
-                }
-                is ChapterContextAssemblyResult.Ready -> {
-                    val next = requireNextPlanStage(stage, job)
-                    val manifest = enrichManifest(
-                        policyManifest = assembled.sourceManifestJson,
-                        stage = stage,
-                        frozen = frozen,
-                        sources = sources,
-                    )
-                    val snapshotId = deterministicSnapshotId(job.bookId, stage.stageId)
-                    val snapshot = ContextSnapshotEntity(
-                        contextSnapshotId = snapshotId,
-                        bookId = job.bookId,
-                        targetChapterId = chapter.chapterId,
-                        targetChapterIndex = chapter.chapterIndex,
-                        generationStageId = stage.stageId,
-                        sourceManifestJson = manifest,
-                        contentHash = assembled.contentHash,
-                        status = DerivedDataStatus.VALID,
-                        createdAt = assembledAt,
-                        updatedAt = assembledAt,
-                    )
-                    val manifestHash = sha256(manifest)
-                    val output = outputReference(snapshot, next.stageId, assembled, manifestHash)
-                    check(
-                        GenerationStageStateMachine.transition(
-                            stage.status,
-                            StageEvent.LOCAL_OUTPUT_READY,
-                        ) == GenerationStageStatus.COMMITTING,
-                    )
-                    generation.transitionStage(
+            }
+            is ChapterContextAssemblyResult.Ready -> {
+                val next = requireNextPlanStage(stage, job)
+                val manifest = enrichManifest(
+                    policyManifest = assembled.sourceManifestJson,
+                    stage = stage,
+                    frozen = frozen,
+                    sources = sources,
+                )
+                val snapshotId = deterministicSnapshotId(job.bookId, stage.stageId)
+                val snapshot = ContextSnapshotEntity(
+                    contextSnapshotId = snapshotId,
+                    bookId = job.bookId,
+                    targetChapterId = chapter.chapterId,
+                    targetChapterIndex = chapter.chapterIndex,
+                    generationStageId = stage.stageId,
+                    sourceManifestJson = manifest,
+                    contentHash = assembled.contentHash,
+                    status = DerivedDataStatus.VALID,
+                    createdAt = assembledAt,
+                    updatedAt = assembledAt,
+                )
+                val manifestHash = sha256(manifest)
+                val output = outputReference(snapshot, next.stageId, assembled, manifestHash)
+                check(
+                    GenerationStageStateMachine.transition(
+                        stage.status,
+                        StageEvent.LOCAL_OUTPUT_READY,
+                    ) == GenerationStageStatus.COMMITTING,
+                )
+                generation.transitionStage(
+                    stageId = stage.stageId,
+                    expectedStatus = GenerationStageStatus.PREPARING,
+                    event = StageEvent.LOCAL_OUTPUT_READY,
+                    updatedAt = assembledAt,
+                    leaseToken = leaseToken,
+                    leasePolicy = leasePolicy,
+                )
+                memory.insertContextSnapshot(snapshot)
+                if (
+                    generation.compareAndCommitStageOutput(
                         stageId = stage.stageId,
-                        expectedStatus = GenerationStageStatus.PREPARING,
-                        event = StageEvent.LOCAL_OUTPUT_READY,
+                        leaseOwnerId = leaseToken.ownerId,
+                        leaseAcquiredAt = leaseToken.acquiredAt,
+                        outputReferenceJson = output,
                         updatedAt = assembledAt,
-                        leaseToken = leaseToken,
-                        leasePolicy = leasePolicy,
-                    )
-                    memory.insertContextSnapshot(snapshot)
-                    if (
-                        generation.compareAndCommitStageOutput(
-                            stageId = stage.stageId,
-                            leaseOwnerId = leaseToken.ownerId,
-                            leaseAcquiredAt = leaseToken.acquiredAt,
-                            outputReferenceJson = output,
-                            updatedAt = assembledAt,
-                        ) != 1
-                    ) {
-                        throw StaleGenerationStateException(
-                            "Chapter-context commit lost the current stage lease.",
-                        )
-                    }
-                    check(
-                        GenerationStageStateMachine.transition(
-                            next.status,
-                            StageEvent.DEPENDENCIES_SATISFIED,
-                        ) == GenerationStageStatus.READY,
-                    )
-                    val stageAdvanced = generation.compareAndSetStageStatus(
-                        stageId = next.stageId,
-                        expectedStatus = GenerationStageStatus.PENDING,
-                        nextStatus = GenerationStageStatus.READY,
-                        errorCode = null,
-                        nextRetryAt = null,
-                        updatedAt = assembledAt,
-                    )
-                    val jobAdvanced = if (job.status == GenerationJobStatus.PAUSING) {
-                        generation.compareAndPauseJobAfterStage(
-                            jobId = job.jobId,
-                            expectedCurrentStageId = stage.stageId,
-                            nextStageId = next.stageId,
-                            updatedAt = assembledAt,
-                        )
-                    } else {
-                        generation.compareAndAdvanceJobStage(
-                            jobId = job.jobId,
-                            expectedCurrentStageId = stage.stageId,
-                            nextStageId = next.stageId,
-                            updatedAt = assembledAt,
-                        )
-                    }
-                    if (stageAdvanced != 1 || jobAdvanced != 1) {
-                        throw StaleGenerationStateException(
-                            "Chapter-plan activation lost a concurrent update.",
-                        )
-                    }
-                    PersistedChapterContextAssemblyResult.Ready(
-                        readyResult(snapshot, next.stageId, assembled.providerPayloadJson, output, replayed = false),
+                    ) != 1
+                ) {
+                    throw StaleGenerationStateException(
+                        "Chapter-context commit lost the current stage lease.",
                     )
                 }
+                check(
+                    GenerationStageStateMachine.transition(
+                        next.status,
+                        StageEvent.DEPENDENCIES_SATISFIED,
+                    ) == GenerationStageStatus.READY,
+                )
+                val stageAdvanced = generation.compareAndSetStageStatus(
+                    stageId = next.stageId,
+                    expectedStatus = GenerationStageStatus.PENDING,
+                    nextStatus = GenerationStageStatus.READY,
+                    errorCode = null,
+                    nextRetryAt = null,
+                    updatedAt = assembledAt,
+                )
+                val jobAdvanced = if (job.status == GenerationJobStatus.PAUSING) {
+                    generation.compareAndPauseJobAfterStage(
+                        jobId = job.jobId,
+                        expectedCurrentStageId = stage.stageId,
+                        nextStageId = next.stageId,
+                        updatedAt = assembledAt,
+                    )
+                } else {
+                    generation.compareAndAdvanceJobStage(
+                        jobId = job.jobId,
+                        expectedCurrentStageId = stage.stageId,
+                        nextStageId = next.stageId,
+                        updatedAt = assembledAt,
+                    )
+                }
+                if (stageAdvanced != 1 || jobAdvanced != 1) {
+                    throw StaleGenerationStateException(
+                        "Chapter-plan activation lost a concurrent update.",
+                    )
+                }
+                PersistedChapterContextAssemblyResult.Ready(
+                    readyResult(snapshot, next.stageId, assembled.providerPayloadJson, output, replayed = false),
+                )
             }
         }
     }
@@ -305,6 +424,7 @@ class ChapterContextAssemblyRepository(
         ) { "Chapter-context output reference no longer matches its immutable snapshot." }
         val manifest = parseObject(snapshot.sourceManifestJson, "Chapter-context source manifest")
         requireCurrentAssemblyEvidence(manifest, contextStage, stage, job, snapshot)
+        requireCurrentContextProjection(manifest, contextStage, job, snapshot)
         val payload = rebuildProviderPayload(manifest)
         require(sha256(payload) == snapshot.contentHash) {
             "Rebuilt chapter-context payload hash does not match the snapshot."
@@ -352,6 +472,7 @@ class ChapterContextAssemblyRepository(
     private suspend fun loadAuthoritativeSources(
         bookId: String,
         targetChapterIndex: Int,
+        userAddition: String?,
     ): AuthoritativeContextSources {
         val memory = database.memoryDao()
         val head = requireNotNull(memory.findMemoryHead(bookId)) { "Book memory head is missing." }
@@ -390,6 +511,15 @@ class ChapterContextAssemblyRepository(
         val previousVersion = previousChapter?.currentVersionId?.let {
             database.libraryDao().findChapterVersion(it)
         }
+        val memorySelection = MemoryContextRouteSelectionRepositoryV1(database).select(
+            bookId = bookId,
+            targetChapterIndex = targetChapterIndex,
+            targetChapterTitle = targetChapterNode.title,
+            targetChapterPlanJson = targetChapterNode.planJson,
+            targetArcTitle = targetArcNode.title,
+            targetArcPlanJson = targetArcNode.planJson,
+            userAddition = userAddition,
+        )
         return AuthoritativeContextSources(
             bible = bible,
             currentOutline = currentOutline,
@@ -400,17 +530,9 @@ class ChapterContextAssemblyRepository(
             previousChapterVersionId = previousVersion?.chapterVersionId,
             previousChapterContentHash = previousVersion?.contentHash,
             entities = memory.activeEntitiesForBible(bookId, bible.bibleRevisionId, MAX_ENTITIES),
-            canonFacts = memory.validCanonFactsForContext(
-                bookId,
-                bible.bibleRevisionId,
-                targetChapterIndex,
-                MAX_CANON_FACTS,
-            ),
-            summaries = memory.recentValidSummaries(bookId, targetChapterIndex, MAX_SUMMARIES),
             entityEvents = memory.validEntityEventsBefore(bookId, targetChapterIndex, MAX_ENTITY_EVENTS),
-            timelineEvents = memory.validTimelineEventsBefore(bookId, targetChapterIndex, MAX_TIMELINE_EVENTS),
-            foreshadows = memory.activeForeshadowsForContext(bookId, MAX_FORESHADOWS),
             aggregateState = memory.latestValidAggregateStateBefore(bookId, targetChapterIndex),
+            memorySelection = memorySelection,
         )
     }
 
@@ -436,10 +558,11 @@ class ChapterContextAssemblyRepository(
 
     private fun buildCandidates(
         bundle: app.zhijuan.core.task.BoundPromptBundle,
-        frozen: FrozenContextInput,
+        frozen: ChapterContextAssemblySourceV1,
         sources: AuthoritativeContextSources,
     ): List<ChapterContextCandidate> {
         val collector = CandidateCollector()
+        val addedMemorySources = mutableSetOf<Pair<MemorySearchSourceTypeV1, String>>()
         bundle.applicationHardRules.forEach { instruction ->
             collector.add(
                 ChapterContextKind.APPLICATION_HARD_RULE,
@@ -503,6 +626,7 @@ class ChapterContextAssemblyRepository(
                 sha256(content),
                 importance = 100,
             )
+            addedMemorySources += MemorySearchSourceTypeV1.STORY_ENTITY to entity.entityId
         }
         bibleJson.array("worldRules").forEach { rule ->
             collector.add(
@@ -513,32 +637,6 @@ class ChapterContextAssemblyRepository(
                 sources.bible.bibleRevisionId,
                 sources.bible.contentHash,
                 importance = 100,
-            )
-        }
-        sources.canonFacts.forEach { fact ->
-            val content = JsonObject(
-                linkedMapOf(
-                    "canonFactId" to JsonPrimitive(fact.canonFactId),
-                    "entityId" to (fact.entityId?.let(::JsonPrimitive) ?: JsonNull),
-                    "factText" to JsonPrimitive(fact.factText),
-                    "factPayload" to parseJson(fact.factPayloadJson, "Canon fact payload"),
-                    "canonLevel" to JsonPrimitive(fact.canonLevel.name),
-                    "scope" to parseJson(fact.scopeJson, "Canon fact scope"),
-                ),
-            ).toString()
-            collector.add(
-                if (fact.canonLevel in setOf(CanonLevel.HARD_CANON, CanonLevel.STORY_CANON)) {
-                    ChapterContextKind.BIBLE_HARD_FACT
-                } else {
-                    ChapterContextKind.RUNTIME_HISTORY
-                },
-                content,
-                "CANON_FACT",
-                fact.canonFactId,
-                fact.sourceBibleRevisionId ?: fact.sourceChapterVersionId,
-                sha256(content),
-                importance = if (fact.canonLevel == CanonLevel.HARD_CANON) 100 else 80,
-                storyOrder = fact.validFromStoryOrder,
             )
         }
         bibleJson.array("forbiddenChanges").forEach { value ->
@@ -577,41 +675,6 @@ class ChapterContextAssemblyRepository(
         collector.addOutline(ChapterContextKind.TARGET_ARC, sources.targetArcNode, 100)
         collector.addOutline(ChapterContextKind.TARGET_CHAPTER_PLAN, sources.targetChapterNode, 100)
         sources.rootNode?.let { collector.addOutline(ChapterContextKind.DISTANT_PLAN, it, 40) }
-
-        val previousSummary = if (frozen.targetChapterIndex > 1) {
-            sources.summaries.singleOrNull {
-                it.chapterIndex == frozen.targetChapterIndex - 1 &&
-                    it.chapterVersionId == sources.previousChapterVersionId
-            }
-        } else {
-            null
-        }
-        previousSummary?.let { summary ->
-            collector.add(
-                ChapterContextKind.PREVIOUS_CHAPTER_SUMMARY,
-                summary.summaryJson,
-                "CHAPTER_SUMMARY",
-                summary.chapterSummaryId,
-                summary.chapterVersionId,
-                sha256(summary.summaryJson),
-                importance = summary.importance,
-                chapterIndex = summary.chapterIndex,
-            )
-        }
-        sources.summaries.filterNot { it.chapterSummaryId == previousSummary?.chapterSummaryId }
-            .forEach { summary ->
-                collector.add(
-                    ChapterContextKind.RECENT_CHAPTER_SUMMARY,
-                    summary.summaryJson,
-                    "CHAPTER_SUMMARY",
-                    summary.chapterSummaryId,
-                    summary.chapterVersionId,
-                    sha256(summary.summaryJson),
-                    relevanceMicros = chapterRelevance(frozen.targetChapterIndex, summary.chapterIndex),
-                    importance = summary.importance,
-                    chapterIndex = summary.chapterIndex,
-                )
-            }
         sources.aggregateState?.let { aggregate ->
             collector.add(
                 ChapterContextKind.CURRENT_STATE,
@@ -627,6 +690,7 @@ class ChapterContextAssemblyRepository(
         val latestEventKeys = mutableSetOf<Pair<String, String>>()
         sources.entityEvents.forEach { event ->
             val isLatest = latestEventKeys.add(event.entityId to event.attributeKey)
+            if (!isLatest) return@forEach
             val content = JsonObject(
                 linkedMapOf(
                     "entityEventId" to JsonPrimitive(event.entityEventId),
@@ -643,70 +707,25 @@ class ChapterContextAssemblyRepository(
                 ),
             ).toString()
             collector.add(
-                if (isLatest) ChapterContextKind.CURRENT_STATE else ChapterContextKind.RUNTIME_HISTORY,
+                ChapterContextKind.CURRENT_STATE,
                 content,
                 "ENTITY_EVENT",
                 event.entityEventId,
                 event.sourceChapterVersionId,
                 sha256(content),
                 relevanceMicros = event.confidenceMicros,
-                importance = if (isLatest) 100 else 60,
+                importance = 100,
                 storyOrder = event.storyOrder,
             )
+            addedMemorySources += MemorySearchSourceTypeV1.ENTITY_EVENT to event.entityEventId
         }
-        sources.timelineEvents.forEach { event ->
-            val content = JsonObject(
-                linkedMapOf(
-                    "timelineEventId" to JsonPrimitive(event.timelineEventId),
-                    "name" to JsonPrimitive(event.name),
-                    "participants" to parseJson(event.participantsJson, "Timeline participants"),
-                    "locationEntityId" to (event.locationEntityId?.let(::JsonPrimitive) ?: JsonNull),
-                    "storyTimeExpression" to JsonPrimitive(event.storyTimeExpression),
-                    "constraints" to parseJson(event.constraintsJson, "Timeline constraints"),
-                ),
-            ).toString()
-            collector.add(
-                ChapterContextKind.TIMELINE_HISTORY,
-                content,
-                "TIMELINE_EVENT",
-                event.timelineEventId,
-                event.sourceChapterVersionId,
-                sha256(content),
-                relevanceMicros = 700_000,
-                importance = 60,
-                storyOrder = event.storyOrder,
-            )
-        }
-        sources.foreshadows.forEach { item ->
-            val due = item.targetStartChapterIndex?.let { it <= frozen.targetChapterIndex } == true ||
-                item.targetEndChapterIndex?.let { it <= frozen.targetChapterIndex } == true
-            val content = JsonObject(
-                linkedMapOf(
-                    "foreshadowItemId" to JsonPrimitive(item.foreshadowItemId),
-                    "description" to JsonPrimitive(item.description),
-                    "status" to JsonPrimitive(item.foreshadowStatus.name),
-                    "targetStartChapterIndex" to (
-                        item.targetStartChapterIndex?.let(::JsonPrimitive) ?: JsonNull
-                    ),
-                    "targetEndChapterIndex" to (
-                        item.targetEndChapterIndex?.let(::JsonPrimitive) ?: JsonNull
-                    ),
-                    "visibleEntityIds" to parseJson(
-                        item.visibleEntityIdsJson,
-                        "Foreshadow visible entities",
-                    ),
-                ),
-            ).toString()
-            collector.add(
-                if (due) ChapterContextKind.DUE_FORESHADOW else ChapterContextKind.OPEN_FORESHADOW,
-                content,
-                "FORESHADOW_ITEM",
-                item.foreshadowItemId,
-                item.sourceChapterVersionId,
-                sha256(content),
-                relevanceMicros = if (due) 1_000_000 else 500_000,
-                importance = item.importance,
-                chapterIndex = item.targetStartChapterIndex,
+        sources.memorySelection.items.forEach { selection ->
+            addSelectedMemoryCandidate(
+                collector = collector,
+                selection = selection,
+                sources = sources,
+                targetChapterIndex = frozen.targetChapterIndex,
+                addedMemorySources = addedMemorySources,
             )
         }
         frozen.userAddition?.let { addition ->
@@ -725,10 +744,200 @@ class ChapterContextAssemblyRepository(
         return collector.items
     }
 
+    private fun addSelectedMemoryCandidate(
+        collector: CandidateCollector,
+        selection: MemoryContextRouteSelectionItemV1,
+        sources: AuthoritativeContextSources,
+        targetChapterIndex: Int,
+        addedMemorySources: MutableSet<Pair<MemorySearchSourceTypeV1, String>>,
+    ) {
+        val source = selection.source
+        val identity = source.sourceType to source.sourceId
+        if (!addedMemorySources.add(identity)) return
+        val ftsRelevance = selection.ftsEvidence?.let {
+            (1_000_000 - (selection.rank - 1).coerceAtMost(999) * 1_000).coerceAtLeast(1)
+        } ?: 0
+        when (source) {
+            is StoryEntitySourceV1 -> {
+                val story = source.story
+                val content = JsonObject(
+                    linkedMapOf(
+                        "entityId" to JsonPrimitive(story.entityId),
+                        "entityType" to JsonPrimitive(story.entityType.name),
+                        "canonicalName" to JsonPrimitive(story.canonicalName),
+                        "aliases" to parseJson(story.aliasesJson, "Story entity aliases"),
+                        "stableDefinition" to parseJson(
+                            story.stableDefinitionJson,
+                            "Story entity definition",
+                        ),
+                        "adultStatus" to JsonPrimitive(story.adultStatus.name),
+                        "ageYears" to (story.ageYears?.let(::JsonPrimitive) ?: JsonNull),
+                    ),
+                ).toString()
+                collector.add(
+                    ChapterContextKind.RUNTIME_HISTORY,
+                    content,
+                    source.sourceType.name,
+                    story.entityId,
+                    story.sourceBibleRevisionId,
+                    sha256(content),
+                    relevanceMicros = ftsRelevance,
+                    importance = 80,
+                )
+            }
+
+            is ChapterSummarySourceV1 -> {
+                val summary = source.summary
+                val isRecent = MemoryContextRouteV1.RECENT_SUMMARY in selection.routes
+                val isPrevious = isRecent && summary.chapterIndex == targetChapterIndex - 1 &&
+                    summary.chapterVersionId == sources.previousChapterVersionId
+                val kind = when {
+                    isPrevious -> ChapterContextKind.PREVIOUS_CHAPTER_SUMMARY
+                    isRecent -> ChapterContextKind.RECENT_CHAPTER_SUMMARY
+                    else -> ChapterContextKind.RUNTIME_HISTORY
+                }
+                collector.add(
+                    kind,
+                    summary.summaryJson,
+                    source.sourceType.name,
+                    summary.chapterSummaryId,
+                    summary.chapterVersionId,
+                    sha256(summary.summaryJson),
+                    relevanceMicros = maxOf(
+                        ftsRelevance,
+                        chapterRelevance(targetChapterIndex, summary.chapterIndex),
+                    ),
+                    importance = summary.importance,
+                    chapterIndex = summary.chapterIndex,
+                )
+            }
+
+            is EntityEventSourceV1 -> {
+                val event = source.event
+                val content = JsonObject(
+                    linkedMapOf(
+                        "entityEventId" to JsonPrimitive(event.entityEventId),
+                        "entityId" to JsonPrimitive(event.entityId),
+                        "attributeKey" to JsonPrimitive(event.attributeKey),
+                        "oldValue" to (event.oldValueJson?.let {
+                            parseJson(it, "Entity event old value")
+                        } ?: JsonNull),
+                        "newValue" to parseJson(event.newValueJson, "Entity event new value"),
+                        "storyTimeExpression" to (
+                            event.storyTimeExpression?.let(::JsonPrimitive) ?: JsonNull
+                        ),
+                        "canonLevel" to JsonPrimitive(event.canonLevel.name),
+                    ),
+                ).toString()
+                collector.add(
+                    ChapterContextKind.RUNTIME_HISTORY,
+                    content,
+                    source.sourceType.name,
+                    event.entityEventId,
+                    event.sourceChapterVersionId,
+                    sha256(content),
+                    relevanceMicros = ftsRelevance,
+                    importance = 60,
+                    chapterIndex = source.chapterIndex,
+                    storyOrder = event.storyOrder,
+                )
+            }
+
+            is CanonFactSourceV1 -> {
+                val fact = source.fact
+                val mandatory = MemoryContextRouteV1.MANDATORY_HARD_FACT in selection.routes
+                check(!mandatory || fact.canonLevel == CanonLevel.HARD_CANON) {
+                    "Mandatory memory route returned a non-hard fact."
+                }
+                val content = JsonObject(
+                    linkedMapOf(
+                        "canonFactId" to JsonPrimitive(fact.canonFactId),
+                        "entityId" to (fact.entityId?.let(::JsonPrimitive) ?: JsonNull),
+                        "factText" to JsonPrimitive(fact.factText),
+                        "factPayload" to parseJson(fact.factPayloadJson, "Canon fact payload"),
+                        "canonLevel" to JsonPrimitive(fact.canonLevel.name),
+                        "scope" to parseJson(fact.scopeJson, "Canon fact scope"),
+                    ),
+                ).toString()
+                collector.add(
+                    if (mandatory) ChapterContextKind.BIBLE_HARD_FACT else ChapterContextKind.RUNTIME_HISTORY,
+                    content,
+                    source.sourceType.name,
+                    fact.canonFactId,
+                    fact.sourceBibleRevisionId ?: fact.sourceChapterVersionId,
+                    sha256(content),
+                    relevanceMicros = ftsRelevance,
+                    importance = if (mandatory) 100 else 80,
+                    chapterIndex = source.chapterIndex,
+                    storyOrder = fact.validFromStoryOrder,
+                )
+            }
+
+            is TimelineEventSourceV1 -> {
+                val event = source.timeline
+                val content = JsonObject(
+                    linkedMapOf(
+                        "timelineEventId" to JsonPrimitive(event.timelineEventId),
+                        "name" to JsonPrimitive(event.name),
+                        "participants" to parseJson(event.participantsJson, "Timeline participants"),
+                        "locationEntityId" to (event.locationEntityId?.let(::JsonPrimitive) ?: JsonNull),
+                        "storyTimeExpression" to JsonPrimitive(event.storyTimeExpression),
+                        "constraints" to parseJson(event.constraintsJson, "Timeline constraints"),
+                    ),
+                ).toString()
+                collector.add(
+                    ChapterContextKind.TIMELINE_HISTORY,
+                    content,
+                    source.sourceType.name,
+                    event.timelineEventId,
+                    event.sourceChapterVersionId,
+                    sha256(content),
+                    relevanceMicros = ftsRelevance,
+                    importance = 60,
+                    chapterIndex = source.chapterIndex,
+                    storyOrder = event.storyOrder,
+                )
+            }
+
+            is ForeshadowSourceV1 -> {
+                val item = source.foreshadow
+                val mandatory = MemoryContextRouteV1.MANDATORY_DUE_FORESHADOW in selection.routes
+                val content = JsonObject(
+                    linkedMapOf(
+                        "foreshadowItemId" to JsonPrimitive(item.foreshadowItemId),
+                        "description" to JsonPrimitive(item.description),
+                        "status" to JsonPrimitive(item.foreshadowStatus.name),
+                        "targetStartChapterIndex" to (
+                            item.targetStartChapterIndex?.let(::JsonPrimitive) ?: JsonNull
+                        ),
+                        "targetEndChapterIndex" to (
+                            item.targetEndChapterIndex?.let(::JsonPrimitive) ?: JsonNull
+                        ),
+                        "visibleEntityIds" to parseJson(
+                            item.visibleEntityIdsJson,
+                            "Foreshadow visible entities",
+                        ),
+                    ),
+                ).toString()
+                collector.add(
+                    if (mandatory) ChapterContextKind.DUE_FORESHADOW else ChapterContextKind.OPEN_FORESHADOW,
+                    content,
+                    source.sourceType.name,
+                    item.foreshadowItemId,
+                    item.sourceChapterVersionId,
+                    sha256(content),
+                    relevanceMicros = if (mandatory) 1_000_000 else ftsRelevance,
+                    importance = item.importance,
+                    chapterIndex = source.chapterIndex ?: item.targetStartChapterIndex,
+                )
+            }
+        }
+    }
+
     private fun enrichManifest(
         policyManifest: String,
         stage: GenerationStageEntity,
-        frozen: FrozenContextInput,
+        frozen: ChapterContextAssemblySourceV1,
         sources: AuthoritativeContextSources,
     ): String {
         val root = parseObject(policyManifest, "Policy context manifest")
@@ -757,9 +966,95 @@ class ChapterContextAssemblyRepository(
                 "previousChapterContentHash" to (
                     sources.previousChapterContentHash?.let(::JsonPrimitive) ?: JsonNull
                 ),
+                "memorySelection" to memorySelectionEvidence(sources.memorySelection),
             ),
         )
         return JsonObject(root + ("assemblyEvidence" to evidence)).toString()
+    }
+
+    private fun memorySelectionEvidence(
+        selection: MemoryContextRouteSelectionResultV1,
+    ): JsonObject {
+        val evidence = selection.evidence
+        return JsonObject(
+            linkedMapOf(
+                "schemaVersion" to JsonPrimitive(1),
+                "status" to JsonPrimitive(selection.status.name),
+                "queryFingerprint" to (
+                    selection.queryFingerprint?.let(::JsonPrimitive) ?: JsonNull
+                ),
+                "indexRebuildRequired" to JsonPrimitive(selection.indexRebuildRequired),
+                "counts" to JsonObject(
+                    linkedMapOf(
+                        "mandatoryHardFacts" to JsonPrimitive(evidence.mandatoryHardFactCount),
+                        "mandatoryDueForeshadows" to JsonPrimitive(
+                            evidence.mandatoryDueForeshadowCount,
+                        ),
+                        "recentSummaries" to JsonPrimitive(evidence.recentSummaryCount),
+                        "hydratedFtsHits" to JsonPrimitive(evidence.hydratedFtsHitCount),
+                        "mergedFtsHits" to JsonPrimitive(evidence.mergedFtsHitCount),
+                        "retainedNewFtsHits" to JsonPrimitive(evidence.retainedNewFtsHitCount),
+                        "boundedOmittedFtsHits" to JsonPrimitive(
+                            evidence.boundedOmittedFtsHitCount,
+                        ),
+                        "overflowCore" to JsonPrimitive(evidence.overflowCoreCount),
+                        "compiledProbes" to JsonPrimitive(evidence.compiledProbeCount),
+                        "omittedCompiledProbes" to JsonPrimitive(evidence.omittedCompiledProbeCount),
+                        "executedProbes" to JsonPrimitive(evidence.executedProbeCount),
+                        "executedTargetChapterProbes" to JsonPrimitive(
+                            evidence.executedTargetChapterProbeCount,
+                        ),
+                        "executedUserAdditionProbes" to JsonPrimitive(
+                            evidence.executedUserAdditionProbeCount,
+                        ),
+                        "executedTargetArcProbes" to JsonPrimitive(
+                            evidence.executedTargetArcProbeCount,
+                        ),
+                        "omittedExecutionProbes" to JsonPrimitive(
+                            evidence.omittedExecutionProbeCount,
+                        ),
+                        "omittedRankedDocuments" to JsonPrimitive(
+                            evidence.omittedRankedDocumentCount,
+                        ),
+                        "rejectedPointers" to JsonPrimitive(evidence.rejectedPointerCount),
+                        "hardLimit" to JsonPrimitive(evidence.hardLimit),
+                    ),
+                ),
+                "routeCounts" to JsonObject(
+                    MemoryContextRouteV1.entries.associate { route ->
+                        route.name to JsonPrimitive(evidence.routeCounts.getValue(route))
+                    },
+                ),
+                "items" to JsonArray(
+                    selection.items.map { item ->
+                        JsonObject(
+                            linkedMapOf(
+                                "sourceType" to JsonPrimitive(item.source.sourceType.name),
+                                "sourceId" to JsonPrimitive(item.source.sourceId),
+                                "routes" to JsonArray(
+                                    MemoryContextRouteV1.entries.filter { it in item.routes }
+                                        .map { JsonPrimitive(it.name) },
+                                ),
+                                "fts" to (item.ftsEvidence?.let { hits ->
+                                    JsonObject(
+                                        linkedMapOf(
+                                            "targetChapter" to JsonPrimitive(
+                                                hits.targetChapterProbeHits,
+                                            ),
+                                            "userAddition" to JsonPrimitive(
+                                                hits.userAdditionProbeHits,
+                                            ),
+                                            "targetArc" to JsonPrimitive(hits.targetArcProbeHits),
+                                        ),
+                                    )
+                                } ?: JsonNull),
+                                "rank" to JsonPrimitive(item.rank),
+                            ),
+                        )
+                    },
+                ),
+            ),
+        )
     }
 
     private suspend fun requireCurrentAssemblyEvidence(
@@ -829,6 +1124,54 @@ class ChapterContextAssemblyRepository(
             .objectValue("chapterProgressionGate")
         require(progression.string("evidenceHash") == evidence.string("progressionEvidenceHash")) {
             "Chapter-context progression evidence changed."
+        }
+    }
+
+    private suspend fun requireCurrentContextProjection(
+        manifest: JsonObject,
+        contextStage: GenerationStageEntity,
+        job: GenerationJobEntity,
+        snapshot: ContextSnapshotEntity,
+    ) {
+        val frozen = parseFrozenInput(contextStage)
+        val bundle = PromptBundleBindingRepository(database).bindForBook(job.bookId)
+        require(bundle.bindingHash == frozen.promptBindingHash) {
+            "Chapter-context Prompt Bundle binding changed."
+        }
+        val sources = loadAuthoritativeSources(
+            bookId = job.bookId,
+            targetChapterIndex = snapshot.targetChapterIndex,
+            userAddition = frozen.userAddition,
+        )
+        if (
+            sources.memorySelection.status != MemoryContextSelectionStatusV1.OK ||
+            sources.memorySelection.indexRebuildRequired
+        ) {
+            throw StaleGenerationStateException(
+                "Chapter-context memory selection is no longer safe to send.",
+            )
+        }
+        val rebuilt = ChapterContextBudgetPolicyV1.assemble(
+            targetChapterIndex = snapshot.targetChapterIndex,
+            budget = frozen.budget,
+            candidates = buildCandidates(bundle, frozen, sources),
+        ) as? ChapterContextAssemblyResult.Ready
+            ?: throw StaleGenerationStateException(
+                "Chapter-context memory changes no longer fit the frozen budget.",
+            )
+        val rebuiltManifest = enrichManifest(
+            policyManifest = rebuilt.sourceManifestJson,
+            stage = contextStage,
+            frozen = frozen,
+            sources = sources,
+        )
+        if (
+            rebuilt.contentHash != snapshot.contentHash ||
+            rebuiltManifest != manifest.toString()
+        ) {
+            throw StaleGenerationStateException(
+                "Chapter-context dynamic memory changed after assembly.",
+            )
         }
     }
 
@@ -931,30 +1274,75 @@ class ChapterContextAssemblyRepository(
         }
     }
 
-    private fun parseFrozenInput(stage: GenerationStageEntity): FrozenContextInput {
-        val root = parseObject(stage.inputSourcesJson, "Chapter-context input sources")
-        require(root.int("schemaVersion") == 1)
-        require(root.string("promptBundleVersion") == PromptBundleCatalogV1.BUNDLE_VERSION)
-        require(root.string("outputSchemaId") == ChapterContextBudgetPolicyV1.MANIFEST_SCHEMA_ID)
-        val context = root.objectValue("contextAssembly")
-        require(context.string("policyVersion") == ChapterContextBudgetPolicyV1.POLICY_VERSION)
-        require(context.string("targetPhase") == GenerationPhase.BUILD_CHAPTER_PLAN.name)
-        val progression = root.objectValue("chapterProgressionGate")
-        return FrozenContextInput(
-            targetChapterIndex = context.int("targetChapterIndex"),
-            promptBindingHash = context.string("promptBindingHash"),
-            progressionEvidenceHash = progression.string("evidenceHash"),
-            budget = ChapterContextBudgetSpec(
-                contextLimitTokens = context.nullableInt("contextLimitTokens"),
-                maximumOutputTokens = context.nullableInt("maximumOutputTokens"),
-                requestedOutputTokens = context.int("requestedOutputTokens"),
-                limitSource = ChapterContextLimitSource.valueOf(context.string("limitSource")),
-                unknownLimitConfirmed = context.boolean("unknownLimitConfirmed"),
-                tokenizerFamily = context.string("tokenizerFamily"),
-            ),
-            userAddition = context.optionalString("userAddition"),
-        )
+    /**
+     * Exact bound revalidation: the persisted rows must still match every finite fact of the Phase
+     * 2B snapshot - RUNNING job, PREPARING current stage, exact Job and Stage lease tokens, the two
+     * persisted heartbeats not older than their own acquisition times, a non-backwards operation
+     * time, unexpired leases (60 seconds is already expired) and unchanged attempt bounds. Any
+     * mismatch fails closed inside the caller's transaction before any business write.
+     */
+    private fun requireBoundExecutionEvidence(
+        stage: GenerationStageEntity,
+        job: GenerationJobEntity,
+        snapshot: GenerationRunnerCurrentStageRouteSnapshot,
+        operationAt: Long,
+    ) {
+        val lease = snapshot.executionLease
+        if (job.status != GenerationJobStatus.RUNNING) {
+            throw StaleGenerationStateException("Bound context Job is no longer RUNNING.")
+        }
+        if (stage.status != GenerationStageStatus.PREPARING || job.currentStageId != stage.stageId) {
+            throw StaleGenerationStateException("Bound context Stage is no longer current PREPARING.")
+        }
+        if (stage.jobId != job.jobId || lease.jobId != job.jobId || lease.stageId != stage.stageId) {
+            throw StaleGenerationStateException("Bound context execution identity changed.")
+        }
+        if (lease.jobLeaseToken.ownerId != lease.stageLeaseToken.ownerId) {
+            throw StaleGenerationStateException("Bound context lease owners no longer match.")
+        }
+        if (job.leaseTokenOrNull() != lease.jobLeaseToken) {
+            throw StaleGenerationStateException("Bound context Job lease token changed.")
+        }
+        if (stage.leaseTokenOrNull() != lease.stageLeaseToken) {
+            throw StaleGenerationStateException("Bound context Stage lease token changed.")
+        }
+        val jobHeartbeatAt = requireNotNull(job.leaseHeartbeatAt) {
+            "bound execution job lease heartbeat is missing."
+        }
+        val stageHeartbeatAt = requireNotNull(stage.leaseHeartbeatAt) {
+            "bound execution stage lease heartbeat is missing."
+        }
+        if (
+            jobHeartbeatAt < lease.jobLeaseToken.acquiredAt ||
+            stageHeartbeatAt < lease.stageLeaseToken.acquiredAt ||
+            jobHeartbeatAt < lease.jobHeartbeatAt ||
+            stageHeartbeatAt < lease.stageHeartbeatAt
+        ) {
+            throw StaleGenerationStateException("Bound context lease timing regressed.")
+        }
+        require(
+            operationAt >= job.updatedAt &&
+                operationAt >= stage.updatedAt &&
+                operationAt >= jobHeartbeatAt &&
+                operationAt >= stageHeartbeatAt,
+        ) { "bound execution time cannot move backwards." }
+        if (
+            leasePolicy.isExpired(jobHeartbeatAt, operationAt) ||
+            leasePolicy.isExpired(stageHeartbeatAt, operationAt)
+        ) {
+            throw StaleGenerationStateException("bound execution lease expired before assembly.")
+        }
+        if (
+            stage.attemptCount != snapshot.attemptCount ||
+            stage.maxAttempts != snapshot.maxAttempts ||
+            stage.attemptCount !in 0 until stage.maxAttempts
+        ) {
+            throw StaleGenerationStateException("Bound context attempt bounds changed.")
+        }
     }
+
+    private fun parseFrozenInput(stage: GenerationStageEntity): ChapterContextAssemblySourceV1 =
+        ChapterContextAssemblyJobFactory.parseAndVerify(stage)
 
     private fun rebuildProviderPayload(manifest: JsonObject): String {
         require(manifest.int("schemaVersion") == 1)
@@ -1040,14 +1428,6 @@ class ChapterContextAssemblyRepository(
     private fun deterministicSnapshotId(bookId: String, stageId: String): String =
         "context.${sha256("$bookId\u0000$stageId").take(32)}"
 
-    private data class FrozenContextInput(
-        val targetChapterIndex: Int,
-        val promptBindingHash: String,
-        val progressionEvidenceHash: String,
-        val budget: ChapterContextBudgetSpec,
-        val userAddition: String?,
-    )
-
     private data class AuthoritativeContextSources(
         val bible: app.zhijuan.core.database.memory.StoryBibleRevisionEntity,
         val currentOutline: OutlineRevisionEntity,
@@ -1058,12 +1438,9 @@ class ChapterContextAssemblyRepository(
         val previousChapterVersionId: String?,
         val previousChapterContentHash: String?,
         val entities: List<app.zhijuan.core.database.memory.StoryEntity>,
-        val canonFacts: List<app.zhijuan.core.database.memory.CanonFactEntity>,
-        val summaries: List<app.zhijuan.core.database.memory.ChapterSummaryEntity>,
         val entityEvents: List<app.zhijuan.core.database.memory.EntityEventEntity>,
-        val timelineEvents: List<app.zhijuan.core.database.memory.TimelineEventEntity>,
-        val foreshadows: List<app.zhijuan.core.database.memory.ForeshadowItemEntity>,
         val aggregateState: app.zhijuan.core.database.memory.AggregateStateProjectionEntity?,
+        val memorySelection: MemoryContextRouteSelectionResultV1,
     )
 
     private class CandidateCollector {
@@ -1126,11 +1503,7 @@ class ChapterContextAssemblyRepository(
     private companion object {
         val IDENTIFIER = Regex("[A-Za-z0-9._:-]{1,128}")
         const val MAX_ENTITIES = 64
-        const val MAX_CANON_FACTS = 512
-        const val MAX_SUMMARIES = 8
         const val MAX_ENTITY_EVENTS = 512
-        const val MAX_TIMELINE_EVENTS = 256
-        const val MAX_FORESHADOWS = 128
         const val MAX_OUTLINE_CHAIN_DEPTH = 2_000
     }
 }
@@ -1195,10 +1568,13 @@ private fun chapterRelevance(targetChapterIndex: Int, sourceChapterIndex: Int): 
         .coerceIn(0, 1_000_000)
 
 private fun ChapterContextBlockReason.toStandardErrorCode(): StandardErrorCode = when (this) {
-    ChapterContextBlockReason.REQUIRED_SOURCE_MISSING -> StandardErrorCode.FORMAT_INVALID
+    ChapterContextBlockReason.REQUIRED_SOURCE_MISSING,
+    ChapterContextBlockReason.MEMORY_SEARCH_INDEX_INVALID,
+    -> StandardErrorCode.FORMAT_INVALID
     ChapterContextBlockReason.UNKNOWN_CONTEXT_LIMIT_REQUIRES_CONFIRMATION,
     ChapterContextBlockReason.OUTPUT_RESERVE_LEAVES_NO_INPUT_BUDGET,
     ChapterContextBlockReason.REQUIRED_CONTEXT_EXCEEDS_BUDGET,
+    ChapterContextBlockReason.MANDATORY_MEMORY_SELECTION_EXCEEDS_LIMIT,
     -> StandardErrorCode.CONTEXT_TOO_LARGE
 }
 

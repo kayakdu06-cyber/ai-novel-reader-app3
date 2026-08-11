@@ -93,6 +93,10 @@
 | TEST-033 | 重建失效数据 | 引用新章节版本，旧派生不再进入上下文 |
 | TEST-034 | 硬事实与计划冲突 | 硬事实优先，计划可重规划 |
 | TEST-035 | 中文别名召回 | 相关事实进入上下文来源清单 |
+| TEST-035A | FTS 指针权威回填 | 六类来源必须重读权威行；旧 Bible、旧章节、归档/已解决来源和 hash 不匹配只剔除自身并要求索引重建，不把派生索引直接送给模型 |
+| TEST-035B | 强制/最近/相关记忆合并 | HARD_CANON、到期伏笔和最近摘要不依赖关键词；普通 STORY_CANON 只在相关时进入；同一来源只出现一次并保留多路命中；强制超界必须联网前阻断且不做 FTS |
+| TEST-035C | 章前候选接线与发送前复核 | 上下文只接收强制、最近、当前状态与 FTS 相关记忆；损坏索引在组装期自动重建一次；强制超界不建快照/Attempt；快照后任一动态记忆变化时 Provider-open 必须拒绝旧 payload |
+| TEST-035D | 固定中文召回与 FTS4 token 质量/性能 | 正式加密库 10,000 文档固定集至少 95%（目标 20/20）；相邻双字不得误中隔开字符；旧 token 索引自动重建；双 API 热查询中位 < 100 ms、P95 < 200 ms、最慢 < 500 ms |
 | TEST-036 | 年龄不明确且涉及相关内容 | 阻止进入该生成阶段并要求明确成人 |
 | TEST-037 | 三个呈现预设映射 | 字段、范围和 schema 版本完全符合 PR-004；冲突、血腥、语言和压迫维度逐项保持题材基线，不被细写档位暗中提高 |
 | TEST-038 | 细写+避免淡出的相关场景装配 | 所有人物明确成年时自动生成严格身体与感官连续性契约；未知或未确认时返回阻断而非静默降级；默认流程不增加逐场确认；契约标记的必写关键过程节点覆盖率为 100% |
@@ -134,10 +138,22 @@
 | TEST-086 | 最老版本升级到最新 | 计数、哈希、引用正确 |
 | TEST-087 | 迁移中崩溃 | 旧库/恢复点可用 |
 | TEST-088 | 旧 APK → 新 APK 覆盖安装 | 签名兼容、数据不丢 |
-| TEST-089 | 最近任务页 | 锁定/后台不显示敏感正文 |
+| TEST-089 | 最近任务页屏幕隐私 | **取消**：2026-08-06 用户明确不需要应用锁、生物识别、`FLAG_SECURE` 或最近任务遮挡 |
 | TEST-090 | 新远程 host 未确认 | 连接测试可用，但小说请求不发出 |
 | TEST-091 | 修改 host/port/protocol | 原数据发送确认失效并重新提示 |
 | TEST-092 | TXT/Markdown 导出 | 明确提示为未加密文件，加密备份文案不混淆 |
+
+### 5.7 生成速度与生成中正文
+
+| ID | 用例 | 预期 |
+|---|---|---|
+| TEST-093 | 生成时序事件脱敏（已完成） | 能还原排队、Provider、首段、正文、派生和提交耗时；正文/人物/提示词/端点/密钥命中为 0 |
+| TEST-094 | 普通参考章固定延迟 Fake（BODY 已完成） | 2,500–4,000 中文字符；首段 P95 ≤ 20 秒、正文结束 P95 ≤ 180 秒；正式提交 P95 待 TASK-064 全阶段 runner |
+| TEST-095 | 第一章快车道固定延迟 Fake | 首段 P95 ≤ 90 秒、正式提交 P95 ≤ 300 秒；完整规划未成功前仍阻断第二章 |
+| TEST-096 | 5 分钟慢服务 watchdog | 不再安排新远程 Stage；在途尽力取消并保存检查点；结果不明不自动重发；10 分钟不允许仍无解释运行 |
+| TEST-097 | 生成中正文投影 | 只显示已持久化完整段落；尾段、失败、取消、重启和修订状态明确；不进入正式目录/索引/后续上下文 |
+| TEST-098 | 连续 20 章抖动与故障注入 | 报告 P50/P95/最慢值；崩溃、断网、迟到回调和数据库失败不重复请求/提交，不产生无界内存增长 |
+| TEST-099 | 受控真实模型档案 | 仅在预算、目的地和用户单独授权后运行；未达速度/质量门槛的组合不得成为推荐 |
 
 ### TASK-015 当前安全存储证据
 
@@ -413,8 +429,12 @@
 - 20 万汉字单章不崩溃，采用分段显示；
 - 连续流 30 分钟不产生无界内存增长；
 - 1GB 备份流式处理，不将整包读入内存。
+- 普通后续参考章首段 P95 ≤ 20 秒、正文结束 P95 ≤ 180 秒、正式提交 P95 ≤ 240 秒；
+- 第一章首段 P95 ≤ 90 秒、正式提交 P95 ≤ 300 秒；
+- 正常章达到 5 分钟必须进入慢服务安全处置，10 分钟仍未结束为 P0 发布阻断；
+- 速度报告必须同时给出 20 章的 P50、P95 和最慢值，不接受只报最好的一章。
 
-性能目标需在技术尖峰后以目标机实测校准。
+阅读渲染目标需在目标机实测校准；生成目标先用固定延迟 Fake 证明 App 自身开销和 watchdog，再用用户授权的受控真实模型校准推荐档案。真实 Provider 波动不能成为放宽 10 分钟发布阻断的理由。
 
 ## 9. 发布回归
 
@@ -540,3 +560,380 @@
 - Generation 新增端到端 3 项：严格全通过并进入接受门；缺失标准只允许一次有界修复且不写报告；替换候选后旧 RequestIntent 不能打开 Provider。
 - TEST-039 不保存成人题材示例正文，只用问题码、严重度、过程节点和门禁结果验证淡出/连续性/余波规则。
 - Release/R8 460 actionable tasks 通过；统一构建门禁 371 tasks、源码/15 APK 安全扫描和备份排除通过；真实 API 调用 0、实体设备写入 0。
+
+## 22. TASK-059 完整验证证据
+
+- COMMIT_CHAPTER 专用 Stage 执行器 JVM 8/8：READY 精确领取一次，PREPARING/COMMITTING 只恢复同 owner token，SUCCEEDED 零提交；错误 owner、倒退时间、陈旧领取证据、其他状态和非法输入均在调用最终协调器前拒绝，结果摘要不泄露标识。
+- 最终提交相关 JVM 联跑更新为 41/41：执行器 8、协调器 6、最小一致性快照 7、受保护 artifact 恢复 5、最终草稿 mapper 7、一致性接受/生产分流 8，0 失败、0 错误、0 跳过。
+- 生产旁路只读审计：正式 `src/main` 未发现绕过 executor/coordinator 发布 AI 候选的实际调用点；新链、旧 `ChapterGenerationCommitRepository` 与 `LibraryDao.commitChapterVersion` 当前均无总 runner/生产调用方，后两者记录为潜在未来误用面而非当前旁路。
+- 全量回归首次揭示旧 DRAFT Stage 使用合法 `inputSourcesJson = "[]"` 时被候选 binding 误判；`parseIfBound` 现先解析通用 JsonElement，合法非对象返回未绑定，畸形 JSON 继续失败，匹配当前候选 policy 的 object 继续走严格 `parseAndVerify`。新增 JVM 3/3 覆盖三条边界。
+- App 连续全量曾暴露两类测试环境问题：固定 MediaStore 截图名在重复运行时冲突，以及输入法改变 LazyColumn 可视范围后回收最后一个高级输入框。三处截图名改为唯一名称；该高级字段测试改用不拉起 IME 的 SetText 语义动作，定点 1/1 与随后完整 App 45/45 均通过。产品字段和交互逻辑未改动。
+- 最终本地提交协调器 JVM 6/6：PREPARING 全量验证后才转换并提交；COMMITTING 按持久时间确定性重建；READY/SUCCEEDED 在读取 artifact 前拒绝；final route 篡改、转换证据失败均不会调用最终仓库；一次修订候选保持修订来源 binding 与最终接受 binding 分离。
+- 相关 JVM 链 33/33：协调器 6、最小一致性快照 7、受保护 artifact 恢复 5、最终草稿 mapper 7、一致性接受/生产分流 8，0 失败、0 错误、0 跳过。
+- API 35 `emulator-5554` 最终候选数据库专项 25/25：初始与一次修订恢复、Stage v3 快照、原子发布、回滚、并发、精确 replay、缺快照和绑错来源继续通过。
+- API 35：App 45/45、Database 114/114、Generation 28/28，共 187/187；API 30 同样为 187/187，全部 0 失败、0 错误、0 跳过。
+- `:app:assembleRelease` 完成 R8 并生成 unsigned Release APK；统一离线门禁 371 actionable tasks 成功，JVM 报告 467 项，`SECURITY_SCAN_OK`、5 个现存 APK 扫描和备份排除规则通过；`git diff --check` 返回 0。
+- 当前 App 尚无总 runner；本任务只交付未来 runner 可调用的专用 Stage 入口，不伪装为整 App 已接通。只使用本地规则和受保护 artifact，App 内真实 Provider 调用 0、实体设备安装/写入/设置变更 0。TASK-059 已在当前模块边界完成。
+
+## 23. TASK-060 Phase 2C2 验证证据
+
+- `ChapterContextAssemblyDatabaseTest` 扩展为 5 项：普通 STORY_CANON 只有命中目标章/用户补充/目标弧时才进入 payload；无关事实与时间线不再靠全量历史进入；强制记忆超过 512 时 Stage/Job 联网前阻断且 snapshot/Attempt 均为 0；索引指针损坏会在组装事务内自动完整重建一次；快照后选中事实及其索引同步失效时 Provider-open 重算结果不一致并拒绝旧 payload。
+- 不可变 manifest 新增完整的记忆路线证据：选择状态、查询指纹、逐路执行/遗漏/拒绝计数、逐项路线与三路命中数；Provider-open 在同一 Room 事务内重新执行权威选择、候选映射与预算，要求 payload hash 和完整 manifest 都与快照一致。
+- API 30/API 35 专项各 5/5；最终 `core/database` 全量各 139/139，0 失败、0 错误、0 跳过；`core/database` JVM 65/65。
+- 全部测试仅使用本地数据库、固定夹具和项目专用模拟器；App 内真实 Provider 调用 0、物理设备安装/写入/设置变更 0。
+
+## 24. TASK-060 固定中文召回与总收口证据
+
+- 正式加密 `ZhijuanDatabase` 写入 10,000 条生产 `memory_search_document`，20 个固定中文人物/地点/物品/伏笔查询全部命中；无关查询为空，同查询 replay 的指纹和来源顺序一致。
+- 生产多路召回一次执行 41 个有界探针并找回全部 20 个目标，没有突破总 64、目标章 32、用户补充 16、目标弧 16 的限制。
+- API 30 热查询中位约 6.07 ms、P95 约 7.37 ms、最慢约 9.21 ms；API 35 中位约 4.35 ms、P95 约 5.43 ms、最慢约 6.87 ms，均远低于 TEST-035D 门槛。
+- 固定集首次暴露 FTS4 会拆分下划线双字 token；v2 改用全字母数字 token 后，“甲乙”不再误中“甲丙乙”，旧 v1 回填标记会自动重建并升级为 v2。
+- `core/database` JVM 65/65；API 30/API 35 数据库全量各 143/143，0 失败、0 错误、0 跳过。全部使用项目专用模拟器与本地固定夹具；App 内真实 Provider 调用 0，物理设备写入 0。
+
+## 25. TASK-061 Phase 1 用户编辑原子失效证据
+
+- `ChapterUserEditDatabaseTest` 以正式 Room schema 建立 10 个已提交章节，编辑第 3 章后断言旧版本仍保留、新 `USER_EDIT` 版本成为 current 且为 `EDITED/UNKNOWN`。
+- 第 3 章旧摘要和第 3–10 章聚合投影进入 `STALE`；第 4–10 章上下文与一致性报告进入 `STALE`；第 4–10 章 current version 和正文保持原样，仅章节状态变为 `CONSISTENCY_UNKNOWN/UNKNOWN`。
+- 旧摘要的正式 FTS/外部内容行在同一提交后消失，新版本在重建前没有伪造搜索文档。精确 replay 不增加版本；同 ID 不同正文、跨书、错章和过期 expected current 均失败且不改 current。
+- 定向测试在 API 30/API 35 各 3/3；`core/database` 全量在两套模拟器各 146/146。统一离线门禁 797 actionable tasks 通过，包含 JVM、Lint、Debug/Release、R8、源码与 5 APK 安全扫描和备份排除检查。
+- TEST-032 的原子编辑与失效部分已通过；TEST-033 的从编辑点向后顺序重建仍待 TASK-061 后续阶段。App 内真实 Provider 调用 0、物理设备写入 0。
+
+## 26. TASK-061 Phase 2A 重建影响计划证据
+
+- `ChapterEditRebuildPlanDatabaseTest` 在正式 Room/SQLCipher schema 上覆盖 4 项：10 章编辑第 3 章的完整计划、最新章派生状态变化后的版本栅栏、后续 current version 改变使整段冻结计划失效，以及非编辑 current/跨书/未实现策略/诊断脱敏的失败关闭。
+- 10 章固定场景生成 32 个稳定排序步骤：1 个 `READY`、31 个 `BLOCKED`、17 个将来可能调用 Provider 的步骤，且后 7 章正文/current 保持不变。计划阶段 Job、Stage、Attempt、Usage 与业务表写入均为 0。
+- 当前结构性阻塞被显式建模为：派生版本槽已占用、tracking 顺序保护、aggregate 缺少重建 writer 和依赖阻塞；禁止把影响分析或理论步骤数量报告成实际重建成功。
+- 执行前版本栅栏会重读完整影响区间；编辑章派生状态或任一后续 current version 变化后，旧 `planHash` 都不能继续使用。
+- 生产查询使用按书批量 current-version join 和按章节范围批量 tracking 读取，计划构建使用 O(1) 前驱引用；没有逐章 N+1 查询或 O(n²) 依赖扫描。
+- 定向测试在 API 30/API 35 各 4/4；`core/database` 全量在两套模拟器各 150/150。统一离线门禁 797 actionable tasks 通过，包含 JVM、Lint、Debug/Release、R8、源码与 5 APK 安全扫描和备份排除检查。
+- TEST-033 仍未完成；本阶段没有创建重建 Job、调用 App 内真实 Provider、产生费用或向物理设备写入。
+
+## 27. TASK-061 Phase 2B1 派生历史槽证据
+
+- v10→v11 迁移保留原摘要、tracking、聚合和伏笔转换，四个业务索引由 unique 改为普通索引；fresh create 与迁移库均安装单一 `VALID`、不可变更新和禁止删除触发器。
+- 正式 Room 测试在同一业务槽保存一代 `STALE` 与一代 `VALID`，权威查询只返回新代，显式 history 查询稳定返回两代；event/fact/timeline 同样不会混入 `STALE`。
+- 负例覆盖同槽第二个 `VALID`、`STALE → VALID`、内容/来源/NULL 字段篡改、时间倒退、七类派生历史 DELETE，以及两个协程争抢空 summary 槽；并发结果恰好一个成功。
+- Phase 2A tracking 批量查询改为只读取 current version 的 `VALID` 头，另保留显式全历史查询，避免 `associateBy` 从混合历史中任意选行。
+- `ZhijuanMigrationTest + MemoryDatabaseTest` 在 API 30/API 35 各 18/18；`core/database` 全量在两套模拟器各 152/152。统一离线门禁 797 actionable tasks、496 项 JVM、Release/R8、源码与 5 APK 安全扫描、备份排除和 diff 检查通过。
+- TEST-033 仍未完成；本阶段没有伏笔 current projection rewind、重建 Job/Stage、App 内真实 Provider 调用、费用或物理设备写入。
+
+## 28. TASK-061 Phase 2B2A 伏笔 after-state revision 证据
+
+- v11→v12 迁移保留旧 item/transition，创建空 revision 账本、完整索引和保护触发器；旧数据不伪造 after-state。fresh create 与迁移库均通过 Room schema 校验和外键完整性检查。
+- 正式 Room 测试将完整 `ForeshadowItemEntity` 规范编码、SHA-256 校验并逐字段解码回原对象；默认 `toString` 不出现描述或 snapshot。负例覆盖 snapshot 篡改、DELETE、`STALE → VALID`、transition 先失效，以及合法的 revision→transition 失效顺序。
+- final candidate 与 tracking 两条提交链均在同一事务中写 transition 和 revision。精确 replay 校验 revision 缺账/hash/provenance；当前伏笔被后来合法推进后，旧 final Stage replay 仍成功且不覆盖 later-current 搜索索引。
+- DeepSeek 只读审计运行 `20260805-225927-6ce8af71` 使用 `max` 推理，累计 302,353 Token；确认无 P0，并指出 final replay 的旧 current-item 强相等问题。Sol 同时补发现旧 Stage 可能回写最新索引的伴生风险，两者均已修复并加回归。
+- `ZhijuanMigrationTest + MemoryDatabaseTest` 在 API 30/API 35 各 20/20；final commit 专项各 27/27；tracking E2E 各 3/3；`core/database` 全量在两套模拟器各 155/155。
+- TEST-033 仍未完成；本阶段只建立可信历史证据，没有实际 rewind、区间 replay、aggregate writer、App 内真实 Provider 调用、费用或物理设备写入。
+
+## 29. TASK-061 Phase 2B2B 受审计伏笔 rewind 证据
+
+- v12→v13 迁移创建空的 `foreshadow_projection_rewind` 审计表、`plan_hash` 唯一索引、编辑前可信 revision 查询索引和保护触发器；有效审计可插入，早于编辑版本的时间、重复 plan、UPDATE 与 DELETE 均被数据库拒绝，外键完整性通过。
+- 正向 Room 场景包含 A 在第 1 章 PLANT、第 2 章 DEVELOP、第 3 章 RESOLVE，B 在第 3 章首次 PLANT，再编辑第 2 章：rewind 将 A 逐字段恢复为第 1 章完整基线，将 B 标为 `STALE`，保留全部历史，严格按 revision→transition 顺序失效，删除 B 的 FTS 并以正确章序重建 A 的 FTS，最后写入不可变审计。
+- 同一 rewind ID 的精确 replay 零写入成功；同一 plan 使用不同 rewind ID 被拒绝。编辑点前缺少可信 revision 的 legacy DEVELOP 整笔失败并保持全部表不变。
+- 对已经在 Phase 1 被编辑 stale 级联标为 `STALE` 的区间新生 item，rewind 保留原失效时间，不把审计执行时间写进业务投影。
+- `ZhijuanMigrationTest + ForeshadowProjectionRewindDatabaseTest` 在 API 30/API 35 各 12/12；`core/database` 全量在两套模拟器各 159/159。
+- 统一离线门禁通过 797 actionable tasks，包含 Debug、Release、Lint、R8、JVM、安全扫描脚本回归、源码与 5 个 APK 安全扫描及备份排除策略。App 内真实 Provider 调用 0，物理设备写入 0。
+- TEST-033 仍未完成；Phase 2B2B 当时没有 aggregate writer、跨章有序 Job/Stage 执行器、费用确认或总 phase runner。
+
+## 30. TASK-061 Phase 2B3A 聚合状态 writer 证据
+
+- `AggregateStateWriterDatabaseTest` 覆盖 7 项：最新实体属性选择与嵌套 JSON 规范化、未来伏笔失败关闭、旧版本聚合头转 STALE、畸形当前头阻塞、同证据并发只提交一代、tracking 换代拒绝复用、生成时间早于权威来源时零写入且诊断脱敏。
+- `ChapterEditRebuildPlanDatabaseTest` 同步验证计划 v2：aggregate 在依赖未满足时等待，写入后严格识别为 `ALREADY_SATISFIED`；不再使用“writer 不支持”的假 blocker。
+- API 30 `emulator-5556` 与 API 35 `emulator-5558` 的 writer+plan 定向套件各 11/11；`core/database` 全量各 166/166，0 失败、0 错误、0 跳过。
+- `scripts/verify-build.ps1 -Offline` 通过 797 actionable tasks，包含 Debug、Release、Lint、R8、JVM、安全扫描脚本回归、源码与 5 个 APK 安全扫描及备份排除策略。
+- App 内真实 Provider 调用 0、物理设备写入 0。TEST-033、跨章有序 Job/Stage 和总 runner 仍未完成。
+
+## 31. TASK-061 Phase 2B3B1 不可变执行准备账本证据
+
+- v13→v14 迁移测试验证两个新表为空创建、Room schema 校验、唯一索引、执行/步骤来源触发器、UPDATE/DELETE 拒绝和外键完整性；旧数据不自动生成执行。
+- `ChapterEditRebuildPlanDatabaseTest` 验证三章编辑的准备结果固定为 5 个关键步骤，顺序是 edited memory→chapter 2 tracking/aggregate→chapter 3 tracking/aggregate；准备与精确 replay 最终只有一条 rewind、一条 execution、五条 step。
+- 已有 VALID 编辑章摘要会写成 `SATISFIED` 并保存脱敏全字段指纹；没有证据的步骤为 `PENDING`。命令、结果、实体默认字符串不展开书、章节、执行、摘要身份或正文/hash。
+- 另一 rewind 身份不能占用同一计划；计划过期在写前失败，rewind 已在外层事务内执行后再发生时间门禁失败时，rewind 和整个 ledger 仍一起回滚。
+- API 30 `emulator-5556` 与 API 35 `emulator-5558` 的 migration+plan/ledger 定向各 9/9；`core/database` 全量各 171/171，0 失败、0 错误、0 跳过。
+- `scripts/verify-build.ps1 -Offline` 通过 797 actionable tasks，包含 Debug/Release、Lint/R8、全部 JVM 测试、源码与 5 个 APK 安全扫描及备份排除策略。
+- App 内真实 Provider 调用 0、物理设备写入 0。Phase 2B3B1 只完成 crash-safe 准备账本；动态 Stage 执行、TEST-033 和总 runner 仍未完成。
+
+## 32. TASK-061 Phase 2B3B2A 动态 edited-memory Stage 证据
+
+- `ChapterMemoryExtractionJobFactoryTest` 验证普通 memory Stage 继续使用 schema v1 且无 rebuild 字段；绑定 Stage 使用严格 schema v2，binding 任一无配套 hash 的篡改会失败，绑定内容确实改变 input hash 和 idempotency key。
+- `ChapterEditRebuildPlanDatabaseTest` 新增 4 项：三章场景只创建一个确定性 Job/Stage 且 Attempt/Usage 为 0；同命令精确 replay；后续 current version 变化后零写入拒绝；已有 satisfied memory 时不跳入 tracking；双协程并发最终收敛为一份权威 Job/Stage。
+- Provider-open 与 commit 的专用守卫在测试中分别回读同一 Stage 并成功复核 execution/fence/step/source；生产接线已编译进入 `GenerationRequestAuditRepository` 与 `ChapterMemoryExtractionCommitRepository`。真实 Provider 输出和提交结果未伪造。
+- API 30 `emulator-5556` 与 API 35 `emulator-5558` 的 `ChapterEditRebuildPlanDatabaseTest` 各 12/12；`core/database` JVM 66/66，数据库模块全量在两套模拟器各 175/175，均为 0 失败、0 错误、0 跳过。源码 `SECURITY_SCAN_OK`，`git diff --check` 无格式错误。
+- 本阶段未运行统一 797-task Release/R8 离线门禁，不能沿用 Phase 2B3B1 的门禁数字冒充本阶段证据。App 内真实 Provider 调用 0、物理设备写入 0；tracking/aggregate 逐章闭环与 TEST-033 仍未完成。
+
+## 33. TASK-061 Phase 2B3B2B1 第一 tracking Stage 证据
+
+- `ChapterTrackingProjectionJobFactoryTest` 新增严格 v2 rebuild binding、input hash 变化、旧 v1 兼容和无配套 hash 的篡改拒绝。
+- `ChapterEditRebuildPlanDatabaseTest` 新增 3 项：普通 tracking 顺序守卫在存在后续提交章时仍拒绝，专用 execution 许可可创建 ordinal 2 tracking；精确 replay/预算冲突；current 范围变化零写入拒绝；双协程并发只保留一份确定性 Job/Stage。该套件在 API 30/API 35 各 15/15。
+- `ChapterMemoryExtractionEndToEndTest` 新增真实 Fake 前驱链：绑定 memory Stage 经过请求审计、Fake 流式响应、严格解析、Attempt/FINAL Usage 和原子 commit 后才解锁 tracking；整类在双 API 各 4/4。
+- `core/database` JVM 67/67、`feature/generation` JVM 117/117；数据库 Android 全量在 API 30/API 35 各 178/178，生成模块 Android 全量各 29/29；均为 0 失败、0 错误、0 跳过。`SECURITY_SCAN_OK`，`git diff --check` 无错误。
+- 本子阶段没有调用 App 内真实 Provider、没有向物理设备写入，也没有运行统一 797-task Release/R8 门禁。tracking Fake 输出提交、同章 aggregate 原子推进、后续章节循环和 TEST-033 仍待后续。
+
+## 34. TASK-061 Phase 2B3B2B2 tracking 与 aggregate 原子推进证据
+
+- `ChapterTrackingProjectionEndToEndTest` 新增正向 rebuild Fake Provider 闭环：tracking 提交同事务生成一份 aggregate，当前计划两步均为 `ALREADY_SATISFIED`，精确 replay 不重复 tracking、transition、revision、FTS 或 aggregate。
+- 同类故障注入构造未来章活动伏笔，使 aggregate writer 在 tracking 业务写入后失败；事务结束后 tracking/timeline/transition/aggregate 均为 0，Stage 仍为 `COMMITTING`、Job 为 `RUNNING`、Usage 为 `PROVISIONAL`。
+- `ChapterEditRebuildPlanDatabaseTest` 新增 Stage 创建后 aggregate 槽变化负例：Provider-open 失败且 Attempt/tracking 为 0。计划套件在 API 30/API 35 各 16/16，tracking E2E 各 5/5。
+- `core/database` JVM 67/67、`feature/generation` JVM 117/117；数据库 Android 全量在 API 30/API 35 各 179/179，生成模块 Android 全量各 31/31；均为 0 失败、0 错误、0 跳过。
+- `scripts/security-scan.ps1 -SkipArtifacts` 返回 `SECURITY_SCAN_OK`；`git diff --check` 返回 0，仅有既有换行提示。App 内真实 Provider 调用 0、物理设备写入 0。
+- 本子阶段没有运行统一 797-task Release/R8 门禁；该门禁留到 TASK-061 完成后续章节区间和 TEST-033 后执行。后续章节循环与总 runner 仍未完成。
+
+## 35. TASK-061 Phase 2B3B2C 后续 tracking 退役准备证据
+
+- `ChapterEditRebuildTrackingRetirementEvidenceTest` 3/3：timeline ID 严格排序/去重、内容指纹不受 `VALID→STALE` 状态变化影响、不可变内容篡改会改变指纹。
+- `ZhijuanMigrationTest` 在 API 30/API 35 各新增 1 项 v14→v15：表、四个唯一索引、插入 provenance、不可变和禁止删除触发器全部存在。
+- `ChapterEditRebuildPlanDatabaseTest` 从 16 增至 19 项：第二章旧 tracking/timeline/search 原子退役并创建 replacement Stage；同命令精确 replay；双 worker 收敛到一个 Stage；预占 replacement 身份时整笔回滚并保留旧 `VALID` 基线。
+- `core/database` JVM 70/70；数据库 Android 全量在 API 30/API 35 各 183/183，均为 0 失败、0 错误、0 跳过。`scripts/security-scan.ps1 -SkipArtifacts` 为 `SECURITY_SCAN_OK`，`git diff --check` 返回 0。
+- 本切片未运行统一 Release/R8；没有调用真实 Provider、没有写物理设备。Provider-open/commit、replacement tracking→aggregate、通用后续章节循环和 TEST-033 仍待后续。
+
+## 36. TASK-061 Phase 2B3B2D 首个保留章节 tracking→aggregate 证据
+
+- `ChapterTrackingProjectionEndToEndTest.retainedChapterReplacementRunsFakeProviderCommitsAggregateAndReplays` 真实走过本地 Fake Provider 请求审计、严格响应处理、Attempt/FINAL Usage、replacement tracking/timeline 和同章 aggregate；旧 tracking/timeline 保持 `STALE`，新 tracking/aggregate 各一份 `VALID`，Stage/Job 完成，精确 replay 零重复。
+- `retainedChapterAggregateFailureRollsBackNewProjectionButKeepsRetirement` 在 aggregate 读取到非法未来来源时注入失败；retirement 与旧 `STALE` 历史保留，新 tracking/timeline/aggregate 整体回滚，Stage=`COMMITTING`、Job=`RUNNING`、Usage=`PROVISIONAL`，可从本地提交边界恢复。
+- `ChapterTrackingProjectionEndToEndTest` API 30/API 35 各 7/7；`ChapterEditRebuildPlanDatabaseTest` 各 19/19；`feature:generation` Android 各 33/33；`core:database` Android 各 183/183。
+- `core:database` JVM 70/70，`feature:generation` JVM 117/117；`SECURITY_SCAN_OK`，`git diff --check` 为 0。全部使用本地固定夹具和项目专用模拟器，App 内真实 Provider 调用 0、物理设备写入 0。
+- 本切片未运行统一 Release/R8；ordinal 6 及以后通用循环、TEST-033、execution 收口与总 runner 仍待后续。
+
+## 37. TASK-061 Phase 2B3B2E 通用循环与 TEST-033 完成证据
+
+- `ChapterEditRebuildPlanDatabaseTest` 新增 ordinal 6 直接前驱、前驱未完成拒绝和前驱 aggregate 时间下界负例，计划套件在 API 30/API 35 各 22/22。
+- `ChapterTrackingProjectionEndToEndTest.thirdRetainedChapterRunsFakeProviderAfterDirectPredecessorAggregateAndReplays` 证明 ordinal 6 Provider→tracking→aggregate 与独立 replay；整类随后在双 API 各 8/8。
+- TEST-033 新增 10 章固定场景：先为第 2–10 章建立旧 tracking，编辑第 3 章，再按 ordinal 4–16 重建第 4–10 章。固定结果为 retirement 7、旧 `STALE` tracking 8、当前 `VALID` tracking 9、当前第 3–10 章 aggregate 8，且第 4–10 章 current body/version 不变；tracking E2E 整类最终在双 API 各 9/9。
+- `MemoryContextRouteSelectionDatabaseTest.userEditedChapterContextSelectsOnlyTheReplacementSummary` 直接调用生产上下文选择器：旧摘要 `STALE`、旧 FTS 行为 0，只返回新 current version 的 replacement summary。TEST-033 因此以“有序重建 + 旧派生不进入权威上下文”完成。
+- TEST-033 十章场景与上下文权威场景在 API 30/API 35 各 1/1；数据库 Android 全量各 187/187，生成 Android 全量各 35/35；数据库 JVM 70/70，生成 JVM 117/117，全部 0 失败、0 错误、0 跳过。
+- `scripts/verify-build.ps1 -Offline` 通过 797 actionable tasks、Debug/Release、Lint/Vital、R8、JVM、安全扫描器自测、5 个产物扫描和备份排除检查；`SECURITY_SCAN_OK`，`git diff --check` 为 0。
+- App 内真实 Provider 调用 0、物理设备写入 0。TASK-061 原语与 TEST-033 完成；total runner、自动选择下一步、重启续跑和 context/consistency 阶段调度归 TASK-064，不冒充本阶段已实现。
+
+## 38. TASK-062 与 TEST-093 完成证据
+
+- `GenerationTimingTest` 覆盖域分离指纹、确定性事件身份、完整公式、phase 隔离、缺事件、跨 boot、失败终态和有限首段探测；`core:diagnostics` JVM 10/10。
+- `GenerationTimingDatabaseTest` 覆盖正式 Room 写入/replay、全字段 canary 扫描、错误前驱、时钟回退、错误 milestone-phase、不可变触发器和跨 boot 报告；v15→v16 迁移另验证表、索引、触发器和完整性。
+- `AuditedStreamingProviderExecutorTest` 使用本地 Fake Provider 走通真实流式解码后的首字节、首段、正文结束、字符/token 计数，以及无响应失败不伪造首字节；`GenerationTimingRecordingTest` 覆盖成功、截断、失败和迟到结算。
+- API 30/API 35 的 `core:database` 各 192/192、`feature:generation` 各 37/37；JVM 为 diagnostics 10/10、database 70/70、generation 120/120，均 0 失败、0 错误、0 跳过。
+- `scripts/verify-build.ps1 -Offline` 通过 797 actionable tasks、Debug/Release、Lint/Vital、R8、扫描器自测、源码与 5 个 APK 扫描和备份排除；`git diff --check` 返回 0。
+- 本任务只完成测量底座和 BODY Fake 接线；TASK-063 延迟/慢流/断流基准、TASK-064 total runner 全阶段接线、TASK-066 watchdog 与真实模型速度均未冒充完成。App 内真实 Provider 调用 0、物理设备写入 0。
+
+## 39. TASK-063 确定性 Fake Provider 与 BODY 基准证据
+
+- 新增独立 `provider:fake` JVM 模块：有限脚本、虚拟时钟、取消/显式 cancel 双观察和脱敏统计。JVM 24/24；5 分钟虚拟慢流不使用真实长等待。
+- DeepSeek 运行 `20260808-201004-b5d24248` 使用 max 推理、30 分钟硬上限和无累计 Token 上限，约 19 分 38 秒正常结束，总 Token 2,202,934；实际写入新模块和 settings。Sol 修复共享时钟并发误算与 provider-reported total token 缺失后独立复测。
+- `AuditedStreamingProviderExecutorTest` 以同一 Fake adapter 接入真实 RequestIntent、Room、加密草稿与 TASK-062 时序。虚拟 301 秒无终态 EOF 在墙钟 5 秒门禁内进入 `UNKNOWN_RESULT`，不自动再调用 Provider。
+- 20 个实际 Fake BODY 负载为 2,500～3,450 字：首字节 P50/P95/最慢 10.9/11.8/11.9 秒，首段 18.35/19.70/19.85 秒，正文结束 147/174/177 秒；均满足 BODY 目标。
+- 正式提交分布保持 20 个 `MISSING_EVENT`，未伪造 TASK-064；第一章完整链、watchdog、生成中投影和 20 章全链故障注入仍分别属于 TASK-064/066/065/068。
+- API 30/API 35 `feature:generation` 各 39/39；统一离线门禁通过 801 actionable tasks，JVM 537/537、Debug/Release、Lint/Vital、R8、扫描器自测、源码与 5 APK 扫描和备份排除均通过。
+
+## 40. TASK-064 Phase 1A 空闲 Job lease 恢复证据
+
+- 新增五个 `GenerationDatabaseTest`：过期空闲 Job 正向恢复、timeout 临界点、扫描后 Stage 被领取的 stale-fail、双维护器一次成功收敛、稳定排序与 `hasMore`。
+- 正向用例同时篡改候选 heartbeat，必须以 `StaleGenerationStateException` 失败且 Job 仍 RUNNING；只有原始精确候选可恢复。
+- API 30/API 35 定向 `GenerationDatabaseTest` 各 57/57；`core:database` Android 全量各 197/197；数据库 JVM 70/70，全部 0 失败、0 错误、0 跳过。
+- `scripts/security-scan.ps1 -SkipArtifacts` 返回 `SECURITY_SCAN_OK`，`git diff --check` 返回 0；真实 Provider 0、物理设备写入 0、Git remote 为空。
+- 本阶段未运行统一 Release/R8 门禁，因为 TASK-064 仍在分阶段实现；完成 dispatcher/runner 可验证切片后再运行统一门禁。TEST-095 和完整第一章 Fake 链仍未完成。
+
+## 41. TASK-064 Phase 1B runner queue 与 Job heartbeat 证据
+
+- `GenerationDatabaseTest` 新增 7 个测试，覆盖稳定排序/limit/hasMore/observedAt、残留 Job lease 排除、双 runner 并发精确一次成功、scan 后 Job/currentStage/Stage lease/updatedAt 变化 stale-fail、领取零 Stage/Attempt 写入、跨 Stage handoff 使用同一 Job token、错误或过期 token 不可复活，以及 owner/时间/limit 边界。
+- API 30/API 35 定向 `GenerationDatabaseTest` 各 64/64；`core:database` Android 全量各 204/204。数据库 JVM 70/70；AndroidTest Kotlin/Room 编译通过，全部 0 失败、0 错误、0 跳过。
+- DeepSeek 写入运行 `20260808-213707-7e4fe1b6` 使用 max 推理、30 分钟硬上限、无累计 Token 上限，约 23 分 21 秒正常结束，总 Token 4,412,800。Sol 随后补强 Job lease-free 查询、异常 projection 失败关闭和残留 lease 回归。
+- 本阶段只使用两个项目模拟器 `emulator-5556`（API 30）与 `emulator-5558`（API 35）；真实 Provider 0、物理设备写入 0。统一 Release/R8 留到 Stage 执行/dispatcher 可运行切片后执行。
+
+## 42. TASK-064 Phase 1C 原子执行租约证据
+
+- 新增 5 个 `GenerationDatabaseTest`：current Stage 正向领取、两协程并发精确一次成功、Stage acquire 第二步失败回滚 Job heartbeat、双 token heartbeat/混合 owner/错误 token，以及 Stage timeout 与 cursor 已推进时零部分写入。
+- API 30/API 35 定向 `GenerationDatabaseTest` 各 69/69；`core:database` Android 全量各 209/209；数据库 JVM 70/70，AndroidTest Kotlin/Room 编译通过，最终 0 失败、0 错误、0 跳过。
+- DeepSeek `20260808-221907-e4212150` 使用 max、30 分钟、无 Token 上限，在硬超时被终止；总 Token 3,654,893，无最终回交，只落了 repository 主体且没有新增测试。Sol 审查后补 same-owner/identifier 门禁和全部测试，并修正一次测试毫秒单位错误后完成双 API 验收。
+- 真实/Fake Provider 调用 0、物理设备写入 0。Phase 1C 未运行统一 Release/R8；heartbeat 调度 envelope、dispatcher 与 Fake 第一章闭环仍未完成。
+
+## 43. TASK-064 Phase 1D heartbeat envelope 证据
+
+- 新增 5 个纯 JVM 测试：手动多次 tick、action 在首 tick 前完成零 heartbeat、lease 丢失取消 active action并传播失败、cursor durable handoff 不误取消 commit、终态 Job boundary 与 mixed-owner 提前拒绝。
+- 测试 waiter 使用 `Channel + CompletableDeferred` 手动放行，不 `sleep`、不等待真实 15 秒；所有异步等待只有 2 秒失败保护。
+- `feature:generation` JVM 全量 125/125；API 30/API 35 Android 全量各 39/39，最终 0 失败、0 错误、0 跳过。
+- 首轮 JVM 有 1 个测试因 `assertSame` 错把协程堆栈恢复后的等价异常当成失败；改为校验异常类型与 `lease-lost` 原因后通过，生产 envelope 行为未放松。
+- 本阶段由 Sol 直接实现，没有调用 DeepSeek；真实/Fake Provider 0、物理设备写入 0，统一 Release/R8 留给 dispatcher 可运行切片。
+
+## 44. TASK-064 Phase 2A 派生 route identity 证据
+
+- 新增 11 个 JVM 测试：memory/tracking 各 v1/v2、五种 candidate role+phase、final commit v3，以及 unknown/missing/malformed policy、错误 schema/root/hash、互换 memory/tracking 身份、candidate 角色冲突和 final phase/target/maxAttempts 负例。
+- 正向 fixture 通过生产 factory/binding 创建，不用手写 JSON 冒充合法来源；解析器测试 11/11，`core:database` JVM 全量 81/81。
+- API 30 `emulator-5556` 与 API 35 `emulator-5558` 的数据库 Android 全量各 209/209；两台均 0 失败、0 跳过。没有连接或写入物理设备。
+- DeepSeek 写入运行 `20260808-234024-85842439` 使用 max、30 分钟硬上限、无 Token 上限，约 15 分 28 秒正常完成；总 Token 2,402,928。Sol 审查权威 parser 委托和错误路径后独立复测。
+- `scripts/security-scan.ps1 -SkipArtifacts` 返回 `SECURITY_SCAN_OK`，`git diff --check` 返回 0，Git remote 为空；真实/Fake Provider 调用 0。统一 Release/R8 留到 route 与 executor 形成可运行切片后执行。
+
+## 45. TASK-064 Phase 2B current-lease route binding 证据
+
+- 新增 5 个 Android 数据库测试：合法 memory route 的只读精确绑定；错误 Job/Stage token、mixed owner 和非 current Stage；倒退时间、60 秒超时临界与 PAUSING；已进入 `REQUEST_INTENT_RECORDED`；损坏冻结来源。
+- 每个失败用例都比较调用前后的 Job、Stage 与 Attempt；route binding 没有续 heartbeat、改变状态或创建台账。
+- 首轮 API 35 全类 74 项只有 1 个测试预期错误：正式暂停在 PREPARING 安全点直接进入 PAUSED。随后改用故障注入隔离 PAUSING 拒绝分支，生产代码未放松；重跑 74/74。
+- `core:database` JVM 81/81；API 30/API 35 数据库 Android 全量各 214/214，均 0 失败、0 跳过。
+- 本阶段由 Sol 直接实现和审查，未调用 DeepSeek；真实/Fake Provider 0、物理设备写入 0。`SECURITY_SCAN_OK`、diff check 0、Git remote 为空。
+
+## 46. TASK-064 Phase 2C2 final exact-token executor 证据
+
+- 新增 4 个 JVM 测试：PREPARING/COMMITTING 使用调用方 exact token 且不 acquire；同 owner 但 acquiredAt 不同拒绝；60 秒超时临界与 READY 拒绝；SUCCEEDED 只读 replay。
+- 定向 executor 测试 12/12；`feature:generation` JVM 全量 129/129。
+- API 30/API 35 generation Android 全量各 39/39，0 失败、0 跳过；没有连接或写入物理设备。
+- 本阶段只增加 local final executor 的授权门禁，没有 registry、Provider、Attempt、schema、migration 或 Gradle 变化。真实/Fake Provider 0。
+- `SECURITY_SCAN_OK`、diff check 0、Git remote 为空；统一 Release/R8 留到最小 registry 可运行切片。
+
+## 47. TASK-064 Phase 2C3 最小 registry 证据
+
+- 新增 2 个 JVM 测试：注册集合严格只有 final commit；未注册异常只含有限 route，不带 Job/Stage/owner 标识。`feature:generation` JVM 全量 131/131。
+- 新增 2 个真实 in-memory Room Android 集成测试：final route 将 Phase 2B exact Stage token 原样传给 bound executor且不 acquire READY；普通 memory route 在任何 executor 或状态写入前失败。
+- 首轮定向 Android 测试出现 JUnit `initializationError`，原因是测试 `@Before` 使用表达式体并意外返回 `StoredBookCreationSummary`；改为显式返回 `Unit` 后 2/2，通过时没有放松生产代码。
+- API 30/API 35 `feature:generation` Android 全量各 41/41，0 失败、0 错误、0 跳过。
+- `scripts/verify-build.ps1 -Offline` 通过 801 actionable tasks、Debug/Release、Lint/Vital、R8、扫描器自测、源码与 5 个 APK 安全扫描、备份排除；`git diff --check` 为 0，Git remote 为空。
+- 本阶段真实/Fake Provider 调用 0、物理设备写入 0。九条 remote route 仍未注册，完整 Fake 第一章与 TASK-064 总体完成门禁尚未满足。
+
+## 48. TASK-064 Phase 2D1 candidate draft 只读审计证据
+
+- DeepSeek 只读审计逐段追踪初始 BODY Stage、request audit、stream、validation、seal、recovery 与 continuation；任务前后 Git status 均为 215 条，没有代码写入、构建或 Provider 调用。
+- Sol 独立复核三个关键源码边界：bound BODY 的 Provider-open 只允许 REVISE；initial DRAFT seal 不解析 candidate source；final recovery 要求 revisionIndex=0 的 body input source 为空。
+- 生产 `ChapterCandidateStageBindingV1.stageSetup` 直接调用只有 3 处，分别创建 derived successor 或 revision successor；没有 initial DRAFT factory。`ReadyForValidation` 的生产消费者只有 revision coordinator。
+- 本阶段不运行新测试，因为交付物是只读缺口审计；上一阶段 generation JVM 131/131、双 API 各41/41、801-task 统一门禁仍是当前基线，不能冒充 initial draft 合同已经通过。
+- 后续必须增加 initial source contract JVM 测试、real Room factory/route 测试、Fake streaming+seal Android E2E、UNKNOWN/continuation/replay 负例后，才能注册 initial draft route。
+
+## 49. TASK-064 Phase 2D2 context route identity 证据
+
+- DeepSeek 写入运行 `20260809-020430-8f974ec6` 使用 max、30 分钟硬上限、无 Token 上限，约 20 分 37 秒正常完成；只改任务包授权的 factory、repository、resolver 和两份 JVM 测试。它发现 feature registry 的穷举分支需要新增 route，但按边界未越界修改。
+- Sol 独立补 registry 的显式未注册分支，并加固 progression chapter index 交叉校验及解析结果预算脱敏；context route 未加入注册集合。
+- `core:database` JVM 全量 86/86；Sol 加固后 factory+resolver 定向 19/19。`feature:generation` 正式 Kotlin 与 AndroidTest Kotlin 编译通过。
+- API 30/API 35 数据库 Android 全量各214/214；Sol 加固后 `ChapterContextAssemblyDatabaseTest` 定向各5/5，均 0 失败、0 错误、0 跳过。
+- 本阶段未调用真实/Fake Provider，未写物理设备，未改 schema/migration/DAO/Attempt/Usage。统一 Release/R8 沿用 Phase 2C3 基线，待 context exact-token registry 切片形成后再运行。
+
+## 50. TASK-064 Phase 2D3 context exact-token registry 证据
+
+- 新增 4 个 real Room context 测试：exact 双 token 正向提交与 durable replay；错误 Job/Stage token；Job status 或 cursor 变化；60 秒租约临界。定向 API 30/API 35 各9/9，包含原有5项回归。
+- registry Android 测试新增真实 Room context route：原始 bound snapshot 与 requestedAt 原样交给 context executor，final executor 为0次，Job/Stage不被 registry 自身修改。registry 定向双 API 各3/3。
+- `core:database` JVM 86/86、`feature:generation` JVM 131/131；API 30/API 35 数据库全量各218/218、生成全量各42/42，均0失败、0错误、0跳过。
+- 一次把 database 与 generation 同时连接到同一模拟器的命令因 Windows 抢占 logcat 文件而非零退出，但两个 XML 已分别是218/218和42/42；随后按模块拆开重跑，四条全量命令均独立成功退出。
+- `scripts/verify-build.ps1 -Offline` 通过801 actionable tasks、Debug/Release、Lint/Vital、R8、扫描器自测、源码与5个APK安全扫描和备份排除。
+- DeepSeek `20260809-025115-1315827e` 在 max、30分钟、无Token上限下触发硬超时，无 final，留下部分代码与未完成测试；Sol 修复其括号结构错误、完成高风险复核和测试后才确认本阶段。真实/Fake Provider 0、物理设备写入0。
+
+## 51. TASK-064 Phase 2E1 chapter-plan 合同审计证据
+
+- DeepSeek 首次运行 `20260809-041913-9c111e91` 因网络断开并在五次 stream 重试后退出 1，无 final、无写入；网络恢复后的 `20260809-054854-76d0c42d` 约 9 分 54 秒正常完成只读审计。
+- 第二次运行使用 max 推理、30 分钟上限、无 Token 上限；总 Token 3,132,957、缓存输入 2,745,344、输出 51,542、推理 28,392。默认 status 仍为 220 条且 SHA-256 与任务包完全一致。
+- Sol 复核确认：默认 status 220 与 `-uall` 279 只是未跟踪目录是否展开的计数差异，不是文件新增或丢失；DeepSeek 将 status 与 diff path 一一对应的表述不作为证据。
+- 源码审计确认没有普通 `chapter-plan.v1` parser/validator/commit/DRAFT successor；现有 registry 仍只注册 final+context，plan 在 Provider 前失败关闭。
+- Sol 额外检查 artifact retention，确认成功 `STREAM_DRAFT` 默认 24 小时可清理，因此“artifact + output reference”不能单独承担长期计划来源；DEC-068 改为把有界规范计划原子冻结进 initial DRAFT 输入。
+- 本阶段没有运行 Gradle 或模拟器。上一阶段基线仍为数据库 JVM86/86、生成JVM131/131，双 API数据库各218/218、生成各42/42和801-task统一门禁；不能把该基线冒充 plan route 已通过。
+
+## 52. TASK-064 Phase 2E2 chapter-plan route identity 证据
+
+- factory 测试现为8项：context/plan独立policy、plan正向解析与脱敏，以及phase/target/attempt/input hash/schema/policy/dependency/context ID/context hash/extra root/progression目标与章序负例。
+- resolver 测试现为15项：普通plan唯一解析为`CHAPTER_PLAN_V1`；错误policy、phase、target或input hash均失败关闭。registry unit以该route证明未注册异常只含有限enum，registered set仍精确2项。
+- JVM全量：`core:database` 90/90、`feature:generation` 131/131，0失败、0错误、0跳过。
+- Android全量：API30/API35数据库各218/218、生成各42/42，0失败、0跳过；既有context事务接受新增plan policy且仍正确推进cursor。
+- `scripts/verify-build.ps1 -Offline`通过801 actionable tasks、Debug/Release、Lint/Vital、R8、扫描器自测、源码与5个APK安全扫描和备份排除。
+- 本阶段真实/Fake Provider 0、物理设备写入0、无schema/migration/DAO/Provider变化。下一阶段不得在输出合同、预算/目的地和exact-token执行完成前注册plan route。
+
+## 53. TASK-064 Phase 2E3 chapter-plan 输出合同证据
+
+- 新增 `ChapterPlanStructuredOutputTest` 9项：Provider schema/48 KiB/12场景/64节点边界；普通计划正向与脱敏；字段换序 canonical hash 稳定；严格成年人虚构场景3节点正向；未确认参与者、节点不足、余波缺失；相关场景规避；比例模式伪造严格节点；章节/人物/POV漂移；重复key、未知字段、乱序和超限输出；Blocked expectation前置拒绝。
+- `feature:generation` JVM 全量由131项增至140/140，0失败、0错误、0跳过。
+- API30/API35 `feature:generation` Android 全量仍各42/42，0失败、0错误、0跳过；本阶段没有新增设备专用逻辑，但双版本证明新正式源码没有破坏既有 Room/runner 集成。
+- `scripts/verify-build.ps1 -Offline` 通过801 actionable tasks、Debug/Release、Lint/Vital、R8、扫描器自测、源码与5个APK安全扫描及备份排除。
+- 断网期间没有启动 DeepSeek；本阶段由 Sol 按已冻结合同直接实现并独立审查。真实/Fake Provider 0、物理设备写入0、无schema/migration/DAO/registry变化，plan route继续未注册。
+
+## 54. TASK-064 Phase 2E4A 目的地/预算审计证据
+
+- 全仓生产调用搜索确认：`BudgetEngine` 只有测试调用；`budgetSnapshotJson` 只做 JSON 合法性和任务快照保存，没有余额竞争语义。
+- `recordRequestIntent` 能原子建立 Attempt+UNKNOWN/PROVISIONAL Usage，但事务内没有 request/book/daily reservation。
+- disclosure 四字段已有 schema，但连接保存始终写空确认，DAO/Repository 没有接受、验证或失效生产路径。
+- `normalizedDestination` 当前等于保存的 base URL，未形成 scheme/host/effective-port/protocol 的版本化规范合同。
+- 因上述缺口，`CHAPTER_PLAN_V1` 继续显式未注册；本审计不调用 Provider、不修改 schema、不运行迁移。
+- 后续必须新增 TEST-090/091 的真实 Room 证据，以及 TEST-070～075 的并发、重启、跨日、价格未知和保守结算证据，才能进入 exact-token 远程执行。
+
+## 55. TASK-064 Phase 2E4B 目的地确认内核证据
+
+- `ExternalDataDestinationBindingV1Test` 新增6项，覆盖同 origin 大小写/path/默认端口/DNS尾点等价、scheme/非默认port/protocol区分、IPv6、userinfo/query/fragment、非法端口/协议、版本与stored hash失败关闭及toString脱敏；`core:model` JVM全量17/17。
+- `ConnectionDatabaseTest` 由2项增至6项：未确认阻断、接受后canonical持久/replay、protocol变化、host变化、合法格式hash篡改、disclosure版本升级、失效后重新确认与entity字符串脱敏。
+- API30/API35 `core:database` Android全量各222/222，0失败、0跳过。一次中间全量因表达式体测试返回`assertThrows`对象而产生JUnit initializationError，显式`Unit`后定向6/6和双API全量均通过，生产代码未放松。
+- `scripts/verify-build.ps1 -Offline`通过801 actionable tasks、全部JVM、Debug/Release、Lint/Vital、R8、扫描器自测、源码与5个APK安全扫描及备份排除。
+- DeepSeek只读审计运行`20260809-071823-4baf2bb8`使用max、15分钟上限、无Token上限，约5分36秒正常完成；确认无P1生产缺陷，提出测试覆盖与既有entity toString风险，由Sol补齐并复验。
+- 本阶段无schema/migration/registry/Provider/Attempt/Usage变化。TEST-090/091的内核负例已建立，但用户确认UI与Provider-open原子接线尚未完成，因此产品级验收项仍不勾选。
+
+## 56. TASK-083 Phase 1 设计审计与后续必测矩阵
+
+- DeepSeek只读审计`20260809-075939-b1d748ce`使用max、25分钟上限、无Token上限，约10分39秒完成；总Token 1,367,455，任务前后status均233条，0写入。
+- 实现验收必须覆盖：request/book/daily分别拒绝；价格未知token拒绝；单Room并发；两个Room实例同文件并发；失败方reservation/Attempt/Usage/Stage零写入；关闭重开后余额不丢；跨午夜只重置daily；UNKNOWN保留estimate；迟到Provider按终值幂等修正；实际超预留仍保存；Provider未执行唯一释放；RELEASED后迟到usage重新计入；v16→v17与v0 Provider-open拒绝。
+- 目的地测试还必须证明实际`ProviderConnectionProfile`和adapter protocol与permit一致，不能确认连接A后把profile B交给执行器。
+- 本设计阶段未运行Gradle/模拟器。上一阶段222/222与801-task门禁不能作为TASK-083实现通过证据。
+
+## 57. TASK-083 Phase 2 schema/policy core 证据
+
+- `BudgetDailyPeriodKeyV1Test`覆盖UTC与Asia/Shanghai午夜边界、确定性、显式zone输出、非法/过长zone和负epoch；API30首次设备失败暴露`LocalDate.ofInstant`不兼容，改为兼容调用后双API通过。
+- `PersistentBudgetPolicyDatabaseTest`共3项，覆盖BOOK/DAILY首revision与current、直接子revision/head、daily换zone、book不存在、倒退时间、重复policy ID、parent fork、revision/head篡改与删除。
+- reservation guard覆盖直接伪造SETTLED、错误Job–Book、非法币种、identity篡改/删除、v1 Attempt缺reservation、RESERVED→RELEASED、禁止倒退、RELEASED→SETTLED迟到回补及禁止SETTLED→RELEASED。
+- v16→v17迁移保留Book/Chapter/Attempt/Usage，旧Attempt新增0/null，三张预算表为空且trigger/index齐全；跨schema helper按`database.version`检查，v10不再被错误要求存在v17表。
+- JVM：core:model23/23、core:database90/90。API30/API35定向各4/4、数据库全量各226/226；补充fork/重复ID后策略类双API各3/3再通过。
+- `SECURITY_SCAN_OK`、diff check 0、remote为空；真实/Fake Provider0、物理设备写入0。Phase3仍必须补单Room/双Room并发、失败四表零写入、重启/跨日/UNKNOWN/迟到Usage/v0 Provider-open与实际profile目的地矩阵。
+
+## 58. TASK-083 Phase 3A 原子 reservation core 证据
+
+- `PersistentBudgetReservationDatabaseTest`共11项：正常v1原子提交和派生日键；request/book/daily token拒绝四表零写入；金额缺失/币种不符保守拒绝；disclosure缺失与Attempt失败整笔回滚；policy换版仍累计旧reservation。
+- 同Room两协程同时争抢150-token书级额度，各申请100，只能一个成功；失败必须是BOOK/LIMIT_EXCEEDED并且reservation/Attempt/Usage/Stage零写入。
+- 两个Room实例指向同一WAL文件重复相同竞争，只能一个成功；关闭两实例、重新打开数据库后，第三个60-token请求仍因已有100-token reservation被150上限拒绝，聚合保持100。
+- JVM `core:database` 90/90；API30/API35专项各11/11、数据库全量各237/237；`SECURITY_SCAN_OK`、diff check 0、remote为空。
+- 本节不能替代后续公开入口、FINAL/UNKNOWN/RELEASED/迟到Usage、跨午夜、v0 Provider-open和实际profile/adapter destination矩阵；这些仍是TASK-083完成门禁。
+
+## 59. TASK-083 Phase 3B 公开 RequestIntent v1 证据
+
+- `GenerationDatabaseTest`新增/更新公开prepare正向、超预算四表零半状态、legacy v0联网前拒绝、permit reservation错配和`RELEASED`拒绝；API30/API35各77/77。
+- core/feature/app全部公开streaming与continuation prepare调用已显式携带budget；feature五组`.invalid` profile的connection/protocol/canonical destination与预算fixture一致，caller daily key为0。
+- `core:database`双API全量各240/240，`feature:generation`各42/42，App恢复维护专项各2/2；JVM统一590/590。
+- 双Room测试曾在API30全量压力下暴露第二实例onOpen重复DDL的`SQLITE_BUSY`；夹具改为先打开两个Room实例再写fixture，不改变reservation竞争。修复后reservation专项API30连续3次、API35连续2次各11/11。
+- 统一离线门禁801 actionable tasks、Debug/Release、Lint/Vital、R8、源码与5 APK安全扫描、备份排除、diff检查均通过；真实Provider0、物理设备写入0。
+- 本节仍不能关闭TASK-083：FINAL/UNKNOWN/RELEASED/迟到Usage、跨午夜重预留和实际profile/adapter destination矩阵尚待完成。
+
+## 60. TASK-083 Phase 4A Usage 原子结算证据
+
+- `PersistentBudgetReservationDatabaseTest`增至23项，新增覆盖PROVISIONAL保持预留、FINAL UNKNOWN保留估计、ESTIMATED/PROVIDER终值替换、实际超预留、无可靠金额、FINAL replay、UNKNOWN/ESTIMATED迟到Provider升级、legacy v0，以及缺失/错态/错ID/错daily period失败关闭。
+- Sol将迟到升级和首次结算的CAS加固为旧状态+旧更新时间+旧accounted全字段比较，并增加Usage/reservation写后身份与终值回读；任一冲突整笔回滚。
+- API30/API35 reservation专项各23/23；`core:database`全量各252/252；`feature:generation`各42/42；App恢复维护专项各2/2。
+- 统一JVM590/590；801-task离线门禁、Debug/Release、Lint/Vital、R8、源码与5 APK安全扫描和备份排除通过。真实Provider0、物理设备写入0。
+- 本节仍不能关闭TASK-083：Provider明确未执行RELEASE、RELEASED后迟到Usage、跨午夜重预留和实际profile/adapter destination矩阵尚待完成。
+
+## 61. TASK-083 Phase 4B 明确未执行 RELEASE 与迟到回补证据
+
+- `PersistentBudgetReservationDatabaseTest` 增至30项；新增覆盖 Provider 明确未执行时 Usage/Attempt/Stage/Job/reservation 原子推进、book/daily聚合排除、错态五类回滚、已FINAL Usage拒绝、legacy v0、已知Usage不释放、`RELEASED→SETTLED`迟到Provider回补与精确replay，以及UNKNOWN/ESTIMATED不得复活。
+- Sol审查收紧 DeepSeek 初稿：专用入口只接受UNKNOWN/PROVISIONAL，要求Attempt与审计时间一致；release/restore CAS补齐旧`releasedAt/settledAt`空值条件，并对v0/v1 UNKNOWN FINAL做写后精确回读。
+- API30首次专项发现“无非RELEASED行时SQL SUM为NULL”的测试断言写成0；按DAO既有明确语义修正为NULL后，API30/API35专项各30/30。该失败没有修改生产聚合逻辑。
+- API30/API35 `core:database`全量各259/259；`feature:generation`各42/42；App恢复维护专项各2/2。API30一次UTP/ADB本地通道瞬时超时启动0项，确认模拟器在线后原样重跑获得2/2，不计为业务测试结果。
+- 统一JVM590/590；801-task离线门禁、Debug/Release、Lint/Vital、R8、源码与5 APK安全扫描和备份排除通过。真实Provider0、物理设备写入0。
+- 本节仍不能关闭TASK-083：跨午夜未发送重预留和实际profile/adapter destination矩阵尚待完成。
+
+## 62. TASK-083 Phase 5B Provider-open 换日核心证据
+
+- `PersistentBudgetReservationDatabaseTest` 增至35项：上海时区午夜前1ms同日 claim、午夜到点换日、剩余次数 READY、次数耗尽 NEEDS_ACTION、旧 permit replay、两个并发 claim 仅一次释放、已发送 Attempt 零写入拒绝，以及 Attempt/Usage/reservation/Stage/Job、租约、时间、错误码和book/daily聚合精确断言。
+- `AuditedStreamingProviderExecutorTest` 增至18项；新增换日用例证明异常发生在草稿 buffer 与 `adapter.generate` 之前，Provider调用计数为0，加密草稿 revision/updatedAt/0字节内容不变，五类持久状态已提交。
+- API30/API35定向：reservation各35/35、executor各18/18；整模块：`core:database`各264/264、`feature:generation`各43/43，全部0失败。
+- 统一JVM 592/592；`scripts/verify-build.ps1 -Offline`通过801 actionable tasks、Debug/Release、Lint/Vital、R8、5个构建产物安全扫描、扫描器自测和备份排除。
+- DeepSeek生产实现运行达到45分钟护栏但留下可审查WIP；测试补充运行异常退出且无测试差异。Sol完成状态机穷举分支、精确租约/事务加固、测试与双API验收后才确认本阶段。
+- 本节只证明旧日未发送请求的可靠终止与重新排队。Phase 5C的新日新Attempt/reservation与续写种子复制、以及实际profile/adapter destination匹配仍是TASK-083完成门禁。
+
+## 63. TASK-083 Phase 5C 新日替代请求准备证据
+
+- `PersistentBudgetReservationDatabaseTest` 增至40项；新增证明新Attempt序号/父链/新日键/新reservation、旧日释放保持、book跨日累计与daily换日、普通入口绕过拒绝、新日quota零半状态、错误Job token失败关闭，以及两个并发替代请求仅一个提交。
+- `AuditedStreamingProviderExecutorTest` 增至21项；新增证明非空续写种子复制到不同的新受保护工件、空种子也分配不同工件、旧descriptor/内容保持、普通入口失败后新工件被清理、数据库证据变化时只删除新工件，且所有换日流程Provider调用为0。
+- API30/API35定向：reservation各40/40、executor各21/21；整模块：`core:database`各269/269、`feature:generation`各46/46，全部0失败、0跳过。
+- 统一JVM为592/592，0失败、0错误、0跳过。完整离线门禁结果记录在工作汇报135。
+- DeepSeek只读设计审计`20260809-155744-bbeaf68d`使用max、无Token上限，约16分12秒正常完成；总Token4,180,592、0写入、0权限请求。Sol采用新工件优先/事务失败清理和父证据同事务复核，并加固为调用方必须提供真实双租约快照、普通入口不可旁路。
+- 本节证明repository级专用准备边界，不表示total runner已注册该路线，也不表示实际profile/adapter destination已核对；后二者仍属于后续集成边界。
+
+## 64. TASK-083 Phase 5D Provider-open 实际目的地匹配证据
+
+- core:model JVM 覆盖等价 path/大小写/default port 规范化、不同非默认端口隔离，以及 evidence `toString` 对 connection、host、protocol 的脱敏。
+- 数据库专项覆盖错误 destination 五类表零写入、同 permit 正确重试、错误 connection 与跨日同时发生时目的地错误优先、当前 disclosure 漂移失败关闭及恢复同 binding 后重试。
+- executor 专项覆盖错误 profile destination、profile/adapter protocol 不一致、受保护草稿不打开、adapter 调用0、数据库零写入和正确配置重试成功。
+- API30/API35：reservation 专项各43/43、executor专项各23/23；数据库模块各272/272、generation模块各48/48。
+- 统一离线门禁通过801个Gradle task，Debug/Release、Lint/Vital、R8、源码与5个APK安全扫描及备份排除全部通过；App真实Provider调用0、物理设备写入0。
+
+## 65. TASK-064 Phase 2E5A chapter-plan bound preparation 证据
+
+- `PersistentBudgetReservationDatabaseTest` 增至47项，其中4项覆盖：exact runner snapshot成功、通用Stage-token旁路零半状态、错误Job token/attempt边界拒绝，以及公开streaming入口清理被拒绝工件并持久化bound工件。
+- API30/API35 reservation专项各47/47；`core:database`模块全量各276/276；`feature:generation`模块全量各48/48。
+- `:core:database:test`与`:feature:generation:test`通过；统一离线门禁通过801 actionable tasks、Debug/Release、Lint/Vital、R8、源码与5个APK安全扫描及备份排除。
+- 本阶段真实/Fake Provider调用均为0，物理设备写入0；route仍未注册，因此这些证据只关闭RequestIntent准备旁路，不冒充plan端到端执行。

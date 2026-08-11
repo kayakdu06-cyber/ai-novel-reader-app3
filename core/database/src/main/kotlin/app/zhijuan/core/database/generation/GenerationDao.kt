@@ -5,6 +5,9 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
+import app.zhijuan.core.model.BudgetDailyPeriodKeyV1
+import app.zhijuan.core.model.BudgetReservationStatus
+import app.zhijuan.core.model.BudgetScope
 import app.zhijuan.core.model.GenerationJobStatus
 import app.zhijuan.core.model.GenerationStageStatus
 import app.zhijuan.core.model.RequestAttemptStatus
@@ -30,6 +33,8 @@ internal data class NewRequestIntent(
     val streamDraftRef: String?,
     val dailyPeriodKey: String,
     val createdAt: Long,
+    val budgetEnforcementVersion: Int = 0,
+    val budgetReservationId: String? = null,
 )
 
 internal data class UsageUpdate(
@@ -46,7 +51,31 @@ internal data class UsageUpdate(
     val updatedAt: Long,
 )
 
+/**
+ * Minimal scan projection for the persistent runner queue: a READY job and its current READY,
+ * lease-free stage. Deliberately excludes book/target/input/owner payloads and never reads
+ * `user_intent_json` or `input_sources_json`.
+ */
+internal data class GenerationRunnerQueueRow(
+    val jobId: String,
+    val jobStatus: GenerationJobStatus,
+    val currentStageId: String,
+    val jobUpdatedAt: Long,
+    val stageStatus: GenerationStageStatus,
+    val stageUpdatedAt: Long,
+)
+
 class StaleGenerationStateException(message: String) : IllegalStateException(message)
+
+/**
+ * Result of the daily-rollover release of an unsent v1 attempt. The persistent
+ * runner must re-prepare the request (Phase 5C); this slice never creates a
+ * replacement attempt itself.
+ */
+internal enum class DailyRolloverDisposition {
+    REQUEUED,
+    ATTEMPTS_EXHAUSTED,
+}
 
 @Dao
 internal interface GenerationDao {
@@ -329,6 +358,34 @@ internal interface GenerationDao {
 
     @Query(
         """
+        UPDATE generation_stage
+        SET status = 'NEEDS_ACTION',
+            output_reference_json = :outputReferenceJson,
+            standard_error_code = NULL,
+            next_retry_at = NULL,
+            lease_owner_id = NULL,
+            lease_acquired_at = NULL,
+            lease_heartbeat_at = NULL,
+            updated_at = :updatedAt
+        WHERE stage_id = :stageId
+          AND status = 'COMMITTING'
+          AND lease_owner_id = :leaseOwnerId
+          AND lease_acquired_at = :leaseAcquiredAt
+          AND lease_heartbeat_at IS NOT NULL
+          AND lease_heartbeat_at <= :updatedAt
+          AND updated_at <= :updatedAt
+        """,
+    )
+    suspend fun compareAndSetStageNeedsActionWithOutput(
+        stageId: String,
+        leaseOwnerId: String,
+        leaseAcquiredAt: Long,
+        outputReferenceJson: String,
+        updatedAt: Long,
+    ): Int
+
+    @Query(
+        """
         UPDATE generation_job
         SET current_stage_id = :nextStageId,
             updated_at = :updatedAt
@@ -452,6 +509,104 @@ internal interface GenerationDao {
         leaseAcquiredAt: Long,
         expectedHeartbeatAt: Long,
         nextStatus: GenerationStageStatus,
+        now: Long,
+    ): Int
+
+    @Query(
+        """
+        SELECT generation_job.* FROM generation_job
+        INNER JOIN generation_stage
+            ON generation_stage.job_id = generation_job.job_id
+            AND generation_stage.stage_id = generation_job.current_stage_id
+        WHERE generation_job.status = 'RUNNING'
+          AND generation_job.lease_owner_id IS NOT NULL
+          AND generation_job.lease_acquired_at IS NOT NULL
+          AND generation_job.lease_heartbeat_at IS NOT NULL
+          AND generation_job.lease_heartbeat_at <= :expiredAtOrBefore
+          AND generation_job.updated_at <= :observedAt
+          AND generation_stage.status = 'READY'
+          AND generation_stage.lease_owner_id IS NULL
+          AND generation_stage.lease_acquired_at IS NULL
+          AND generation_stage.lease_heartbeat_at IS NULL
+          AND generation_stage.updated_at <= :observedAt
+        ORDER BY generation_job.lease_heartbeat_at ASC, generation_job.job_id ASC
+        LIMIT :limit
+        """,
+    )
+    suspend fun expiredIdleRunningJobsForMaintenance(
+        expiredAtOrBefore: Long,
+        observedAt: Long,
+        limit: Int,
+    ): List<GenerationJobEntity>
+
+    @Query(
+        """
+        SELECT generation_job.job_id AS jobId,
+               generation_job.status AS jobStatus,
+               generation_job.current_stage_id AS currentStageId,
+               generation_job.updated_at AS jobUpdatedAt,
+               generation_stage.status AS stageStatus,
+               generation_stage.updated_at AS stageUpdatedAt
+        FROM generation_job
+        INNER JOIN generation_stage
+            ON generation_stage.job_id = generation_job.job_id
+            AND generation_stage.stage_id = generation_job.current_stage_id
+        WHERE generation_job.status = 'READY'
+          AND generation_job.updated_at <= :observedAt
+          AND generation_job.lease_owner_id IS NULL
+          AND generation_job.lease_acquired_at IS NULL
+          AND generation_job.lease_heartbeat_at IS NULL
+          AND generation_stage.status = 'READY'
+          AND generation_stage.lease_owner_id IS NULL
+          AND generation_stage.lease_acquired_at IS NULL
+          AND generation_stage.lease_heartbeat_at IS NULL
+          AND generation_stage.updated_at <= :observedAt
+        ORDER BY generation_job.updated_at ASC, generation_job.job_id ASC
+        LIMIT :limit
+        """,
+    )
+    suspend fun readyJobsForRunnerQueue(
+        observedAt: Long,
+        limit: Int,
+    ): List<GenerationRunnerQueueRow>
+
+    @Query(
+        """
+        UPDATE generation_job
+        SET status = :nextStatus,
+            lease_owner_id = NULL,
+            lease_acquired_at = NULL,
+            lease_heartbeat_at = NULL,
+            updated_at = CASE
+                WHEN updated_at < :now THEN :now
+                ELSE updated_at
+            END
+        WHERE job_id = :jobId
+          AND status = 'RUNNING'
+          AND lease_owner_id = :leaseOwnerId
+          AND lease_acquired_at = :leaseAcquiredAt
+          AND lease_heartbeat_at = :expectedHeartbeatAt
+          AND current_stage_id = :currentStageId
+          AND updated_at <= :now
+          AND EXISTS (
+              SELECT 1 FROM generation_stage
+              WHERE job_id = :jobId
+                AND stage_id = :currentStageId
+                AND status = 'READY'
+                AND lease_owner_id IS NULL
+                AND lease_acquired_at IS NULL
+                AND lease_heartbeat_at IS NULL
+                AND updated_at <= :now
+          )
+        """,
+    )
+    suspend fun compareAndRequeueExpiredIdleJobLease(
+        jobId: String,
+        leaseOwnerId: String,
+        leaseAcquiredAt: Long,
+        expectedHeartbeatAt: Long,
+        currentStageId: String,
+        nextStatus: GenerationJobStatus,
         now: Long,
     ): Int
 
@@ -585,6 +740,196 @@ internal interface GenerationDao {
         currency: String?,
         estimatedCostMicros: Long?,
         priceCatalogVersion: String?,
+        updatedAt: Long,
+    ): Int
+
+    @Query("SELECT * FROM request_budget_reservation WHERE attempt_id = :attemptId")
+    suspend fun findBudgetReservationByAttempt(attemptId: String): RequestBudgetReservationEntity?
+
+    @Query("SELECT * FROM budget_policy_head WHERE scope = :scope AND scope_key = :scopeKey")
+    suspend fun findBudgetPolicyHead(scope: BudgetScope, scopeKey: String): BudgetPolicyHeadEntity?
+
+    @Query("SELECT * FROM budget_policy_revision WHERE budget_policy_id = :policyId")
+    suspend fun findBudgetPolicyRevision(policyId: String): BudgetPolicyRevisionEntity?
+
+    @Query(
+        """
+        UPDATE request_budget_reservation
+        SET status = 'SETTLED',
+            settled_at = :updatedAt,
+            updated_at = :updatedAt
+        WHERE budget_reservation_id = :reservationId
+          AND attempt_id = :attemptId
+          AND status = 'RESERVED'
+          AND updated_at = :expectedUpdatedAt
+          AND accounted_tokens = :expectedAccountedTokens
+          AND accounted_cost_micros IS :expectedAccountedCostMicros
+          AND accounted_currency IS :expectedAccountedCurrency
+        """,
+    )
+    suspend fun settleReservationPreservingEstimate(
+        reservationId: String,
+        attemptId: String,
+        expectedUpdatedAt: Long,
+        expectedAccountedTokens: Long,
+        expectedAccountedCostMicros: Long?,
+        expectedAccountedCurrency: String?,
+        updatedAt: Long,
+    ): Int
+
+    @Query(
+        """
+        UPDATE request_budget_reservation
+        SET status = 'SETTLED',
+            accounted_tokens = :totalTokens,
+            accounted_cost_micros = :costMicros,
+            accounted_currency = :currency,
+            settled_at = :updatedAt,
+            updated_at = :updatedAt
+        WHERE budget_reservation_id = :reservationId
+          AND attempt_id = :attemptId
+          AND status = 'RESERVED'
+          AND updated_at = :expectedUpdatedAt
+          AND accounted_tokens = :expectedAccountedTokens
+          AND accounted_cost_micros IS :expectedAccountedCostMicros
+          AND accounted_currency IS :expectedAccountedCurrency
+        """,
+    )
+    suspend fun settleReservationWithFinalValues(
+        reservationId: String,
+        attemptId: String,
+        expectedUpdatedAt: Long,
+        expectedAccountedTokens: Long,
+        expectedAccountedCostMicros: Long?,
+        expectedAccountedCurrency: String?,
+        totalTokens: Long,
+        costMicros: Long?,
+        currency: String?,
+        updatedAt: Long,
+    ): Int
+
+    @Query(
+        """
+        UPDATE request_budget_reservation
+        SET accounted_tokens = :totalTokens,
+            accounted_cost_micros = :costMicros,
+            accounted_currency = :currency,
+            updated_at = :updatedAt
+        WHERE budget_reservation_id = :reservationId
+          AND attempt_id = :attemptId
+          AND status = 'SETTLED'
+          AND settled_at = :expectedSettledAt
+          AND updated_at = :expectedUpdatedAt
+          AND accounted_tokens = :expectedAccountedTokens
+          AND accounted_cost_micros IS :expectedAccountedCostMicros
+          AND accounted_currency IS :expectedAccountedCurrency
+        """,
+    )
+    suspend fun upgradeSettledReservationWithProviderValues(
+        reservationId: String,
+        attemptId: String,
+        expectedUpdatedAt: Long,
+        expectedAccountedTokens: Long,
+        expectedAccountedCostMicros: Long?,
+        expectedAccountedCurrency: String?,
+        totalTokens: Long,
+        costMicros: Long?,
+        currency: String?,
+        expectedSettledAt: Long,
+        updatedAt: Long,
+    ): Int
+
+    @Query(
+        """
+        UPDATE request_budget_reservation
+        SET status = 'RELEASED',
+            accounted_tokens = 0,
+            accounted_cost_micros = NULL,
+            accounted_currency = NULL,
+            released_at = :updatedAt,
+            updated_at = :updatedAt
+        WHERE budget_reservation_id = :reservationId
+          AND attempt_id = :attemptId
+          AND status = 'RESERVED'
+          AND settled_at IS NULL
+          AND released_at IS NULL
+          AND updated_at = :expectedUpdatedAt
+          AND accounted_tokens = :expectedAccountedTokens
+          AND accounted_cost_micros IS :expectedAccountedCostMicros
+          AND accounted_currency IS :expectedAccountedCurrency
+        """,
+    )
+    suspend fun releaseReservationAfterProviderProof(
+        reservationId: String,
+        attemptId: String,
+        expectedUpdatedAt: Long,
+        expectedAccountedTokens: Long,
+        expectedAccountedCostMicros: Long?,
+        expectedAccountedCurrency: String?,
+        updatedAt: Long,
+    ): Int
+
+    @Query(
+        """
+        UPDATE request_budget_reservation
+        SET status = 'RELEASED',
+            accounted_tokens = 0,
+            accounted_cost_micros = NULL,
+            accounted_currency = NULL,
+            released_at = :updatedAt,
+            updated_at = :updatedAt
+        WHERE budget_reservation_id = :reservationId
+          AND attempt_id = :attemptId
+          AND status = 'RESERVED'
+          AND settled_at IS NULL
+          AND released_at IS NULL
+          AND updated_at = :expectedUpdatedAt
+          AND accounted_tokens = :expectedAccountedTokens
+          AND accounted_cost_micros IS :expectedAccountedCostMicros
+          AND accounted_currency IS :expectedAccountedCurrency
+        """,
+    )
+    suspend fun releaseReservationAfterDailyRollover(
+        reservationId: String,
+        attemptId: String,
+        expectedUpdatedAt: Long,
+        expectedAccountedTokens: Long,
+        expectedAccountedCostMicros: Long?,
+        expectedAccountedCurrency: String?,
+        updatedAt: Long,
+    ): Int
+
+    @Query(
+        """
+        UPDATE request_budget_reservation
+        SET status = 'SETTLED',
+            accounted_tokens = :totalTokens,
+            accounted_cost_micros = :costMicros,
+            accounted_currency = :currency,
+            settled_at = :updatedAt,
+            updated_at = :updatedAt
+        WHERE budget_reservation_id = :reservationId
+          AND attempt_id = :attemptId
+          AND status = 'RELEASED'
+          AND released_at = :expectedReleasedAt
+          AND settled_at IS NULL
+          AND updated_at = :expectedUpdatedAt
+          AND accounted_tokens = :expectedAccountedTokens
+          AND accounted_cost_micros IS :expectedAccountedCostMicros
+          AND accounted_currency IS :expectedAccountedCurrency
+        """,
+    )
+    suspend fun restoreReleasedReservationWithProviderValues(
+        reservationId: String,
+        attemptId: String,
+        expectedReleasedAt: Long,
+        expectedUpdatedAt: Long,
+        expectedAccountedTokens: Long,
+        expectedAccountedCostMicros: Long?,
+        expectedAccountedCurrency: String?,
+        totalTokens: Long,
+        costMicros: Long?,
+        currency: String?,
         updatedAt: Long,
     ): Int
 
@@ -897,6 +1242,8 @@ internal interface GenerationDao {
             inputHash = intent.inputHash,
             streamDraftRef = intent.streamDraftRef,
             retryParentAttemptId = intent.retryParentAttemptId,
+            budgetEnforcementVersion = intent.budgetEnforcementVersion,
+            budgetReservationId = intent.budgetReservationId,
             createdAt = intent.createdAt,
             updatedAt = intent.createdAt,
         )
@@ -1181,8 +1528,15 @@ internal interface GenerationDao {
     @Transaction
     suspend fun recordUsage(attemptId: String, update: UsageUpdate): UsageLedgerEntity {
         validateUsage(update)
+        val attempt = requireNotNull(findAttempt(attemptId)) {
+            "Usage ledger requires its owning attempt."
+        }
+        val reservation = resolveBudgetReservationForUsage(attempt)
         val current = requireNotNull(findUsageForAttempt(attemptId)) {
             "Usage ledger for attempt $attemptId does not exist."
+        }
+        if (reservation != null) {
+            requireReservationMatchesUsageIdentity(reservation, current)
         }
         if (current.status == UsageLedgerStatus.FINAL) {
             val replayMatches = current.source == update.source &&
@@ -1194,7 +1548,12 @@ internal interface GenerationDao {
                 current.currency == update.currency &&
                 current.estimatedCostMicros == update.estimatedCostMicros &&
                 current.priceCatalogVersion == update.priceCatalogVersion
-            if (replayMatches && update.status == UsageLedgerStatus.FINAL) return current
+            if (replayMatches && update.status == UsageLedgerStatus.FINAL) {
+                if (reservation != null) {
+                    requireReservationMatchesFinalUsage(reservation, current)
+                }
+                return current
+            }
             if (
                 update.status == UsageLedgerStatus.FINAL &&
                 update.source == UsageSource.PROVIDER_REPORTED &&
@@ -1217,7 +1576,72 @@ internal interface GenerationDao {
                 ) {
                     throw StaleGenerationStateException("Final usage was upgraded concurrently.")
                 }
-                return requireNotNull(findUsageForAttempt(attemptId))
+                if (reservation != null) {
+                    when (reservation.status) {
+                        BudgetReservationStatus.SETTLED -> {
+                            val expectedSettledAt = requireNotNull(reservation.settledAt) {
+                                "A finalized usage requires an already settled reservation."
+                            }
+                            if (
+                                upgradeSettledReservationWithProviderValues(
+                                    reservationId = reservation.budgetReservationId,
+                                    attemptId = reservation.attemptId,
+                                    expectedUpdatedAt = reservation.updatedAt,
+                                    expectedAccountedTokens = reservation.accountedTokens,
+                                    expectedAccountedCostMicros = reservation.accountedCostMicros,
+                                    expectedAccountedCurrency = reservation.accountedCurrency,
+                                    totalTokens = totalTokens,
+                                    costMicros = update.estimatedCostMicros,
+                                    currency = update.currency,
+                                    expectedSettledAt = expectedSettledAt,
+                                    updatedAt = update.updatedAt,
+                                ) != 1
+                            ) {
+                                throw StaleGenerationStateException(
+                                    "Settled reservation changed before the provider usage upgrade.",
+                                )
+                            }
+                        }
+                        BudgetReservationStatus.RELEASED -> {
+                            val expectedReleasedAt = requireNotNull(reservation.releasedAt) {
+                                "A released reservation requires a release time."
+                            }
+                            if (
+                                restoreReleasedReservationWithProviderValues(
+                                    reservationId = reservation.budgetReservationId,
+                                    attemptId = reservation.attemptId,
+                                    expectedReleasedAt = expectedReleasedAt,
+                                    expectedUpdatedAt = reservation.updatedAt,
+                                    expectedAccountedTokens = reservation.accountedTokens,
+                                    expectedAccountedCostMicros = reservation.accountedCostMicros,
+                                    expectedAccountedCurrency = reservation.accountedCurrency,
+                                    totalTokens = totalTokens,
+                                    costMicros = update.estimatedCostMicros,
+                                    currency = update.currency,
+                                    updatedAt = update.updatedAt,
+                                ) != 1
+                            ) {
+                                throw StaleGenerationStateException(
+                                    "Released reservation changed before the provider usage upgrade.",
+                                )
+                            }
+                        }
+                        else -> throw StaleGenerationStateException(
+                            "Provider usage upgrade requires a settled or released reservation.",
+                        )
+                    }
+                }
+                val upgradedUsage = requireNotNull(findUsageForAttempt(attemptId))
+                if (reservation != null) {
+                    val upgradedReservation = requireNotNull(
+                        findBudgetReservationByAttempt(attemptId),
+                    ) {
+                        "The budget reservation disappeared during the provider usage upgrade."
+                    }
+                    requireReservationMatchesUsageIdentity(upgradedReservation, upgradedUsage)
+                    requireReservationMatchesFinalUsage(upgradedReservation, upgradedUsage)
+                }
+                return upgradedUsage
             }
             throw IllegalStateException("Final usage ledger is immutable.")
         }
@@ -1241,7 +1665,681 @@ internal interface GenerationDao {
         ) {
             throw StaleGenerationStateException("Usage ledger was finalized concurrently.")
         }
+        if (reservation != null) {
+            if (update.status == UsageLedgerStatus.FINAL) {
+                settleReservationForFinalUsage(reservation, update)
+            } else {
+                requireReservationStillReserved(reservation)
+            }
+        }
         return requireNotNull(findUsageForAttempt(attemptId))
+    }
+
+    /**
+     * Dedicated confirmed-not-executed recovery settlement. Only the existing
+     * policy branch that already decided REQUEUE_PROVEN_NOT_EXECUTED may call
+     * this entry; there is deliberately no boolean release switch on the
+     * generic [recordUsage] path. Inside one transaction the usage ledger is
+     * finalized as UNKNOWN/FINAL and, for a v1 attempt, the still-reserved
+     * reservation is released (RESERVED -> RELEASED with zero accounted
+     * values and the audit time as releasedAt). Legacy v0 attempts have no
+     * reservation and only receive the UNKNOWN final usage. Any CAS miss or
+     * read-back mismatch rolls the whole recovery settlement back.
+     */
+    @Transaction
+    suspend fun finalizeUsageAndReleaseReservationAfterProviderProof(
+        attemptId: String,
+        update: UsageUpdate,
+    ): UsageLedgerEntity {
+        require(update.status == UsageLedgerStatus.FINAL) {
+            "Provider-proof usage must be finalized."
+        }
+        require(update.source == UsageSource.UNKNOWN) {
+            "Provider-proof usage must remain UNKNOWN."
+        }
+        validateUsage(update)
+        val attempt = requireNotNull(findAttempt(attemptId)) {
+            "Usage ledger requires its owning attempt."
+        }
+        require(attempt.status == RequestAttemptStatus.FAILED_RETRYABLE) {
+            "Provider-proof release requires the attempt already requeued as retryable."
+        }
+        require(attempt.updatedAt == update.updatedAt) {
+            "Provider-proof release must share the attempt requeue audit time."
+        }
+        val reservation = resolveBudgetReservationForUsage(attempt)
+        val current = requireNotNull(findUsageForAttempt(attemptId)) {
+            "Usage ledger for attempt $attemptId does not exist."
+        }
+        if (reservation != null) {
+            requireReservationMatchesUsageIdentity(reservation, current)
+        }
+        require(current.source == UsageSource.UNKNOWN) {
+            "Provider-proof usage must remain UNKNOWN."
+        }
+        require(
+            current.inputTokens == null &&
+                current.outputTokens == null &&
+                current.cachedTokens == null &&
+                current.reasoningTokens == null &&
+                current.totalTokens == null &&
+                current.estimatedCostMicros == null &&
+                current.currency == null,
+        ) {
+            "Provider-proof usage must carry no values."
+        }
+        require(current.status == UsageLedgerStatus.PROVISIONAL) {
+            "Provider-proof release requires provisional usage."
+        }
+        require(
+            reservation == null ||
+                reservation.status == BudgetReservationStatus.RESERVED,
+        ) {
+            "Provider-proof release requires the reservation still reserved."
+        }
+        if (
+            updateProvisionalUsage(
+                attemptId = attemptId,
+                source = update.source,
+                status = update.status,
+                inputTokens = update.inputTokens,
+                outputTokens = update.outputTokens,
+                cachedTokens = update.cachedTokens,
+                reasoningTokens = update.reasoningTokens,
+                totalTokens = update.totalTokens,
+                currency = update.currency,
+                estimatedCostMicros = update.estimatedCostMicros,
+                priceCatalogVersion = update.priceCatalogVersion,
+                updatedAt = update.updatedAt,
+            ) != 1
+        ) {
+            throw StaleGenerationStateException(
+                "Usage ledger was finalized concurrently during provider-proof recovery.",
+            )
+        }
+        val finalizedUsage = requireNotNull(findUsageForAttempt(attemptId)) {
+            "The usage ledger disappeared during provider-proof recovery."
+        }
+        require(
+            finalizedUsage.status == UsageLedgerStatus.FINAL &&
+                finalizedUsage.source == UsageSource.UNKNOWN &&
+                finalizedUsage.inputTokens == null &&
+                finalizedUsage.outputTokens == null &&
+                finalizedUsage.cachedTokens == null &&
+                finalizedUsage.reasoningTokens == null &&
+                finalizedUsage.totalTokens == null &&
+                finalizedUsage.estimatedCostMicros == null &&
+                finalizedUsage.currency == null &&
+                finalizedUsage.finalizedAt == update.updatedAt,
+        ) {
+            "Provider-proof recovery did not persist the exact UNKNOWN final usage."
+        }
+        if (reservation != null && reservation.status == BudgetReservationStatus.RESERVED) {
+            require(reservation.settledAt == null) {
+                "A reserved reservation must not carry a settlement time."
+            }
+            require(
+                reservation.accountedTokens == reservation.estimatedTokens &&
+                    reservation.accountedCostMicros == reservation.estimatedCostMicros &&
+                    reservation.accountedCurrency == reservation.estimatedCurrency,
+            ) {
+                "Provider-proof release requires the reservation estimate unchanged."
+            }
+            if (
+                releaseReservationAfterProviderProof(
+                    reservationId = reservation.budgetReservationId,
+                    attemptId = reservation.attemptId,
+                    expectedUpdatedAt = reservation.updatedAt,
+                    expectedAccountedTokens = reservation.accountedTokens,
+                    expectedAccountedCostMicros = reservation.accountedCostMicros,
+                    expectedAccountedCurrency = reservation.accountedCurrency,
+                    updatedAt = update.updatedAt,
+                ) != 1
+            ) {
+                throw StaleGenerationStateException(
+                    "Budget reservation changed before the provider-proof release.",
+                )
+            }
+            val reread = requireNotNull(findBudgetReservationByAttempt(attemptId)) {
+                "The budget reservation disappeared during the provider-proof release."
+            }
+            requireReservationMatchesUsageIdentity(reread, finalizedUsage)
+            require(reread.status == BudgetReservationStatus.RELEASED) {
+                "Provider-proof recovery must release the budget reservation."
+            }
+            require(
+                reread.accountedTokens == 0L &&
+                    reread.accountedCostMicros == null &&
+                    reread.accountedCurrency == null,
+            ) {
+                "A released reservation must carry zero accounted values."
+            }
+            require(reread.releasedAt == update.updatedAt) {
+                "A released reservation must carry the audit time."
+            }
+            require(reread.settledAt == null) {
+                "A released reservation must not carry a settlement time."
+            }
+        }
+        return finalizedUsage
+    }
+
+    /**
+     * Dedicated daily-rollover release for an unsent v1 attempt whose
+     * reservation period key no longer matches the current DAILY policy
+     * period. Only the provider-open claim path that already verified the
+     * daily-key mismatch may call this entry; there is deliberately no
+     * boolean release switch shared with the provider-proof settlement, and
+     * the two error semantics never mix. The method runs inside the caller's
+     * outer claim transaction and returns a limited disposition; the caller
+     * must throw the redacted business exception only after the transaction
+     * commits. Any CAS miss or read-back mismatch rolls the whole rollover
+     * back, so two concurrent claims can complete at most one rollover.
+     */
+    @Transaction
+    suspend fun releaseUnsentAttemptAfterDailyRollover(
+        attemptId: String,
+        reservationId: String,
+        leaseToken: GenerationLeaseToken,
+        validatedAt: Long,
+    ): DailyRolloverDisposition {
+        val attempt = requireNotNull(findAttempt(attemptId)) {
+            "Daily rollover requires the owning attempt."
+        }
+        require(attempt.status == RequestAttemptStatus.INTENT_RECORDED) {
+            "Daily rollover requires an unsent intent-recorded attempt."
+        }
+        require(attempt.budgetEnforcementVersion == 1) {
+            "Daily rollover requires a v1 budgeted attempt."
+        }
+        require(attempt.budgetReservationId == reservationId) {
+            "Daily rollover reservation id does not match the attempt."
+        }
+        require(
+            attempt.sentAt == null &&
+                attempt.providerRequestId == null &&
+                attempt.finishedAt == null &&
+                attempt.httpStatus == null &&
+                attempt.outputHash == null &&
+                attempt.standardErrorCode == null,
+        ) {
+            "Daily rollover requires an attempt with no send evidence."
+        }
+        require(validatedAt >= attempt.updatedAt) {
+            "Daily rollover time cannot move backwards for the attempt."
+        }
+        val usage = requireNotNull(findUsageForAttempt(attemptId)) {
+            "Daily rollover requires the owning usage ledger."
+        }
+        require(
+            usage.source == UsageSource.UNKNOWN &&
+                usage.status == UsageLedgerStatus.PROVISIONAL &&
+                usage.inputTokens == null &&
+                usage.outputTokens == null &&
+                usage.cachedTokens == null &&
+                usage.reasoningTokens == null &&
+                usage.totalTokens == null &&
+                usage.estimatedCostMicros == null &&
+                usage.currency == null &&
+                usage.priceCatalogVersion == null &&
+                usage.finalizedAt == null,
+        ) {
+            "Daily rollover requires an unmeasured provisional usage ledger."
+        }
+        require(validatedAt >= usage.updatedAt) {
+            "Daily rollover time cannot move backwards for the usage ledger."
+        }
+        val reservation = requireNotNull(findBudgetReservationByAttempt(attemptId)) {
+            "Daily rollover requires the budget reservation."
+        }
+        require(reservation.status == BudgetReservationStatus.RESERVED) {
+            "Daily rollover requires the reservation still reserved."
+        }
+        require(reservation.settledAt == null && reservation.releasedAt == null) {
+            "Daily rollover requires an unsettled, unreleased reservation."
+        }
+        require(
+            reservation.accountedTokens == reservation.estimatedTokens &&
+                reservation.accountedCostMicros == reservation.estimatedCostMicros &&
+                reservation.accountedCurrency == reservation.estimatedCurrency,
+        ) {
+            "Daily rollover requires the reservation estimate unchanged."
+        }
+        require(
+            reservation.attemptId == attempt.attemptId &&
+                reservation.jobId == attempt.jobId &&
+                reservation.stageId == attempt.stageId,
+        ) {
+            "The budget reservation is not bound to this attempt."
+        }
+        require(validatedAt >= reservation.updatedAt) {
+            "Daily rollover time cannot move backwards for the reservation."
+        }
+        requireReservationMatchesUsageIdentity(reservation, usage)
+        val currentKey = currentDailyBudgetPeriodKey(validatedAt)
+        require(currentKey != reservation.dailyPeriodKey) {
+            "Daily rollover requires the reservation period key to differ from the current period."
+        }
+        val stage = requireNotNull(findStage(attempt.stageId)) {
+            "Daily rollover requires the owning stage."
+        }
+        require(
+            stage.jobId == attempt.jobId &&
+                stage.status == GenerationStageStatus.REQUEST_INTENT_RECORDED &&
+                stage.leaseTokenOrNull() == leaseToken &&
+                stage.attemptCount == attempt.attemptNo &&
+                attemptsForStage(stage.stageId).lastOrNull()?.attemptId == attempt.attemptId,
+        ) {
+            "Daily rollover requires the exact current Stage, lease, and latest Attempt."
+        }
+        require(validatedAt >= stage.updatedAt) {
+            "Daily rollover time cannot move backwards for the stage."
+        }
+        val job = requireNotNull(findJob(attempt.jobId)) {
+            "Daily rollover requires the owning job."
+        }
+        require(
+            job.status == GenerationJobStatus.RUNNING &&
+                job.currentStageId == stage.stageId &&
+                job.pauseOrStopReason == null,
+        ) {
+            "Daily rollover requires the exact active Job and current Stage."
+        }
+        require(validatedAt >= job.updatedAt) {
+            "Daily rollover time cannot move backwards for the job."
+        }
+        val nextAttemptStatus = RequestAttemptStateMachine.transition(
+            attempt.status,
+            AttemptEvent.DAILY_BUDGET_PERIOD_EXPIRED,
+        )
+        if (
+            compareAndSetAttemptStatus(
+                attemptId = attempt.attemptId,
+                expectedStatus = RequestAttemptStatus.INTENT_RECORDED,
+                nextStatus = nextAttemptStatus,
+                providerRequestId = null,
+                errorCode = StandardErrorCode.DAILY_BUDGET_PERIOD_EXPIRED_BEFORE_SEND,
+                httpStatus = null,
+                outputHash = null,
+                updatedAt = validatedAt,
+            ) != 1
+        ) {
+            throw StaleGenerationStateException("Attempt changed before the daily rollover.")
+        }
+        if (
+            updateProvisionalUsage(
+                attemptId = attemptId,
+                source = UsageSource.UNKNOWN,
+                status = UsageLedgerStatus.FINAL,
+                inputTokens = null,
+                outputTokens = null,
+                cachedTokens = null,
+                reasoningTokens = null,
+                totalTokens = null,
+                currency = null,
+                estimatedCostMicros = null,
+                priceCatalogVersion = null,
+                updatedAt = validatedAt,
+            ) != 1
+        ) {
+            throw StaleGenerationStateException("Usage ledger changed before the daily rollover.")
+        }
+        if (
+            releaseReservationAfterDailyRollover(
+                reservationId = reservation.budgetReservationId,
+                attemptId = reservation.attemptId,
+                expectedUpdatedAt = reservation.updatedAt,
+                expectedAccountedTokens = reservation.accountedTokens,
+                expectedAccountedCostMicros = reservation.accountedCostMicros,
+                expectedAccountedCurrency = reservation.accountedCurrency,
+                updatedAt = validatedAt,
+            ) != 1
+        ) {
+            throw StaleGenerationStateException("Budget reservation changed before the daily rollover.")
+        }
+        val attemptsRemaining = stage.attemptCount < stage.maxAttempts
+        val stageEvent = if (attemptsRemaining) {
+            StageEvent.DAILY_BUDGET_PERIOD_EXPIRED_BEFORE_SEND
+        } else {
+            StageEvent.DAILY_BUDGET_ATTEMPTS_EXHAUSTED_BEFORE_SEND
+        }
+        val nextStageStatus = GenerationStageStateMachine.transition(
+            GenerationStageStatus.REQUEST_INTENT_RECORDED,
+            stageEvent,
+        )
+        validateStandaloneStageTransition(
+            currentStatus = GenerationStageStatus.REQUEST_INTENT_RECORDED,
+            event = stageEvent,
+            errorCode = null,
+            nextRetryAt = null,
+            updatedAt = validatedAt,
+        )
+        if (
+            compareAndSetStageStatus(
+                stageId = stage.stageId,
+                expectedStatus = GenerationStageStatus.REQUEST_INTENT_RECORDED,
+                nextStatus = nextStageStatus,
+                errorCode = null,
+                nextRetryAt = null,
+                updatedAt = validatedAt,
+            ) != 1
+        ) {
+            throw StaleGenerationStateException("Stage changed before the daily rollover.")
+        }
+        val disposition: DailyRolloverDisposition
+        if (attemptsRemaining) {
+            check(
+                GenerationJobStateMachine.transition(
+                    GenerationJobStatus.RUNNING,
+                    JobEvent.DAILY_BUDGET_ROLLOVER_COMPLETED,
+                ) == GenerationJobStatus.READY,
+            )
+            if (
+                compareAndSetJobStatus(
+                    jobId = job.jobId,
+                    expectedStatus = GenerationJobStatus.RUNNING,
+                    nextStatus = GenerationJobStatus.READY,
+                    updatedAt = validatedAt,
+                ) != 1
+            ) {
+                throw StaleGenerationStateException("Job changed before the daily rollover.")
+            }
+            disposition = DailyRolloverDisposition.REQUEUED
+        } else {
+            check(
+                GenerationJobStateMachine.transition(
+                    GenerationJobStatus.RUNNING,
+                    JobEvent.USER_ACTION_REQUIRED,
+                ) == GenerationJobStatus.NEEDS_ACTION,
+            )
+            if (
+                compareAndSetJobControlStatus(
+                    jobId = job.jobId,
+                    expectedStatus = GenerationJobStatus.RUNNING,
+                    nextStatus = GenerationJobStatus.NEEDS_ACTION,
+                    reason = StandardErrorCode.DAILY_BUDGET_PERIOD_EXPIRED_BEFORE_SEND.name,
+                    updatedAt = validatedAt,
+                ) != 1
+            ) {
+                throw StaleGenerationStateException("Job changed before the daily rollover.")
+            }
+            disposition = DailyRolloverDisposition.ATTEMPTS_EXHAUSTED
+        }
+        val rereadAttempt = requireNotNull(findAttempt(attemptId)) {
+            "The attempt disappeared during the daily rollover."
+        }
+        require(
+            rereadAttempt.status == RequestAttemptStatus.FAILED_RETRYABLE &&
+                rereadAttempt.standardErrorCode == StandardErrorCode.DAILY_BUDGET_PERIOD_EXPIRED_BEFORE_SEND &&
+                rereadAttempt.sentAt == null &&
+                rereadAttempt.providerRequestId == null &&
+                rereadAttempt.finishedAt == validatedAt &&
+                rereadAttempt.httpStatus == null &&
+                rereadAttempt.outputHash == null &&
+                rereadAttempt.updatedAt == validatedAt,
+        ) {
+            "Daily rollover did not persist the exact retryable attempt failure."
+        }
+        val rereadUsage = requireNotNull(findUsageForAttempt(attemptId)) {
+            "The usage ledger disappeared during the daily rollover."
+        }
+        require(
+            rereadUsage.status == UsageLedgerStatus.FINAL &&
+                rereadUsage.source == UsageSource.UNKNOWN &&
+                rereadUsage.inputTokens == null &&
+                rereadUsage.outputTokens == null &&
+                rereadUsage.cachedTokens == null &&
+                rereadUsage.reasoningTokens == null &&
+                rereadUsage.totalTokens == null &&
+                rereadUsage.estimatedCostMicros == null &&
+                rereadUsage.currency == null &&
+                rereadUsage.priceCatalogVersion == null &&
+                rereadUsage.finalizedAt == validatedAt &&
+                rereadUsage.updatedAt == validatedAt,
+        ) {
+            "Daily rollover did not persist the exact UNKNOWN final usage."
+        }
+        val rereadReservation = requireNotNull(findBudgetReservationByAttempt(attemptId)) {
+            "The budget reservation disappeared during the daily rollover."
+        }
+        requireReservationMatchesUsageIdentity(rereadReservation, rereadUsage)
+        require(
+            rereadReservation.status == BudgetReservationStatus.RELEASED &&
+                rereadReservation.accountedTokens == 0L &&
+                rereadReservation.accountedCostMicros == null &&
+                rereadReservation.accountedCurrency == null &&
+                rereadReservation.releasedAt == validatedAt &&
+                rereadReservation.settledAt == null &&
+                rereadReservation.updatedAt == validatedAt,
+        ) {
+            "Daily rollover did not persist the exact released reservation."
+        }
+        val rereadStage = requireNotNull(findStage(attempt.stageId)) {
+            "The stage disappeared during the daily rollover."
+        }
+        require(
+            rereadStage.status == nextStageStatus &&
+                rereadStage.standardErrorCode == null &&
+                rereadStage.nextRetryAt == null &&
+                rereadStage.leaseOwnerId == null &&
+                rereadStage.leaseAcquiredAt == null &&
+                rereadStage.leaseHeartbeatAt == null &&
+                rereadStage.attemptCount == stage.attemptCount &&
+                rereadStage.updatedAt == validatedAt,
+        ) {
+            "Daily rollover did not persist the exact stage state."
+        }
+        val rereadJob = requireNotNull(findJob(attempt.jobId)) {
+            "The job disappeared during the daily rollover."
+        }
+        if (attemptsRemaining) {
+            require(
+                rereadJob.status == GenerationJobStatus.READY &&
+                    rereadJob.pauseOrStopReason == null &&
+                    rereadJob.leaseOwnerId == null &&
+                    rereadJob.leaseAcquiredAt == null &&
+                    rereadJob.leaseHeartbeatAt == null &&
+                    rereadJob.updatedAt == validatedAt,
+            ) {
+                "Daily rollover did not persist the exact requeued job state."
+            }
+        } else {
+            require(
+                rereadJob.status == GenerationJobStatus.NEEDS_ACTION &&
+                    rereadJob.pauseOrStopReason == StandardErrorCode.DAILY_BUDGET_PERIOD_EXPIRED_BEFORE_SEND.name &&
+                    rereadJob.leaseOwnerId == null &&
+                    rereadJob.leaseAcquiredAt == null &&
+                    rereadJob.leaseHeartbeatAt == null &&
+                    rereadJob.updatedAt == validatedAt,
+            ) {
+                "Daily rollover did not persist the exact needs-action job state."
+            }
+        }
+        return disposition
+    }
+
+    /**
+     * Computes the canonical DAILY period key for [validatedAt] from the
+     * current GLOBAL DAILY policy head and revision. A missing head, missing
+     * revision, unsupported or missing zone, or a validation time that
+     * precedes the active policy fails closed.
+     */
+    suspend fun currentDailyBudgetPeriodKey(validatedAt: Long): String {
+        val head = requireNotNull(
+            findBudgetPolicyHead(BudgetScope.DAILY, DAILY_POLICY_SCOPE_KEY),
+        ) {
+            "The current DAILY budget policy head is missing."
+        }
+        val revision = requireNotNull(findBudgetPolicyRevision(head.currentBudgetPolicyId)) {
+            "The current DAILY budget policy revision is missing."
+        }
+        val zoneId = requireNotNull(revision.dailyZoneId) {
+            "The current DAILY budget policy has no zone."
+        }
+        require(BudgetDailyPeriodKeyV1.isSupportedZoneId(zoneId)) {
+            "The current DAILY budget policy uses an unsupported zone."
+        }
+        require(validatedAt >= head.updatedAt && validatedAt >= revision.createdAt) {
+            "DAILY budget validation time cannot precede the active policy."
+        }
+        return BudgetDailyPeriodKeyV1.create(validatedAt, zoneId)
+    }
+
+    /**
+     * Resolves the immutable budget reservation for a v1 attempt before any
+     * usage write; legacy v0 attempts have no reservation and return null.
+     * Missing, misbound or identity-mismatched reservations fail closed so the
+     * whole transaction rolls back without half settlement.
+     */
+    private suspend fun resolveBudgetReservationForUsage(
+        attempt: RequestAttemptEntity,
+    ): RequestBudgetReservationEntity? {
+        if (attempt.budgetEnforcementVersion == 0) {
+            require(attempt.budgetReservationId == null) {
+                "A legacy attempt must not carry a budget reservation id."
+            }
+            return null
+        }
+        require(attempt.budgetEnforcementVersion == 1) {
+            "Unsupported budget enforcement version."
+        }
+        val reservationId = requireNotNull(attempt.budgetReservationId) {
+            "A budgeted attempt requires a reservation id."
+        }
+        val reservation = requireNotNull(findBudgetReservationByAttempt(attempt.attemptId)) {
+            "The budget reservation for this attempt is missing."
+        }
+        require(reservation.budgetReservationId == reservationId) {
+            "The budget reservation id does not match the attempt."
+        }
+        require(
+            reservation.attemptId == attempt.attemptId &&
+                reservation.jobId == attempt.jobId &&
+                reservation.stageId == attempt.stageId,
+        ) {
+            "The budget reservation is not bound to this attempt."
+        }
+        return reservation
+    }
+
+    /**
+     * First FINAL settlement inside the same transaction as the usage write.
+     * UNKNOWN preserves the reservation estimate; known sources replace the
+     * accounted values with the usage final values. A CAS miss or a
+     * read-back mismatch fails closed and rolls the usage write back.
+     */
+    private suspend fun settleReservationForFinalUsage(
+        reservation: RequestBudgetReservationEntity,
+        update: UsageUpdate,
+    ) {
+        val settled = when (update.source) {
+            UsageSource.UNKNOWN -> settleReservationPreservingEstimate(
+                reservationId = reservation.budgetReservationId,
+                attemptId = reservation.attemptId,
+                expectedUpdatedAt = reservation.updatedAt,
+                expectedAccountedTokens = reservation.accountedTokens,
+                expectedAccountedCostMicros = reservation.accountedCostMicros,
+                expectedAccountedCurrency = reservation.accountedCurrency,
+                updatedAt = update.updatedAt,
+            )
+            else -> settleReservationWithFinalValues(
+                reservationId = reservation.budgetReservationId,
+                attemptId = reservation.attemptId,
+                expectedUpdatedAt = reservation.updatedAt,
+                expectedAccountedTokens = reservation.accountedTokens,
+                expectedAccountedCostMicros = reservation.accountedCostMicros,
+                expectedAccountedCurrency = reservation.accountedCurrency,
+                totalTokens = requireNotNull(update.totalTokens),
+                costMicros = update.estimatedCostMicros,
+                currency = update.currency,
+                updatedAt = update.updatedAt,
+            )
+        }
+        if (settled != 1) {
+            throw StaleGenerationStateException(
+                "Budget reservation changed before usage settlement.",
+            )
+        }
+        val reread = requireNotNull(findBudgetReservationByAttempt(reservation.attemptId)) {
+            "The budget reservation disappeared during usage settlement."
+        }
+        val finalizedUsage = requireNotNull(findUsageForAttempt(reservation.attemptId))
+        requireReservationMatchesUsageIdentity(reread, finalizedUsage)
+        requireReservationMatchesFinalUsage(
+            reread,
+            finalizedUsage,
+        )
+    }
+
+    private fun requireReservationMatchesUsageIdentity(
+        reservation: RequestBudgetReservationEntity,
+        usage: UsageLedgerEntity,
+    ) {
+        require(
+            reservation.attemptId == usage.attemptId &&
+                reservation.bookId == usage.bookId &&
+                reservation.dailyPeriodKey == usage.dailyPeriodKey,
+        ) {
+            "The budget reservation does not match the usage ledger identity."
+        }
+    }
+
+    /**
+     * A PROVISIONAL usage update never settles: the reservation must still be
+     * RESERVED with the estimate unchanged after the usage write.
+     */
+    private suspend fun requireReservationStillReserved(reservation: RequestBudgetReservationEntity) {
+        val reread = requireNotNull(findBudgetReservationByAttempt(reservation.attemptId)) {
+            "The budget reservation disappeared during a provisional usage update."
+        }
+        require(reread.status == BudgetReservationStatus.RESERVED) {
+            "A provisional usage must keep its reservation reserved."
+        }
+        require(
+            reread.accountedTokens == reread.estimatedTokens &&
+                reread.accountedCostMicros == reread.estimatedCostMicros &&
+                reread.accountedCurrency == reread.estimatedCurrency,
+        ) {
+            "A provisional usage must keep the reservation estimate unchanged."
+        }
+    }
+
+    /**
+     * Read-back verification that the settled reservation is consistent with
+     * the finalized usage: status SETTLED, a settlement time, and accounted
+     * values matching the usage final values (estimate-preserved for UNKNOWN).
+     */
+    private suspend fun requireReservationMatchesFinalUsage(
+        reservation: RequestBudgetReservationEntity,
+        usage: UsageLedgerEntity,
+    ) {
+        require(reservation.status == BudgetReservationStatus.SETTLED) {
+            "Settled usage requires a settled budget reservation."
+        }
+        require(reservation.settledAt != null) {
+            "A settled budget reservation requires a settlement time."
+        }
+        when (usage.source) {
+            UsageSource.UNKNOWN -> {
+                require(
+                    reservation.accountedTokens == reservation.estimatedTokens &&
+                        reservation.accountedCostMicros == reservation.estimatedCostMicros &&
+                        reservation.accountedCurrency == reservation.estimatedCurrency,
+                ) {
+                    "Unknown settled usage must preserve the reservation estimate."
+                }
+            }
+            else -> {
+                val totalTokens = requireNotNull(usage.totalTokens)
+                require(
+                    reservation.accountedTokens == totalTokens &&
+                        reservation.accountedCostMicros == usage.estimatedCostMicros &&
+                        reservation.accountedCurrency == usage.currency,
+                ) {
+                    "Settled reservation must match the finalized usage values."
+                }
+            }
+        }
     }
 
     private fun validateUsage(update: UsageUpdate) {

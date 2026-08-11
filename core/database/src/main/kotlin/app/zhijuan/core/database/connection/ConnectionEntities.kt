@@ -33,7 +33,10 @@ data class ConnectionProfileEntity(
     @ColumnInfo(name = "data_disclosure_binding_hash") val dataDisclosureBindingHash: String?,
     @ColumnInfo(name = "created_at") val createdAt: Long,
     @ColumnInfo(name = "updated_at") val updatedAt: Long,
-)
+) {
+    override fun toString(): String =
+        "ConnectionProfileEntity(disclosureAccepted=${dataDisclosureAcceptedAt != null}, redacted=true)"
+}
 
 @Entity(
     tableName = "current_connection_selection",

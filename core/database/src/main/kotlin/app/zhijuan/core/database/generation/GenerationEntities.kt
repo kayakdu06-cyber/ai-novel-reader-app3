@@ -160,6 +160,7 @@ data class GenerationStageEntity(
         Index(value = ["job_id", "created_at"]),
         Index(value = ["provider_request_id"]),
         Index(value = ["status", "updated_at"]),
+        Index(value = ["budget_reservation_id"], unique = true),
     ],
 )
 data class RequestAttemptEntity(
@@ -199,6 +200,10 @@ data class RequestAttemptEntity(
     val streamDraftRef: String? = null,
     @ColumnInfo(name = "retry_parent_attempt_id")
     val retryParentAttemptId: String? = null,
+    @ColumnInfo(name = "budget_enforcement_version", defaultValue = "0")
+    val budgetEnforcementVersion: Int = 0,
+    @ColumnInfo(name = "budget_reservation_id")
+    val budgetReservationId: String? = null,
     @ColumnInfo(name = "created_at")
     val createdAt: Long,
     @ColumnInfo(name = "updated_at")

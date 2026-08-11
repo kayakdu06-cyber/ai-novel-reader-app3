@@ -33,6 +33,7 @@ data class ChapterMemoryExtractionJobSpec(
     val userIntentJson: String,
     val budgetSnapshotJson: String,
     val source: ChapterMemoryExtractionSourceV1,
+    val rebuildBinding: ChapterEditRebuildStageBindingV1? = null,
     val maxAttempts: Int = 2,
     val createdAt: Long,
 )
@@ -45,7 +46,7 @@ object ChapterMemoryExtractionJobFactory {
         require(listOf(spec.jobId, spec.stageId, spec.bookId).all(IDENTIFIER::matches))
         require(spec.maxAttempts in 1..2) { "Chapter-memory extraction permits at most one format repair." }
         require(spec.createdAt >= 0L)
-        val inputSources = inputSources(spec.source)
+        val inputSources = inputSources(spec.source, spec.rebuildBinding)
         val inputVersionHash = sourceInputHash(inputSources)
         return GenerationJobSetup(
             jobId = spec.jobId,
@@ -78,10 +79,7 @@ object ChapterMemoryExtractionJobFactory {
     internal fun parseAndVerify(stage: GenerationStageEntity): ChapterMemoryExtractionSourceV1 {
         require(stage.phase == GenerationPhase.EXTRACT_MEMORY)
         require(stage.targetType == GenerationTargetType.CHAPTER)
-        val root = runCatching { STRICT_JSON.parseToJsonElement(stage.inputSourcesJson) as JsonObject }
-            .getOrElse { throw IllegalArgumentException("Chapter-memory source binding is invalid JSON.") }
-        require(root.keys == ROOT_KEYS)
-        require(root.int("schemaVersion") == 1)
+        val root = parseAndVerifyRoot(stage)
         require(root.string("sourcePolicyVersion") == SOURCE_POLICY_VERSION)
         require(root.string("promptBundleVersion") == PromptBundleCatalogV1.BUNDLE_VERSION)
         require(root.string("outputSchemaId") == OUTPUT_SCHEMA_ID)
@@ -95,15 +93,26 @@ object ChapterMemoryExtractionJobFactory {
             chapterIndex = sourceObject.int("chapterIndex"),
         )
         require(source.chapterId == stage.targetId)
-        require(stage.inputVersionHash == sourceInputHash(stage.inputSourcesJson)) {
-            "Chapter-memory input hash does not match its frozen source binding."
-        }
         return source
     }
 
-    internal fun inputSources(source: ChapterMemoryExtractionSourceV1): String = JsonObject(
-        linkedMapOf(
-            "schemaVersion" to JsonPrimitive(1),
+    internal fun parseRebuildBindingIfPresent(
+        stage: GenerationStageEntity,
+    ): ChapterEditRebuildStageBindingV1? {
+        if (stage.phase != GenerationPhase.EXTRACT_MEMORY) return null
+        if (ChapterTrackingProjectionJobFactory.isBound(stage)) return null
+        val root = parseAndVerifyRoot(stage)
+        return (root[REBUILD_BINDING_KEY] as? JsonObject)?.let { value ->
+            ChapterEditRebuildStageBindingV1.parse(value)
+        }
+    }
+
+    internal fun inputSources(
+        source: ChapterMemoryExtractionSourceV1,
+        rebuildBinding: ChapterEditRebuildStageBindingV1? = null,
+    ): String {
+        val values = linkedMapOf<String, kotlinx.serialization.json.JsonElement>(
+            "schemaVersion" to JsonPrimitive(if (rebuildBinding == null) 1 else 2),
             "sourcePolicyVersion" to JsonPrimitive(SOURCE_POLICY_VERSION),
             "promptBundleVersion" to JsonPrimitive(PromptBundleCatalogV1.BUNDLE_VERSION),
             "outputSchemaId" to JsonPrimitive(OUTPUT_SCHEMA_ID),
@@ -115,8 +124,34 @@ object ChapterMemoryExtractionJobFactory {
                     "chapterIndex" to JsonPrimitive(source.chapterIndex),
                 ),
             ),
-        ),
-    ).toString()
+        )
+        if (rebuildBinding != null) values[REBUILD_BINDING_KEY] = rebuildBinding.toJson()
+        return JsonObject(values).toString()
+    }
+
+    private fun parseAndVerifyRoot(stage: GenerationStageEntity): JsonObject {
+        val root = runCatching { STRICT_JSON.parseToJsonElement(stage.inputSourcesJson) as JsonObject }
+            .getOrElse { throw IllegalArgumentException("Chapter-memory source binding is invalid JSON.") }
+        when (root.int("schemaVersion")) {
+            1 -> require(root.keys == ROOT_KEYS_V1) {
+                "Chapter-memory v1 source binding has unexpected fields."
+            }
+            2 -> {
+                require(root.keys == ROOT_KEYS_V2) {
+                    "Chapter-memory rebuild source binding has unexpected fields."
+                }
+                ChapterEditRebuildStageBindingV1.parse(
+                    root[REBUILD_BINDING_KEY] as? JsonObject
+                        ?: throw IllegalArgumentException("Chapter-memory rebuild binding is missing."),
+                )
+            }
+            else -> throw IllegalArgumentException("Chapter-memory source schema is unsupported.")
+        }
+        require(stage.inputVersionHash == sourceInputHash(stage.inputSourcesJson)) {
+            "Chapter-memory input hash does not match its frozen source binding."
+        }
+        return root
+    }
 
     private fun sourceInputHash(inputSources: String): String = sha256(
         listOf(SOURCE_POLICY_VERSION, OUTPUT_SCHEMA_ID, inputSources).joinToString("\u0000"),
@@ -135,9 +170,11 @@ object ChapterMemoryExtractionJobFactory {
             ?: throw IllegalArgumentException("Chapter-memory source field is missing: $key")
 
     private val STRICT_JSON = Json { isLenient = false }
-    private val ROOT_KEYS = setOf(
+    private const val REBUILD_BINDING_KEY = "chapterEditRebuild"
+    private val ROOT_KEYS_V1 = setOf(
         "schemaVersion", "sourcePolicyVersion", "promptBundleVersion", "outputSchemaId", "chapterMemorySource",
     )
+    private val ROOT_KEYS_V2 = ROOT_KEYS_V1 + REBUILD_BINDING_KEY
     private val SOURCE_KEYS = setOf("chapterVersionId", "chapterContentHash", "chapterId", "chapterIndex")
 }
 
@@ -149,7 +186,6 @@ internal class ChapterMemoryExtractionSourceGuard(
         job: GenerationJobEntity,
     ) {
         if (stage.phase != GenerationPhase.EXTRACT_MEMORY) return
-        if (ChapterCandidateStageBindingV1.isBound(stage, ChapterCandidateArtifactRoleV1.MEMORY)) return
         if (ChapterTrackingProjectionJobFactory.isBound(stage)) return
         val source = ChapterMemoryExtractionJobFactory.parseAndVerify(stage)
         val library = database.libraryDao()

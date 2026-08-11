@@ -19,6 +19,33 @@ class ChapterRevisionPolicyTest {
             assertInstanceOf(ChapterRevisionPolicyDecisionV1.AcceptCandidate::class.java, decision)
                 .candidateContentHash,
         )
+        assertEquals(
+            1,
+            assertInstanceOf(ChapterRevisionPolicyDecisionV1.AcceptCandidate::class.java, decision)
+                .maximumAutomaticRevisions,
+        )
+    }
+
+    @Test
+    fun minorIssueDoesNotEscalateIntoAnAutomaticRevision() {
+        val decision = ChapterRevisionPolicyV1.evaluate(
+            input(
+                issues = listOf(
+                    issue("minor-1", 10).copy(severity = ConsistencyIssueSeverity.MINOR),
+                ),
+            ),
+        )
+
+        assertEquals(
+            HASH_A,
+            assertInstanceOf(ChapterRevisionPolicyDecisionV1.AcceptCandidate::class.java, decision)
+                .candidateContentHash,
+        )
+        assertEquals(
+            1,
+            assertInstanceOf(ChapterRevisionPolicyDecisionV1.AcceptCandidate::class.java, decision)
+                .maximumAutomaticRevisions,
+        )
     }
 
     @Test
@@ -126,18 +153,30 @@ class ChapterRevisionPolicyTest {
 
     @Test
     fun repairPlanIsDeterministicAndDoesNotDependOnCallerIssueOrder() {
+        val firstInput = input(issues = listOf(issue("b", 20), issue("a", 10)))
+        val secondInput = input(issues = listOf(issue("a", 10), issue("b", 20)))
         val first = assertInstanceOf(
             ChapterRevisionPolicyDecisionV1.ReviseAutomatically::class.java,
-            ChapterRevisionPolicyV1.evaluate(input(issues = listOf(issue("b", 20), issue("a", 10)))),
+            ChapterRevisionPolicyV1.evaluate(firstInput),
         )
         val second = assertInstanceOf(
             ChapterRevisionPolicyDecisionV1.ReviseAutomatically::class.java,
-            ChapterRevisionPolicyV1.evaluate(input(issues = listOf(issue("a", 10), issue("b", 20)))),
+            ChapterRevisionPolicyV1.evaluate(secondInput),
         )
 
         assertEquals(first.repairPlanHash, second.repairPlanHash)
+        assertEquals(
+            ChapterRevisionPolicyV1.routingBindingHash(firstInput),
+            ChapterRevisionPolicyV1.routingBindingHash(secondInput),
+        )
         assertEquals(listOf("a", "b"), first.issues.map { it.issueId })
         assertNotEquals(first.sourceCandidateContentHash, HASH_B)
+        assertNotEquals(
+            ChapterRevisionPolicyV1.routingBindingHash(firstInput),
+            ChapterRevisionPolicyV1.routingBindingHash(
+                firstInput.copy(issues = listOf(issue("a", 10).copy(severity = ConsistencyIssueSeverity.MINOR))),
+            ),
+        )
     }
 
     private fun input(

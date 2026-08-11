@@ -58,6 +58,7 @@ data class ChapterTrackingProjectionJobSpec(
     val userIntentJson: String,
     val budgetSnapshotJson: String,
     val source: ChapterTrackingProjectionSourceV1,
+    val rebuildBinding: ChapterEditRebuildStageBindingV1? = null,
     val maxAttempts: Int = 2,
     val createdAt: Long,
 )
@@ -70,7 +71,7 @@ object ChapterTrackingProjectionJobFactory {
         require(listOf(spec.jobId, spec.stageId, spec.bookId).all(IDENTIFIER::matches))
         require(spec.maxAttempts in 1..2) { "Story tracking permits at most one format repair." }
         require(spec.createdAt >= 0L)
-        val inputSources = inputSources(spec.source)
+        val inputSources = inputSources(spec.source, spec.rebuildBinding)
         val inputVersionHash = sourceInputHash(inputSources)
         return GenerationJobSetup(
             jobId = spec.jobId,
@@ -103,9 +104,7 @@ object ChapterTrackingProjectionJobFactory {
     internal fun parseAndVerify(stage: GenerationStageEntity): ChapterTrackingProjectionSourceV1 {
         require(stage.phase == GenerationPhase.EXTRACT_MEMORY)
         require(stage.targetType == GenerationTargetType.CHAPTER)
-        val root = parseRoot(stage)
-        require(root.keys == ROOT_KEYS)
-        require(root.int("schemaVersion") == 1)
+        val root = parseAndVerifyRoot(stage)
         require(root.string("sourcePolicyVersion") == SOURCE_POLICY_VERSION)
         require(root.string("promptBundleVersion") == PromptBundleCatalogV1.BUNDLE_VERSION)
         require(root.string("outputSchemaId") == OUTPUT_SCHEMA_ID)
@@ -122,15 +121,25 @@ object ChapterTrackingProjectionJobFactory {
             knownEntitySnapshotHash = sourceObject.string("knownEntitySnapshotHash"),
         )
         require(source.chapterId == stage.targetId)
-        require(stage.inputVersionHash == sourceInputHash(stage.inputSourcesJson)) {
-            "Story-tracking input hash does not match its frozen source binding."
-        }
         return source
     }
 
-    internal fun inputSources(source: ChapterTrackingProjectionSourceV1): String = JsonObject(
-        linkedMapOf(
-            "schemaVersion" to JsonPrimitive(1),
+    internal fun parseRebuildBindingIfPresent(
+        stage: GenerationStageEntity,
+    ): ChapterEditRebuildStageBindingV1? {
+        if (!isBound(stage)) return null
+        val root = parseAndVerifyRoot(stage)
+        return (root[REBUILD_BINDING_KEY] as? JsonObject)?.let { value ->
+            ChapterEditRebuildStageBindingV1.parse(value)
+        }
+    }
+
+    internal fun inputSources(
+        source: ChapterTrackingProjectionSourceV1,
+        rebuildBinding: ChapterEditRebuildStageBindingV1? = null,
+    ): String {
+        val values = linkedMapOf<String, kotlinx.serialization.json.JsonElement>(
+            "schemaVersion" to JsonPrimitive(if (rebuildBinding == null) 1 else 2),
             "sourcePolicyVersion" to JsonPrimitive(SOURCE_POLICY_VERSION),
             "promptBundleVersion" to JsonPrimitive(PromptBundleCatalogV1.BUNDLE_VERSION),
             "outputSchemaId" to JsonPrimitive(OUTPUT_SCHEMA_ID),
@@ -145,8 +154,10 @@ object ChapterTrackingProjectionJobFactory {
                     "knownEntitySnapshotHash" to JsonPrimitive(source.knownEntitySnapshotHash),
                 ),
             ),
-        ),
-    ).toString()
+        )
+        if (rebuildBinding != null) values[REBUILD_BINDING_KEY] = rebuildBinding.toJson()
+        return JsonObject(values).toString()
+    }
 
     internal fun isBound(stage: GenerationStageEntity): Boolean =
         stage.phase == GenerationPhase.EXTRACT_MEMORY &&
@@ -163,6 +174,29 @@ object ChapterTrackingProjectionJobFactory {
         runCatching { STRICT_JSON.parseToJsonElement(stage.inputSourcesJson) as JsonObject }
             .getOrElse { throw IllegalArgumentException("Story-tracking source binding is invalid JSON.") }
 
+    private fun parseAndVerifyRoot(stage: GenerationStageEntity): JsonObject {
+        val root = parseRoot(stage)
+        when (root.int("schemaVersion")) {
+            1 -> require(root.keys == ROOT_KEYS_V1) {
+                "Story-tracking v1 source binding has unexpected fields."
+            }
+            2 -> {
+                require(root.keys == ROOT_KEYS_V2) {
+                    "Story-tracking rebuild source binding has unexpected fields."
+                }
+                ChapterEditRebuildStageBindingV1.parse(
+                    root[REBUILD_BINDING_KEY] as? JsonObject
+                        ?: throw IllegalArgumentException("Story-tracking rebuild binding is missing."),
+                )
+            }
+            else -> throw IllegalArgumentException("Story-tracking source schema is unsupported.")
+        }
+        require(stage.inputVersionHash == sourceInputHash(stage.inputSourcesJson)) {
+            "Story-tracking input hash does not match its frozen source binding."
+        }
+        return root
+    }
+
     private fun JsonObject.string(key: String): String =
         (get(key) as? JsonPrimitive)?.takeIf(JsonPrimitive::isString)?.contentOrNull
             ?: throw IllegalArgumentException("Story-tracking source field is missing: $key")
@@ -172,9 +206,11 @@ object ChapterTrackingProjectionJobFactory {
             ?: throw IllegalArgumentException("Story-tracking source field is missing: $key")
 
     private val STRICT_JSON = Json { isLenient = false }
-    private val ROOT_KEYS = setOf(
+    private const val REBUILD_BINDING_KEY = "chapterEditRebuild"
+    private val ROOT_KEYS_V1 = setOf(
         "schemaVersion", "sourcePolicyVersion", "promptBundleVersion", "outputSchemaId", "trackingSource",
     )
+    private val ROOT_KEYS_V2 = ROOT_KEYS_V1 + REBUILD_BINDING_KEY
     private val SOURCE_KEYS = setOf(
         "chapterVersionId", "chapterContentHash", "chapterId", "chapterIndex",
         "memorySnapshotHash", "priorForeshadowSnapshotHash", "knownEntitySnapshotHash",
@@ -184,7 +220,16 @@ object ChapterTrackingProjectionJobFactory {
 class ChapterTrackingProjectionSourceRepository(
     private val database: ZhijuanDatabase,
 ) {
-    suspend fun loadCurrentVersion(chapterId: String): ChapterTrackingProjectionInputs {
+    suspend fun loadCurrentVersion(chapterId: String): ChapterTrackingProjectionInputs =
+        loadCurrentVersion(chapterId, allowLaterCommittedChapters = false)
+
+    internal suspend fun loadForEditRebuild(chapterId: String): ChapterTrackingProjectionInputs =
+        loadCurrentVersion(chapterId, allowLaterCommittedChapters = true)
+
+    private suspend fun loadCurrentVersion(
+        chapterId: String,
+        allowLaterCommittedChapters: Boolean,
+    ): ChapterTrackingProjectionInputs {
         require(IDENTIFIER.matches(chapterId))
         val library = database.libraryDao()
         val memory = database.memoryDao()
@@ -195,7 +240,12 @@ class ChapterTrackingProjectionSourceRepository(
         require(memory.findTrackingProjectionForVersion(versionId) == null) {
             "The current chapter version already has a story-tracking projection."
         }
-        require(library.chaptersForBook(chapter.bookId).none { it.chapterIndex > chapter.chapterIndex && it.currentVersionId != null }) {
+        require(
+            allowLaterCommittedChapters ||
+                library.chaptersForBook(chapter.bookId).none {
+                    it.chapterIndex > chapter.chapterIndex && it.currentVersionId != null
+                },
+        ) {
             "Story tracking must rebuild in chapter order before later committed chapters."
         }
         val summary = requireNotNull(memory.findSummaryForVersion(versionId)) {
@@ -236,6 +286,16 @@ class ChapterTrackingProjectionSourceRepository(
         val current = loadCurrentVersion(source.chapterId)
         require(current.source == source && current.summary.bookId == bookId) {
             "Story-tracking source snapshots are no longer current."
+        }
+    }
+
+    internal suspend fun requireCurrentMatchesForEditRebuild(
+        source: ChapterTrackingProjectionSourceV1,
+        bookId: String,
+    ) {
+        val current = loadForEditRebuild(source.chapterId)
+        require(current.source == source && current.summary.bookId == bookId) {
+            "Story-tracking rebuild source snapshots are no longer current."
         }
     }
 
@@ -301,10 +361,14 @@ internal class ChapterTrackingProjectionSourceGuard(
     private val database: ZhijuanDatabase,
 ) {
     suspend fun requireProviderOpenAllowedIfBound(stage: GenerationStageEntity, job: GenerationJobEntity) {
-        if (ChapterCandidateStageBindingV1.isBound(stage, ChapterCandidateArtifactRoleV1.TRACKING)) return
         if (!ChapterTrackingProjectionJobFactory.isBound(stage)) return
         val source = ChapterTrackingProjectionJobFactory.parseAndVerify(stage)
-        ChapterTrackingProjectionSourceRepository(database).requireCurrentMatches(source, job.bookId)
+        val repository = ChapterTrackingProjectionSourceRepository(database)
+        if (ChapterTrackingProjectionJobFactory.parseRebuildBindingIfPresent(stage) != null) {
+            repository.requireCurrentMatchesForEditRebuild(source, job.bookId)
+        } else {
+            repository.requireCurrentMatches(source, job.bookId)
+        }
     }
 }
 

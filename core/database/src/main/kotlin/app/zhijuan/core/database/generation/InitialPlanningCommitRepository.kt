@@ -7,6 +7,7 @@ import app.zhijuan.core.database.memory.OutlineNodeEntity
 import app.zhijuan.core.database.memory.OutlineRevisionEntity
 import app.zhijuan.core.database.memory.StoryBibleRevisionEntity
 import app.zhijuan.core.database.memory.StoryEntity
+import app.zhijuan.core.database.search.MemorySearchIndexWriterV1
 import app.zhijuan.core.model.AdultStatus
 import app.zhijuan.core.model.BookStatus
 import app.zhijuan.core.model.CanonLevel
@@ -139,6 +140,11 @@ class InitialPlanningCommitRepository(
                 memory.createBibleRevision(draft.revision)
                 draft.characters.forEach { memory.insertStoryEntity(it) }
                 if (draft.hardFacts.isNotEmpty()) memory.insertCanonFacts(draft.hardFacts)
+                MemorySearchIndexWriterV1.replaceStoryBible(
+                    search = database.memorySearchDao(),
+                    storyEntities = draft.characters,
+                    canonFacts = draft.hardFacts,
+                )
             }
         }
     }

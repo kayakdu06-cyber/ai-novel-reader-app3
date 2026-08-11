@@ -11,7 +11,7 @@ erDiagram
     GENERATION_STAGE ||--o{ REQUEST_ATTEMPT : attempts
     REQUEST_ATTEMPT ||--o| USAGE_LEDGER : records
     BOOK ||--o{ STORY_BIBLE_REVISION : has
-    CHAPTER_VERSION ||--o| CHAPTER_SUMMARY : derives
+    CHAPTER_VERSION ||--o{ CHAPTER_SUMMARY : derives_history
     CHAPTER_VERSION ||--o{ ENTITY_EVENT : derives
     CHAPTER_VERSION ||--o{ CANON_FACT : establishes
     BOOK ||--o{ FORESHADOW_ITEM : tracks
@@ -439,7 +439,7 @@ TASK-050 不新增表、不提升 Room schema，也不原地更新创建快照�
 
 ## 19. TASK-056 章节记忆数据语义
 
-- `ChapterSummary.chapterVersionId` 一版本唯一，保存 `chapter-memory.v1` 摘要 JSON、重要度、模型快照和 `VALID/STALE/FAILED` 状态。
+- `ChapterSummary.chapterVersionId` 在 schema v11 中是一版本多代历史槽，保存 `chapter-memory.v1` 摘要 JSON、重要度、模型快照和 `VALID/STALE/FAILED` 状态；数据库保证最多一个 `VALID` 当前头。
 - `EntityEvent.sourceChapterVersionId` 必填；属性限定为位置、身体、情绪、目标、知识、关系、持有物、承诺、秘密，事件顺序稳定落在章节专属百万跨度内。
 - `CanonFact.sourceChapterVersionId` 绑定同一来源，`sourceBibleRevisionId=null`；章节提取只能写 `STORY_CANON/INFERRED`，不能写 `HARD_CANON/PLAN_ONLY`。
 - 三类记录的 JSON 元数据包含 schema/kind/confidence/source content hash，但 output reference 只保存 ID、hash 和数量，不复制正文。
@@ -469,3 +469,190 @@ TASK-050 不新增表、不提升 Room schema，也不原地更新创建快照�
 - `issuesJson` 不保存候选正文、证据原文、自由改写建议、API key 或连接信息；报告 ID 与完整 payload hash 确定性派生，支持最终事务的精确重放。
 - TASK-058 只生成报告草稿，因为候选版本尚未写入 `chapter_version`。TASK-059 必须在同一事务中先满足外键并同时提交正文、报告及对应派生数据；单独提前插入属于非法状态。
 - 本任务不改变 Room schema，v8 JSON 与迁移基线保持不变。
+
+## 22. TASK-061 Phase 2B1 派生历史语义与 schema v11
+
+- `chapter_summary(chapter_version_id)`、`chapter_tracking_projection(chapter_version_id)`、`aggregate_state_projection(book_id, through_chapter_index)`、`foreshadow_transition(foreshadow_item_id, source_chapter_version_id)` 从唯一索引改为普通索引，允许保留多代 `STALE`。
+- `LibraryDatabaseGuards` 在 fresh create、每次 open 和 v10→v11 迁移中安装并发触发器：四类业务槽最多一个 `VALID`，`STALE → VALID` 失败关闭，来源/身份/内容/创建时间不可更新。
+- 摘要、人物事件、事实、时间线、tracking、聚合与伏笔转换均为不可删除历史；除内容不变的 `VALID → STALE` 外不得修改。NULL 字段比较使用 SQLite `IS NOT`，避免 NULL 绕过不可变检查。
+- tracking 的 `generation_stage_id` 唯一索引保留，Stage 精确 replay 语义不变。v10→v11 只重建四个索引并安装触发器，不复制、删除或改写正文、JSON、模型快照和既有派生行。
+- 生产权威查询显式限定 `VALID`；tracking 范围查询还要求 projection 绑定 current chapter version。全部历史只能通过名称明确且稳定排序的 history 查询读取。
+- 本阶段没有建立 `foreshadow_item` checkpoint/head 表，也没有执行伏笔 rewind、跨章重建或 Provider 请求，因此不能把 transition 历史槽描述为完整 replay 已实现。
+
+## 23. TASK-061 Phase 2B2A 伏笔投影修订与 schema v12
+
+- 新表 `foreshadow_projection_revision` 对每条 transition 保存唯一 after-state，字段包括 revision/book/item/source chapter version/generation stage/transition、chapter index、story order、snapshot schema、规范 snapshot JSON、SHA-256、`VALID/STALE` 与创建时间。
+- snapshot 覆盖 `ForeshadowItemEntity` 的完整状态：描述、伏笔状态、记忆状态、目标章范围、source/planted/resolved 版本、可见实体、重要度、来源和创建/更新时间；严格解析要求字段集合精确、JSON 可规范重编码、visible IDs 唯一有序且全部受限。
+- writer 只在 item insert/CAS 与 transition insert 成功后读取数据库真实 current item，再写 revision；两条生产提交路径在各自 Room 事务内共用该 writer。revision ID 从 transition ID 确定性派生，`transition_id` 有唯一索引。
+- 外键与触发器复核书、来源版本、Stage、item、transition、章节序号、story order 和创建时间；revision 只允许 `VALID → STALE`，禁止内容/来源修改和 DELETE。若 transition 存在 VALID revision，transition 不能先变为 STALE。
+- 编辑旧版本时 stale 级联先失效该来源的 revision，再失效 transition；计数同时进入内部与公开 stale cascade 结果。后续完整 rewind 仍需按受影响章节区间失效依赖链，不能只依赖这一步的直接来源失效。
+- v11→v12 不回填历史 after-state。旧库既有 transition 保留、revision 表为空；任何需要该旧代快照的 replay/rewind 都必须失败关闭或从更早可信边界重建。
+- 本阶段没有创建新的 current head，也没有执行 rewind、Provider 请求、aggregate 重建或有序 runner。
+
+## 24. TASK-061 Phase 2B2B 受审计伏笔 rewind 与 schema v13
+
+- 新表 `foreshadow_projection_rewind` 保存一次成功 rewind 的不可变审计证据：rewind/plan、书、编辑版本/被替换版本、受影响章节范围、执行前/可信基线/执行后 projection 集合 hash、affected/baseline/absent/stale revision/stale transition 计数、策略版本和创建时间。`plan_hash` 唯一，同一冻结计划不能被两个不同 rewind 身份重复占用。
+- 插入触发器复核编辑版本确为 `USER_EDIT`、parent 等于被替换版本、书/章节一致、范围从编辑章开始、hash/计数/策略版本合法且 rewind 时间不早于编辑版本；审计行禁止更新和删除。
+- rewind 只信任编辑点之前、绑定当时 current chapter version 且仍为 `VALID` 的最后一条完整 revision。snapshot 经共享 codec、hash 和 transition provenance 全量复核后，才允许作为完整 `foreshadow_item` 基线。
+- 受影响区间按固定顺序先将 revision 置为 `STALE`，再失效 transition，并断言该区间 `VALID` 计数为零。可信基线使用包含描述、状态、窗口、版本引用、可见实体、重要度、来源和时间的全字段 CAS 恢复；区间首次 PLANT 的新生 item 只允许转为 `STALE`。
+- v11 legacy 区间若缺少可信基线，仅当该 item 在区间第一条历史明确为 `PLANT(null → PLANTED)` 时可证明编辑点前不存在；DEVELOP/RESOLVE/ABANDON 等缺快照历史整笔回滚，不猜测旧 current 状态。
+- 执行前删除全部受影响伏笔的 FTS identity，只对可信基线重新索引；最终复算完整 projection set hash 后才写审计。精确 replay 必须再次通过 plan、history、基线、零 VALID 残留和 after-set 全部核对，并且不产生写入。
+- 本表不是重建 Job，也不表示 aggregate、context、consistency 或后续 tracking 已重跑；这些仍由下一阶段有序执行链负责。
+
+## 25. TASK-061 Phase 2B3A 聚合 CURRENT_STATE 语义
+
+- 本阶段不改变 Room schema，正式库继续为 v13；只复用既有 `aggregate_state_projection` 多代历史槽。
+- `zhijuan.aggregate-state.v1` 是严格 canonical JSON，最多 128 KiB；最多保存 256 个“实体 + 属性”的最新 current-version-bound 事件，以及 128 个当前活动伏笔的完整规范快照。
+- payload 明确排除章节正文、摘要历史、时间线历史、Provider/模型、Attempt、Usage、提示词和 API 信息；它是供后续模型消费的紧凑 CURRENT_STATE，不是全历史备份。
+- provenance 同时绑定目标 current chapter version/content hash，以及同章有效 tracking projection/stage、memory snapshot、prior foreshadow snapshot、tracking output/payload hash。tracking 换代后旧 aggregate 即使仍为 `VALID` 也不能成为 `ALREADY_SATISFIED`。
+- writer 在单事务中重验 Phase 2A 冻结范围和 READY 步骤，旧槽头先 `VALID → STALE`，再插入确定性 ID 的新 `VALID` 代；SQLite 并发冲突只允许退化为同证据精确 replay，不能覆盖或猜测另一代结果。
+- Phase 2A 计划 schema/policy 升为 v2，以纳入 aggregate 已满足判定。旧 v1 计划不是持久执行许可，不能在新语义下继续 replay；调用方必须重新规划。
+
+## 26. TASK-061 Phase 2B3B1 执行准备账本与 schema v14
+
+- `chapter_edit_rebuild_execution` 是一次编辑后重建的不可变准备记录，唯一绑定 edited chapter version、被替换 parent、schema v13 rewind、影响区间、`KEEP_EXISTING` 策略、准备时 `planHash`、稳定 fence、策略版本和时间。edited version、rewind、stable fence 均唯一，阻止同一编辑被多份执行身份占用。
+- `chapter_edit_rebuild_step` 以 `(execution_id, step_ordinal)` 为主键，并以唯一 `(execution_id, step_type, chapter_index)` 防止重复槽。每行绑定 current chapter/version/content hash，类型仅为 `EDITED_MEMORY/TRACKING/AGGREGATE`，准备状态仅为 `PENDING/SATISFIED`。
+- 步骤可选择绑定准备时的 VALID summary、tracking 或 aggregate 头及其 SHA-256 全字段指纹；外键全部为 `RESTRICT`。触发器复核书/章/current version/正文 hash、范围、时间、类型与基线槽一致性，执行和步骤均禁止更新、删除。
+- 稳定 fence 不把会随派生进展改变的 `planHash` 当执行主键；它覆盖实际 current 章节、rewind after-state 和所有基线指纹。`initial_plan_hash` 只说明准备时检查了哪一份计划。
+- v13→v14 只创建空账本，不根据旧数据自动伪造执行。prepare 把 rewind、来源重验、执行与步骤插入放进同一个 Room 事务；失败时全部回滚。
+- 本阶段不创建 generation job/stage/attempt/usage，也没有可变执行状态。动态 Stage 接线会在后续子阶段基于该不可变准备证据追加，不允许提前编造后续章节来源。
+
+## 27. TASK-061 Phase 2B3B2A Stage 内嵌授权（schema 仍为 v14）
+
+- 本阶段不新增表、字段、索引或迁移，正式 Room schema 继续为 v14。远程步骤与 rebuild execution 的关系保存在 `generation_stage.input_sources_json` 的严格 `chapterEditRebuild` 对象中，并由 `input_version_hash` 与唯一 idempotency key 防篡改。
+- binding 固定包含 policy version、execution ID、stable fence、step ordinal/type、chapter index、source chapter version 和 content hash，不保存正文、提示词、连接资料、密钥或完整预算内容。
+- Job/Stage ID 由 binding 的稳定字段确定性哈希得到；createdAt、随机数和动态 planHash 不参与身份。既有身份只允许全部 immutable setup 相同的精确 replay，部分存在或 provenance 不同均失败。
+- v14 step 仍保持不可变 `PENDING/SATISFIED` 准备事实。Phase 2B3B2A 不通过 UPDATE step 表示运行进度；当前首步完成度由绑定 Stage 状态和权威 memory 行共同判断，跨章统一进度模型留给后续 Phase 2B3B2。
+
+### 27.1 Phase 2B3B2B1 tracking 内嵌授权
+
+- tracking Stage 沿用 `generation_stage.input_sources_json` schema v2，在既有 `trackingSource` 旁保存同一个严格 `chapterEditRebuild` binding；正文、摘要 JSON、人物名称、提示词、连接和密钥均不进入 binding。
+- tracking 的确定性 Job/Stage ID 使用 ordinal 2 的 ledger step，因此不会与 ordinal 1 memory 或普通 tracking 身份碰撞。重放必须连同用户意图、预算、创建时间和全部 Stage setup 精确一致。
+- v14 ledger 不写可变运行结果。准备时 pending 的 memory 是否完成，由其确定性 Job/Stage、最新成功 Attempt、FINAL Usage、严格 output reference 和权威 memory 行共同证明；准备时 satisfied 的 memory 继续使用冻结全字段 fingerprint。
+- 本阶段不新增 schema v15。tracking 提交后的 aggregate 代次仍由既有 `AggregateStateWriterRepository` 写入。
+
+### 27.2 Phase 2B3B2B2 tracking 与 aggregate 原子推进
+
+- rebuild tracking commit 在同一 Room 外层事务中依次写 tracking、时间线、伏笔 transition/revision、FTS，并调用既有 aggregate writer；任一步失败会回滚全部业务行、FINAL Usage 和 Stage/Job 完成状态。
+- 首次 aggregate 写入要求当前计划中 tracking 为 `ALREADY_SATISFIED`、同章 aggregate 为 `READY`，写后重算计划并要求 aggregate 已满足。
+- 成功 Stage replay 不再次调用 writer；它要求当前 tracking 与 aggregate 都严格 `ALREADY_SATISFIED`，避免合法计划状态变化后用另一 planHash 创建重复代次。
+- prepared aggregate step 必须仍是 ordinal 3、PENDING、无基线；Stage 创建和 Provider-open 前要求当前同章 aggregate 槽为空，成功 replay 才允许槽中存在刚提交且严格匹配的 aggregate。
+- 普通 tracking 没有 rebuild binding 时不触发 aggregate writer；schema 继续为 v14。
+
+## 28. TASK-061 Phase 2B3B2C 后续 tracking 退役证据（schema v15）
+
+- 新表 `chapter_edit_rebuild_tracking_retirement` 以 `(execution_id, step_ordinal)` 为主键，并唯一约束准备时 tracking baseline、replacement Job、replacement Stage 及 `(execution_id, chapter_index)`；全部外键 `RESTRICT`。
+- 每行保存准备时 tracking ID/指纹、退役后 tracking 指纹、精确排序且有界的 timeline ID JSON/内容指纹、确定性 replacement 身份、策略版本和退役时间。正文、提示词、人物名称、Provider 响应、连接和密钥不进入该表。
+- 表只允许插入一次，禁止更新和删除。插入触发器要求目标是后续 `PENDING` tracking step、current version 仍一致、旧 tracking 已在相同时间转为 `STALE`、replacement Job/Stage 仍为同时间创建的 `CREATED/PENDING`；Room repository 再复核完整指纹、严格 Stage setup 和搜索文档已删除。
+- 退役事务顺序固定为：验证 prepared baseline 与 timeline 集合 → 捕获 ID/指纹和搜索 identity → tracking/timeline `VALID→STALE` → 删除旧搜索源 → 读取真实 current tracking source → 创建确定性 Job/Stage → 插入 retirement → 写后回读。任一步失败都回滚到旧 tracking/timeline/search 仍有效且无 replacement 的状态。
+- Phase 2B3B2C 当时只对编辑章后的第一章建立 retirement；单条证据仅表示“旧基线已退役且有可恢复 Stage”，不单独表示 replacement tracking 或 aggregate 已成功。通用区间完成身份见 28.2。
+
+### 28.1 Phase 2B3B2D replacement 完成身份（schema 仍为 v15）
+
+- 本阶段不新增表、字段、索引或迁移。replacement 的完成事实由既有不可变 retirement、确定性 Job/Stage、`chapter_tracking_projection.generation_stage_id` 和同章 aggregate provenance 联合表达。
+- planner 只接受 retirement 所指 replacement Stage 生成的 `VALID` projection；Stage 必须绑定同一 execution/step/current version，旧 baseline 与 timeline 必须仍为精确 `STALE` 集合且搜索源缺席。
+- 首次 tracking commit 与 aggregate 写入共享外层 Room 事务。aggregate 失败时不会留下新 projection/timeline/FINAL Usage 或完成状态；retirement 不在该事务中回滚，因为它是此前已完成的可恢复准备事实。
+- 成功 replay 要求 Stage `SUCCEEDED`、Job `COMPLETED`、tracking 与 aggregate 都仍是当前计划的 `ALREADY_SATISFIED`，不会写第二代。
+
+### 28.2 Phase 2B3B2E 通用区间身份（schema 仍为 v15）
+
+- 通用循环不增加表、字段、索引或迁移；`chapter_edit_rebuild_step` 的偶数 ordinal 表示 tracking，紧随的奇数 ordinal 表示同章 aggregate。
+- retained target 必须是 ordinal 4、6、8……，实际 chapter index 由编辑章位置和 ledger ordinal 唯一推导；命令不能覆盖 ledger 中的章节、类型或来源版本。
+- `chapter_edit_rebuild_tracking_retirement` 必须形成从 ordinal 4 开始连续、章节递增且 `retired_at` 单调不减的前缀。较后 evidence 的存在不能修补较早缺口。
+- 直接前驱完成事实继续由既有 Job/Stage、`chapter_tracking_projection.generation_stage_id`、aggregate provenance 与时间戳联合表达；不复制一份可漂移的 step-completed 标志。
+- execution 保持 `PREPARED` 不可变准备证据。其冻结 memory/tracking/aggregate 是否全部满足由 planner 从权威业务表重新计算；total runner 的调度游标和恢复状态留给 TASK-064 设计。
+
+## 29. TASK-062 生成时序事件（schema v16）
+
+`generation_timing_event` 是正式 SQLCipher 主库中的追加事件表：
+
+- 主键：64 位十六进制 `event_id`；身份覆盖 phase、milestone、run/book/job/stage/attempt 指纹和 attemptNo。
+- 分类：`phase`、`milestone`、可空有限 `outcome`。
+- 时钟：展示用 `occurred_epoch_millis`、持续时间用 `occurred_elapsed_realtime_millis`、24 位 `boot_fingerprint`。
+- 关联：run/book 必需，job→stage→attempt 按层级可空；连接与模型只存独立域指纹。
+- 指标：可空非负字符数和 input/output/total token 数；没有正文、人物、提示词、端点、Provider request id、异常文本、secret、原始 ID 或原始内容 hash 字段。
+
+索引覆盖 `(run_fingerprint, elapsed)`、`(stage_fingerprint, phase, milestone)`、`(attempt_fingerprint, phase, milestone)` 和 `(boot_fingerprint, elapsed)`。UPDATE/DELETE 一律拒绝；插入触发器验证 phase/milestone、固定阶段、终态、前驱和同 boot 单调性。v15→v16 只创建空时序表与保护结构，不为旧 Job/Stage 猜测历史事件。
+
+## 30. TASK-064 Phase 2E4B 目的地确认字段语义（schema 仍为 v16）
+
+- `normalized_destination` 现在正式定义为 canonical origin：小写 scheme/host、显式 effective port；请求 path 不属于接收方身份。
+- `data_disclosure_version` 必须等于当前 disclosure 文案/数据类别版本；版本升级后旧确认失效。
+- `data_disclosure_accepted_at` 是用户接受该 binding 的非负时间，不等于连接测试或模型验证时间。
+- `data_disclosure_binding_hash` 覆盖 policy version、disclosure version、canonical origin 与 protocol ID；字段缺失、部分存在或任一当前事实不匹配都不能作为发送证据。
+- 本阶段复用既有列，schema 仍为 v16，无 migration；历史未确认连接保持 null，历史非规范 destination 在首次接受时改写为 canonical 值。
+
+## 31. TASK-083 schema v17 预算数据方向
+
+- `budget_policy_revision`：不可变 BOOK/DAILY 策略修订，保存连续 parent/revision、稳定 scope key、token/金额/币种、daily zone、版本和创建时间；同链禁止换身份/zone、fork、UPDATE 和 DELETE。
+- `budget_policy_head`：`(scope, scopeKey)` 唯一当前指针；新 revision 与 CAS 推进同事务，旧 revision 永久保留。
+- `request_budget_reservation`：每个 enforcement v1 Attempt 唯一预留，冻结 request estimate/limit、book/daily policy、daily period 与目的地 binding；状态只允许 RESERVED→SETTLED/RELEASED 和有高可信 usage 证据的 RELEASED→SETTLED。
+- `request_attempt` 增加 budget enforcement version 与 reservation 身份；v16 行为 v0、不得再次 Provider-open，新行必须为 v1。
+- reservation 的 identity/estimate/policy/destination 不可变且禁止删除；accounted 只在有限结算事务按终值改变。UsageLedger 继续保存用量精度事实，不兼任余额。
+
+### 31.1 Phase 2 已实现结构
+
+- schema v17、`MIGRATION_16_17`、三张预算表、Attempt v0/null兼容列和Room schema导出已经落地；迁移不修改旧Usage或伪造旧reservation。
+- policy repository只通过单事务追加连续revision并CAS推进head；daily zone链内固定，重复ID、分叉、倒退时间和错误book均回滚。
+- reservation INSERT只能创建`RESERVED`且accounted精确等于estimate；Job所属Book、BOOK policy、DAILY policy/period和目的地证据同时绑定。identity/estimate/policy/destination不可修改，DELETE禁止。
+- trigger有限状态允许`RESERVED→SETTLED/RELEASED`、同一`SETTLED`终值修正和保留release证据的`RELEASED→SETTLED`；高可信Usage来源判定仍必须由下一阶段唯一结算事务执行，不能只靠表状态自证。
+- Phase 2保留旧RequestIntent为v0/null以维持现有离线路径；新v1 reservation写入、三层聚合、Provider-open阻断和Usage结算尚未接线。
+
+### 31.2 Phase 3A 原子预留语义
+
+- 内部reservation入口用一个Room事务包住policy/disclosure读取、canonical日键派生、candidate INSERT、book/daily聚合和RequestIntent写入；candidate必须在任何余额聚合前插入并被聚合包含。
+- BOOK按`book_id`、DAILY按`daily_period_key`聚合全部非`RELEASED`行，不按`book_policy_id`或`daily_policy_id`过滤；策略换版不能重置已占用余额。
+- token使用Long SUM并包含候选自身。配置金额上限时，同scope任一accounted cost/currency缺失或币种不同均拒绝；不换汇，也不允许只累加匹配币种行。
+- 成功Attempt写`budget_enforcement_version=1`和精确reservation引用；reservation、Attempt、UNKNOWN/PROVISIONAL Usage与Stage同事务提交。拒绝或任何后续写入失败时四者零写入。
+- 单Room与双Room同WAL文件竞争、关闭重开后的余额拒绝均已有数据库证据；公开RequestIntent路径已由 Phase 3B 接线，Usage终值结算、跨日重预留和实际Provider目的地匹配仍待后续完成。
+
+### 31.3 Phase 3B 公开 RequestIntent v1 与发送许可
+
+- 公开 `RequestIntentDraft` 不再接受 caller daily key；streaming 与 continuation prepare 必须显式接收每Attempt唯一的 `RequestBudgetReservationDraft`，没有v0 overload、默认budget或nullable fallback。
+- 公开audit只调用Phase3A原子reservation入口；正式`src/main`中低层`GenerationDao.recordRequestIntent`只由该入口调用。完整reservation/Attempt/UNKNOWN PROVISIONAL Usage/Stage提交后才签发permit。
+- permit与claimed request内部绑定精确reservation ID。claim、mark sent和mark stream started都会回读Attempt/Usage/Job/Stage/reservation，并验证enforcement v1、精确身份、`RESERVED`、daily key与状态顺序；legacy v0/null Attempt永久不能Provider-open。
+- policy repository与脱敏结果类型成为跨模块可用的公开合同，结果构造仍受限；policy revision、CAS、校验、toString与schema均未改变。
+- Phase3B没有改变reservation结算状态机。FINAL/UNKNOWN/RELEASED/迟到Usage、跨午夜重预留和实际profile/adapter canonical destination匹配仍由后续事务完成。
+
+### 31.4 Phase 4A Usage 与 reservation 唯一结算
+
+- enforcement v1 的 reservation 不由各提交/失败/取消仓库分别结算；现有 `GenerationDao.recordUsage` 是唯一入口，Usage 和 reservation 共享同一个 Room 事务。
+- PROVISIONAL Usage 保持 reservation 为 `RESERVED` 且 accounted 等于初始 estimate；FINAL UNKNOWN 推进为 `SETTLED` 但保留 estimate；FINAL ESTIMATED/PROVIDER_REPORTED 用终值确定性替换 accounted，禁止 delta 累加。
+- FINAL UNKNOWN/ESTIMATED 的迟到 Provider 报告同时升级 Usage 与 `SETTLED` reservation；`settledAt` 保留首次封账时间，只单调推进 `updatedAt`。
+- v1 结算前后均核对 reservation ID、Attempt/Job/Stage、Book、daily period、旧状态、旧更新时间和旧 accounted；CAS 或回读不一致使整笔事务回滚。legacy v0 没有 reservation，继续沿用原 Usage 行为。
+- Phase4A没有实现 `RELEASED` 入口、跨午夜重预留或运行时 profile/adapter 匹配；这些不能由普通 Usage 结算猜测。
+
+### 31.5 Phase 4B 已证实未执行的释放与迟到回补
+
+- 只有 `UnknownResultRecoveryPolicy` 已裁决为 `REQUEUE_PROVEN_NOT_EXECUTED` 的私有恢复分支，才能调用专用 `finalizeUsageAndReleaseReservationAfterProviderProof` 事务；普通 `recordUsage` 没有 release 参数或错误码捷径。
+- release 前必须同时满足：Attempt 已在同一外层事务按同一审计时间 CAS 为 `FAILED_RETRYABLE`，Usage 仍为 UNKNOWN/PROVISIONAL 且全部用量/金额字段为空，v1 reservation 仍为同 Attempt 的 `RESERVED` 且 accounted 精确等于 estimate。
+- 专用事务把 Usage 变为 UNKNOWN/FINAL，并把 reservation 精确推进为 `RELEASED`、accounted token=0、cost/currency=null、`releasedAt/updatedAt`=审计时间；随后 Stage/Job 回到 READY。任何 CAS 或回读不一致会使 Attempt、Usage、reservation、Stage、Job 五类状态整笔回滚。legacy v0 只封账 Usage，不创建伪 reservation。
+- `RELEASED` 不再进入 book/daily 聚合。若之后到达更高可信的 FINAL `PROVIDER_REPORTED`，现有 `recordUsage` 会在同一事务把 Usage 升级并将 reservation 恢复为 `SETTLED`，按终值重新计入、保留原 `releasedAt`、以迟到时间设置首次 `settledAt`；UNKNOWN/ESTIMATED 不得复活。
+- Phase4B没有实现跨午夜未发送重预留或实际 profile/adapter canonical destination 匹配；TASK-083 仍未关闭。
+
+### 31.6 Phase 5B Provider-open 换日释放
+
+- `claimForProviderOpen` 在签发一次性发送许可前，使用当前 DAILY head/revision 的持久 IANA zone 与 `validatedAt` 重算日键；同日继续既有精确许可校验，日键不同则绝不打开草稿或 Provider。
+- 换日使用独立于 Provider-proof 的事务入口。旧 v1 Attempt 必须仍为未发送 `INTENT_RECORDED`，Usage 必须 UNKNOWN/PROVISIONAL 且全部值为空，reservation 必须仍为 `RESERVED` 且 accounted 精确等于 estimate；Stage、Job、最新 Attempt 与精确租约也必须一致。
+- 成功事务把旧 Attempt 标记为 `FAILED_RETRYABLE/DAILY_BUDGET_PERIOD_EXPIRED_BEFORE_SEND`，Usage 封为 UNKNOWN/FINAL，旧 reservation 变为 `RELEASED` 且 accounted 清零；有剩余次数时 Stage/Job 回 `READY`，次数耗尽时二者进入 `NEEDS_ACTION`。所有租约清空，五类状态任一 CAS/回读失败则整笔回滚。
+- 旧 reservation 的日键和 Attempt 序号永不修改或复用，旧加密草稿也不删除。Phase 5B 只完成旧请求的原子结束与重新排队；新日新 reservation、新 Attempt 和非空续写种子的受保护复制属于 Phase 5C。
+- 实际 profile/adapter 与 reservation 冻结目的地的 Provider-open 精确匹配仍未完成，TASK-083 保持进行中。
+
+### 31.7 Phase 5C 新日替代请求准备
+
+- 本阶段不增加表、字段、索引、trigger 或 migration。旧 Attempt、Usage、旧日 reservation 和旧受保护草稿保持不可变；替代请求使用既有 v17 行表达新的 Attempt、Usage 和 reservation。
+- 专用入口只接受 Phase 5B 形成的最新父 Attempt：`FAILED_RETRYABLE/DAILY_BUDGET_PERIOD_EXPIRED_BEFORE_SEND`、未发送、UNKNOWN/FINAL 空 Usage、`RELEASED/accounted=0` reservation，并要求时间和 release/finish/finalize 字段精确一致。
+- runner 必须先重新领取当前 Job 与 Stage：Job=`RUNNING`、Stage=`PREPARING`、相同 owner 的精确双 lease token、当前 cursor 与未过期 heartbeat。调用方不能只传一组父 ID 充当执行授权。
+- 新 Attempt 必须使用 `attemptNo=parent+1`、唯一 Attempt/Usage/reservation/受保护 artifact 身份，并保留父请求的 connection/model/protocol/input 快照、request limit、estimate、connection 和 `retryParentAttemptId`。当前 disclosure 可以更新接受时间，但 destination/protocol/version/binding 必须与旧 reservation 相同。
+- 新请求时间必须晚于父请求结束时间，并从当前 DAILY policy 重新派生不同日键；旧日 reservation 不修改。新的 reservation 重新进入 book 聚合，只进入新日 daily 聚合，因此换日不会清零单书累计。
+- 旧草稿无论空或非空都复制为一个新的 `STREAM_DRAFT` 受保护工件，禁止共享引用或落明文临时文件。数据库失败删除新工件；数据库提交前崩溃留下的加密 orphan 由既有清理策略回收，提交后的工件已有新 Attempt 引用。
+- 普通 `prepareBeforeSend` 发现最新父 Attempt 是换日终态时直接失败，防止绕过专用父证据、双租约和种子复制。实际 Provider profile/adapter 与 reservation 冻结目的地的匹配仍待后续完成。
+
+### 31.8 Phase 5D Provider-open 实际目的地证据
+
+- 新增短生命周期 `ProviderOpenDestinationEvidence`，只保存 connection ID、canonical destination 与 protocol ID；canonical 规则复用 `ExternalDataDestinationBindingV1`，不会保留原始 base URL、path、查询参数或凭据。
+- `claimForProviderOpen` 不再存在无 evidence 的生产重载。事务会同时比较实际 evidence、当前连接的动态 disclosure，以及 reservation 冻结的 connection/destination/protocol/disclosure version/binding/acceptedAt。
+- 当前 disclosure 的接受时间允许晚于 reservation 的冻结时间，但不能早于冻结时间；endpoint、protocol、disclosure version 或 binding 的任何漂移都失败关闭。
+- 实际目的地校验发生在同日 heartbeat 写入和跨日 release 之前。目的地不匹配时 Attempt、Usage、reservation、Stage、Job 均为零写入，原 permit 仍可在正确 profile 下重试。
+- claimed send 与后续 `mark sent`、`mark stream started` 继续绑定同一实际目的地证据，防止 claim 后在不同连接、origin 或 protocol 上打开 Provider。
+- `ProviderOpenDestinationEvidence`、不匹配原因和异常字符串均脱敏；不会输出 connection ID、host、protocol、binding hash 或原始 URL。本阶段不增加 schema、migration、表、列或索引。

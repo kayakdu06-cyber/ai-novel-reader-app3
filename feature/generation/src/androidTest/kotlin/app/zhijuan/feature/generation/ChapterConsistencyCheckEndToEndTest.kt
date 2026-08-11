@@ -83,6 +83,13 @@ class ChapterConsistencyCheckEndToEndTest {
         drafts = GenerationStreamingDraftRepository(database, artifacts)
         outputs = GenerationOutputValidationRepository(database, artifacts)
         seedBook()
+        runBlocking {
+            BudgetedGenerationTestSupport.seedBudgetedRequestEnvironment(
+                database = database,
+                bookId = BOOK_ID,
+                connectionId = "connection.consistency",
+            )
+        }
     }
 
     @After
@@ -210,8 +217,11 @@ class ChapterConsistencyCheckEndToEndTest {
             protocolSnapshotJson = "{\"protocol\":\"fixture\"}",
             inputHash = bound.sourceBindingHash,
             streamDraftRef = null,
-            dailyPeriodKey = "2026-08-03|Asia/Shanghai",
             createdAt = createdAt,
+        ),
+        BudgetedGenerationTestSupport.budgetedDraft(
+            attemptId = bound.request.attemptId,
+            connectionId = "connection.consistency",
         ),
         requireNotNull(states.findStage(bound.request.stageId)?.leaseToken),
     )

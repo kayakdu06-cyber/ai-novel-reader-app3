@@ -12,10 +12,15 @@ import app.zhijuan.core.database.generation.ChapterProgressionAuthorization
 import app.zhijuan.core.database.generation.ChapterProgressionGateRepository
 import app.zhijuan.core.database.generation.GenerationJobSetup
 import app.zhijuan.core.database.generation.GenerationJobSetupRepository
+import app.zhijuan.core.database.generation.GenerationLeaseToken
+import app.zhijuan.core.database.generation.GenerationRunnerCurrentStageRouteSnapshot
+import app.zhijuan.core.database.generation.GenerationRunnerExecutionLeaseRepository
+import app.zhijuan.core.database.generation.GenerationRunnerExecutionLeaseSnapshot
 import app.zhijuan.core.database.generation.GenerationStageSetup
 import app.zhijuan.core.database.generation.GenerationStateRepository
 import app.zhijuan.core.database.generation.PersistedChapterContextAssemblyResult
 import app.zhijuan.core.database.generation.PromptBundleBindingRepository
+import app.zhijuan.core.database.generation.StaleGenerationStateException
 import app.zhijuan.core.database.library.BookCreationRepository
 import app.zhijuan.core.database.library.BookCreationSnapshotEntity
 import app.zhijuan.core.database.library.BookEntity
@@ -28,6 +33,8 @@ import app.zhijuan.core.database.memory.OutlineRevisionEntity
 import app.zhijuan.core.database.memory.StoryBibleRevisionEntity
 import app.zhijuan.core.database.memory.StoryEntity
 import app.zhijuan.core.database.memory.TimelineEventEntity
+import app.zhijuan.core.database.search.MemorySearchBackfillRepositoryV1
+import app.zhijuan.core.database.search.MemorySearchSourceTypeV1
 import app.zhijuan.core.model.AdultStatus
 import app.zhijuan.core.model.BookLengthMode
 import app.zhijuan.core.model.BookLengthPolicy
@@ -114,7 +121,10 @@ class ChapterContextAssemblyDatabaseTest {
         assertTrue(result.context.providerPayloadJson.contains("CONFIRMED_ADULT"))
         assertTrue(result.context.providerPayloadJson.contains("PREVIOUS_CHAPTER_SUMMARY"))
         assertFalse(result.context.providerPayloadJson.contains(LARGE_OPTIONAL_MARKER))
-        assertTrue(result.context.omittedItemCount >= 1)
+        assertTrue(
+            database.memoryDao().findContextSnapshotForStage(CONTEXT_STAGE)?.sourceManifestJson
+                ?.contains("\"memorySelection\"") == true,
+        )
         assertEquals(0, database.generationDao().attemptsForStage(CONTEXT_STAGE).size)
         assertEquals(GenerationStageStatus.SUCCEEDED, states.findStage(CONTEXT_STAGE)?.status)
         assertEquals(GenerationStageStatus.READY, states.findStage(PLAN_STAGE)?.status)
@@ -146,6 +156,303 @@ class ChapterContextAssemblyDatabaseTest {
             ChapterContextAssemblyRepository(database).loadForChapterPlanStage(PLAN_STAGE, 108L)
         }
         assertTrue(failure.message.orEmpty().contains("outline"))
+    }
+
+    @Test
+    fun boundContextUsesExactDualLeaseAndDurablyReplaysWithoutDuplicateWrites() = runBlocking {
+        val snapshot = createBoundContextRoute(
+            jobId = BOUND_JOB,
+            stageIds = ChapterContextAssemblyStageIds(BOUND_CONTEXT_STAGE, BOUND_PLAN_STAGE),
+            baseAt = 500L,
+        )
+        val repository = ChapterContextAssemblyRepository(database)
+
+        val first = repository.assembleBound(snapshot, assembledAt = 505L)
+            as PersistedChapterContextAssemblyResult.Ready
+
+        assertFalse(first.context.replayed)
+        assertEquals(GenerationStageStatus.SUCCEEDED, states.findStage(BOUND_CONTEXT_STAGE)?.status)
+        assertEquals(GenerationStageStatus.READY, states.findStage(BOUND_PLAN_STAGE)?.status)
+        assertEquals(BOUND_PLAN_STAGE, states.findJob(BOUND_JOB)?.currentStageId)
+        assertEquals(0, database.generationDao().attemptsForStage(BOUND_CONTEXT_STAGE).size)
+        val durableSnapshot = requireNotNull(
+            database.memoryDao().findContextSnapshotForStage(BOUND_CONTEXT_STAGE),
+        )
+        val durableJob = states.findJob(BOUND_JOB)
+        val durableContextStage = states.findStage(BOUND_CONTEXT_STAGE)
+        val durablePlanStage = states.findStage(BOUND_PLAN_STAGE)
+
+        val replay = repository.assembleBound(snapshot, assembledAt = 506L)
+            as PersistedChapterContextAssemblyResult.Ready
+
+        assertTrue(replay.context.replayed)
+        assertEquals(first.context.contentHash, replay.context.contentHash)
+        assertEquals(durableSnapshot, database.memoryDao().findContextSnapshotForStage(BOUND_CONTEXT_STAGE))
+        assertEquals(durableJob, states.findJob(BOUND_JOB))
+        assertEquals(durableContextStage, states.findStage(BOUND_CONTEXT_STAGE))
+        assertEquals(durablePlanStage, states.findStage(BOUND_PLAN_STAGE))
+    }
+
+    @Test
+    fun boundContextRejectsChangedJobOrStageTokenWithoutBusinessWrites() = runBlocking {
+        val snapshot = createBoundContextRoute(
+            jobId = BOUND_STALE_JOB,
+            stageIds = ChapterContextAssemblyStageIds(BOUND_STALE_CONTEXT_STAGE, BOUND_STALE_PLAN_STAGE),
+            baseAt = 600L,
+        )
+        val repository = ChapterContextAssemblyRepository(database)
+        val beforeJob = states.findJob(BOUND_STALE_JOB)
+        val beforeStage = states.findStage(BOUND_STALE_CONTEXT_STAGE)
+        val lease = snapshot.executionLease
+        val wrongJob = snapshot.withExecutionLease(
+            lease.copy(
+                jobLeaseToken = GenerationLeaseToken(
+                    lease.jobLeaseToken.ownerId,
+                    lease.jobLeaseToken.acquiredAt + 1L,
+                ),
+            ),
+        )
+        val wrongStage = snapshot.withExecutionLease(
+            lease.copy(
+                stageLeaseToken = GenerationLeaseToken(
+                    lease.stageLeaseToken.ownerId,
+                    lease.stageLeaseToken.acquiredAt + 1L,
+                ),
+            ),
+        )
+
+        assertTrue(expectFailure { repository.assembleBound(wrongJob, 605L) } is StaleGenerationStateException)
+        assertTrue(expectFailure { repository.assembleBound(wrongStage, 605L) } is StaleGenerationStateException)
+        assertEquals(beforeJob, states.findJob(BOUND_STALE_JOB))
+        assertEquals(beforeStage, states.findStage(BOUND_STALE_CONTEXT_STAGE))
+        assertNull(database.memoryDao().findContextSnapshotForStage(BOUND_STALE_CONTEXT_STAGE))
+        assertEquals(0, database.generationDao().attemptsForStage(BOUND_STALE_CONTEXT_STAGE).size)
+    }
+
+    @Test
+    fun boundContextRejectsStatusOrCursorChangeWithoutAssembly() = runBlocking {
+        val statusSnapshot = createBoundContextRoute(
+            jobId = BOUND_STATUS_JOB,
+            stageIds = ChapterContextAssemblyStageIds(BOUND_STATUS_CONTEXT_STAGE, BOUND_STATUS_PLAN_STAGE),
+            baseAt = 700L,
+        )
+        database.openHelper.writableDatabase.execSQL(
+            "UPDATE generation_job SET status = 'PAUSING', updated_at = 705 " +
+                "WHERE job_id = '$BOUND_STATUS_JOB'",
+        )
+        val statusJob = states.findJob(BOUND_STATUS_JOB)
+        val statusStage = states.findStage(BOUND_STATUS_CONTEXT_STAGE)
+        assertTrue(
+            expectFailure {
+                ChapterContextAssemblyRepository(database).assembleBound(statusSnapshot, 706L)
+            } is StaleGenerationStateException,
+        )
+        assertEquals(statusJob, states.findJob(BOUND_STATUS_JOB))
+        assertEquals(statusStage, states.findStage(BOUND_STATUS_CONTEXT_STAGE))
+        assertNull(database.memoryDao().findContextSnapshotForStage(BOUND_STATUS_CONTEXT_STAGE))
+
+        val cursorSnapshot = createBoundContextRoute(
+            jobId = BOUND_CURSOR_JOB,
+            stageIds = ChapterContextAssemblyStageIds(BOUND_CURSOR_CONTEXT_STAGE, BOUND_CURSOR_PLAN_STAGE),
+            baseAt = 800L,
+        )
+        database.openHelper.writableDatabase.execSQL(
+            "UPDATE generation_job SET current_stage_id = '$BOUND_CURSOR_PLAN_STAGE', " +
+                "updated_at = 805 WHERE job_id = '$BOUND_CURSOR_JOB'",
+        )
+        val cursorJob = states.findJob(BOUND_CURSOR_JOB)
+        val cursorStage = states.findStage(BOUND_CURSOR_CONTEXT_STAGE)
+        assertTrue(
+            expectFailure {
+                ChapterContextAssemblyRepository(database).assembleBound(cursorSnapshot, 806L)
+            } is StaleGenerationStateException,
+        )
+        assertEquals(cursorJob, states.findJob(BOUND_CURSOR_JOB))
+        assertEquals(cursorStage, states.findStage(BOUND_CURSOR_CONTEXT_STAGE))
+        assertNull(database.memoryDao().findContextSnapshotForStage(BOUND_CURSOR_CONTEXT_STAGE))
+    }
+
+    @Test
+    fun boundContextRejectsLeaseAtTimeoutBoundaryWithoutAssembly() = runBlocking {
+        val snapshot = createBoundContextRoute(
+            jobId = BOUND_TIMEOUT_JOB,
+            stageIds = ChapterContextAssemblyStageIds(BOUND_TIMEOUT_CONTEXT_STAGE, BOUND_TIMEOUT_PLAN_STAGE),
+            baseAt = 900L,
+        )
+        val beforeJob = states.findJob(BOUND_TIMEOUT_JOB)
+        val beforeStage = states.findStage(BOUND_TIMEOUT_CONTEXT_STAGE)
+        val expiredAt = maxOf(
+            snapshot.executionLease.jobHeartbeatAt,
+            snapshot.executionLease.stageHeartbeatAt,
+        ) + 60_000L
+
+        val failure = expectFailure {
+            ChapterContextAssemblyRepository(database).assembleBound(snapshot, expiredAt)
+        }
+
+        assertTrue(failure is StaleGenerationStateException)
+        assertEquals(beforeJob, states.findJob(BOUND_TIMEOUT_JOB))
+        assertEquals(beforeStage, states.findStage(BOUND_TIMEOUT_CONTEXT_STAGE))
+        assertNull(database.memoryDao().findContextSnapshotForStage(BOUND_TIMEOUT_CONTEXT_STAGE))
+        assertEquals(0, database.generationDao().attemptsForStage(BOUND_TIMEOUT_CONTEXT_STAGE).size)
+    }
+
+    @Test
+    fun routesOnlyRelevantStoryCanonAndRejectsChangedMemoryBeforeProviderOpen() = runBlocking {
+        database.memoryDao().insertCanonFacts(
+            listOf(
+                chapterFact(
+                    id = "fact.story.relevant",
+                    text = "The physical trace proves the archive was opened.",
+                ),
+                chapterFact(
+                    id = "fact.story.irrelevant",
+                    text = "A distant orchard has blue roof tiles.",
+                ),
+            ),
+        )
+        createContextJob(
+            jobId = ROUTED_JOB,
+            stageIds = ChapterContextAssemblyStageIds(ROUTED_CONTEXT_STAGE, ROUTED_PLAN_STAGE),
+            budget = knownBudget(),
+            createdAt = 300L,
+        )
+        prepareContextJob(ROUTED_JOB, ROUTED_CONTEXT_STAGE, 301L)
+        val token = requireNotNull(states.findStage(ROUTED_CONTEXT_STAGE)?.leaseToken)
+
+        val result = ChapterContextAssemblyRepository(database).assemble(
+            ROUTED_CONTEXT_STAGE,
+            token,
+            304L,
+        ) as PersistedChapterContextAssemblyResult.Ready
+
+        assertTrue(result.context.providerPayloadJson.contains("physical trace proves"))
+        assertFalse(result.context.providerPayloadJson.contains("blue roof tiles"))
+        val manifest = requireNotNull(
+            database.memoryDao().findContextSnapshotForStage(ROUTED_CONTEXT_STAGE),
+        ).sourceManifestJson
+        assertTrue(manifest.contains("\"routes\":[\"FTS\"]"))
+
+        states.acquireStageLease(ROUTED_PLAN_STAGE, WORKER, 305L)
+        database.openHelper.writableDatabase.execSQL(
+            "UPDATE canon_fact SET status = 'STALE' WHERE canon_fact_id = 'fact.story.relevant'",
+        )
+        assertEquals(
+            1,
+            database.memorySearchDao().deleteBySource(
+                BOOK_ID,
+                MemorySearchSourceTypeV1.CANON_FACT.name,
+                "fact.story.relevant",
+            ),
+        )
+        val failure = expectFailure {
+            ChapterContextAssemblyRepository(database).loadForChapterPlanStage(
+                ROUTED_PLAN_STAGE,
+                306L,
+            )
+        }
+        assertTrue(failure.message.orEmpty().contains("dynamic memory"))
+        assertEquals(0, database.generationDao().attemptsForStage(ROUTED_PLAN_STAGE).size)
+    }
+
+    @Test
+    fun mandatoryMemoryOverflowBlocksBeforeSnapshotOrProviderAttempt() = runBlocking {
+        database.memoryDao().insertCanonFacts(
+            (1..511).map { index ->
+                CanonFactEntity(
+                    canonFactId = "fact.overflow.${index.toString().padStart(3, '0')}",
+                    bookId = BOOK_ID,
+                    entityId = "char.lin",
+                    factText = "Immutable rule $index.",
+                    factPayloadJson = "{\"index\":$index}",
+                    canonLevel = CanonLevel.HARD_CANON,
+                    scopeJson = "{}",
+                    sourceChapterVersionId = null,
+                    sourceBibleRevisionId = BIBLE_REVISION,
+                    validFromStoryOrder = null,
+                    validToStoryOrder = null,
+                    conflictGroupId = null,
+                    status = DerivedDataStatus.VALID,
+                    createdAt = 20L + index,
+                )
+            },
+        )
+        createContextJob(
+            jobId = OVERFLOW_JOB,
+            stageIds = ChapterContextAssemblyStageIds(OVERFLOW_CONTEXT_STAGE, OVERFLOW_PLAN_STAGE),
+            budget = knownBudget(),
+            createdAt = 900L,
+        )
+        prepareContextJob(OVERFLOW_JOB, OVERFLOW_CONTEXT_STAGE, 901L)
+        val token = requireNotNull(states.findStage(OVERFLOW_CONTEXT_STAGE)?.leaseToken)
+
+        val result = ChapterContextAssemblyRepository(database).assemble(
+            OVERFLOW_CONTEXT_STAGE,
+            token,
+            904L,
+        ) as PersistedChapterContextAssemblyResult.Blocked
+
+        assertEquals(
+            ChapterContextBlockReason.MANDATORY_MEMORY_SELECTION_EXCEEDS_LIMIT,
+            result.reason,
+        )
+        assertEquals(StandardErrorCode.CONTEXT_TOO_LARGE, result.standardErrorCode)
+        assertEquals(GenerationStageStatus.BLOCKED, states.findStage(OVERFLOW_CONTEXT_STAGE)?.status)
+        assertEquals(GenerationJobStatus.NEEDS_ACTION, states.findJob(OVERFLOW_JOB)?.status)
+        assertEquals(GenerationStageStatus.PENDING, states.findStage(OVERFLOW_PLAN_STAGE)?.status)
+        assertNull(database.memoryDao().findContextSnapshotForStage(OVERFLOW_CONTEXT_STAGE))
+        assertEquals(0, database.generationDao().attemptsForStage(OVERFLOW_CONTEXT_STAGE).size)
+        assertEquals(0, database.generationDao().attemptsForStage(OVERFLOW_PLAN_STAGE).size)
+    }
+
+    @Test
+    fun repairsStaleSearchPointerOnceBeforeAssemblingContext() = runBlocking {
+        database.memoryDao().insertCanonFacts(
+            listOf(
+                chapterFact(
+                    id = "fact.story.repair",
+                    text = "The physical trace is preserved under glass.",
+                ),
+            ),
+        )
+        MemorySearchBackfillRepositoryV1(database).ensureReady(BOOK_ID, 390L)
+        val stale = requireNotNull(
+            database.memorySearchDao().findBySource(
+                BOOK_ID,
+                MemorySearchSourceTypeV1.CANON_FACT.name,
+                "fact.story.repair",
+            ),
+        )
+        assertEquals(
+            1,
+            database.memorySearchDao().update(stale.copy(sourceContentHash = "0".repeat(64))),
+        )
+        createContextJob(
+            jobId = REPAIR_JOB,
+            stageIds = ChapterContextAssemblyStageIds(REPAIR_CONTEXT_STAGE, REPAIR_PLAN_STAGE),
+            budget = knownBudget(),
+            createdAt = 400L,
+        )
+        prepareContextJob(REPAIR_JOB, REPAIR_CONTEXT_STAGE, 401L)
+        val token = requireNotNull(states.findStage(REPAIR_CONTEXT_STAGE)?.leaseToken)
+
+        val result = ChapterContextAssemblyRepository(database).assemble(
+            REPAIR_CONTEXT_STAGE,
+            token,
+            404L,
+        ) as PersistedChapterContextAssemblyResult.Ready
+
+        assertTrue(result.context.providerPayloadJson.contains("preserved under glass"))
+        val repaired = requireNotNull(
+            database.memorySearchDao().findBySource(
+                BOOK_ID,
+                MemorySearchSourceTypeV1.CANON_FACT.name,
+                "fact.story.repair",
+            ),
+        )
+        assertFalse(repaired.sourceContentHash == "0".repeat(64))
+        assertEquals(GenerationStageStatus.SUCCEEDED, states.findStage(REPAIR_CONTEXT_STAGE)?.status)
+        assertEquals(GenerationStageStatus.READY, states.findStage(REPAIR_PLAN_STAGE)?.status)
     }
 
     @Test
@@ -221,6 +528,64 @@ class ChapterContextAssemblyDatabaseTest {
             ),
         )
     }
+
+    private suspend fun createBoundContextRoute(
+        jobId: String,
+        stageIds: ChapterContextAssemblyStageIds,
+        baseAt: Long,
+    ): GenerationRunnerCurrentStageRouteSnapshot {
+        createContextJob(
+            jobId = jobId,
+            stageIds = stageIds,
+            budget = knownBudget(),
+            createdAt = baseAt,
+        )
+        prepareContextJob(jobId, stageIds.contextStageId, baseAt + 1L)
+        val jobToken = requireNotNull(states.findJob(jobId)?.leaseToken)
+        val stageToken = requireNotNull(states.findStage(stageIds.contextStageId)?.leaseToken)
+        return GenerationRunnerExecutionLeaseRepository(database).resolveCurrentStageRoute(
+            jobId = jobId,
+            jobLeaseToken = jobToken,
+            stageId = stageIds.contextStageId,
+            stageLeaseToken = stageToken,
+            observedAt = baseAt + 4L,
+        )
+    }
+
+    private fun GenerationRunnerCurrentStageRouteSnapshot.withExecutionLease(
+        lease: GenerationRunnerExecutionLeaseSnapshot,
+    ) = GenerationRunnerCurrentStageRouteSnapshot(
+        route = route,
+        executionLease = lease,
+        attemptCount = attemptCount,
+        maxAttempts = maxAttempts,
+    )
+
+    private fun knownBudget() = ChapterContextBudgetSpec(
+        contextLimitTokens = 32_768,
+        maximumOutputTokens = 8_192,
+        requestedOutputTokens = 4_096,
+        limitSource = ChapterContextLimitSource.OFFICIAL_METADATA,
+        unknownLimitConfirmed = false,
+        tokenizerFamily = "conservative-utf8-v1",
+    )
+
+    private fun chapterFact(id: String, text: String) = CanonFactEntity(
+        canonFactId = id,
+        bookId = BOOK_ID,
+        entityId = "char.lin",
+        factText = text,
+        factPayloadJson = "{\"kind\":\"story\"}",
+        canonLevel = CanonLevel.STORY_CANON,
+        scopeJson = "{}",
+        sourceChapterVersionId = CHAPTER_1_VERSION,
+        sourceBibleRevisionId = null,
+        validFromStoryOrder = 101L,
+        validToStoryOrder = null,
+        conflictGroupId = null,
+        status = DerivedDataStatus.VALID,
+        createdAt = 20L,
+    )
 
     private suspend fun prepareContextJob(jobId: String, stageId: String, readyAt: Long) {
         states.transitionJob(jobId, GenerationJobStatus.CREATED, JobEvent.VALIDATION_PASSED, readyAt)
@@ -637,6 +1002,30 @@ class ChapterContextAssemblyDatabaseTest {
         const val UNKNOWN_JOB = "job.context.unknown"
         const val UNKNOWN_CONTEXT_STAGE = "stage.z.context.unknown"
         const val UNKNOWN_PLAN_STAGE = "stage.a.plan.unknown"
+        const val BOUND_JOB = "job.context.bound"
+        const val BOUND_CONTEXT_STAGE = "stage.z.context.bound"
+        const val BOUND_PLAN_STAGE = "stage.a.plan.bound"
+        const val BOUND_STALE_JOB = "job.context.bound.stale"
+        const val BOUND_STALE_CONTEXT_STAGE = "stage.z.context.bound.stale"
+        const val BOUND_STALE_PLAN_STAGE = "stage.a.plan.bound.stale"
+        const val BOUND_STATUS_JOB = "job.context.bound.status"
+        const val BOUND_STATUS_CONTEXT_STAGE = "stage.z.context.bound.status"
+        const val BOUND_STATUS_PLAN_STAGE = "stage.a.plan.bound.status"
+        const val BOUND_CURSOR_JOB = "job.context.bound.cursor"
+        const val BOUND_CURSOR_CONTEXT_STAGE = "stage.z.context.bound.cursor"
+        const val BOUND_CURSOR_PLAN_STAGE = "stage.a.plan.bound.cursor"
+        const val BOUND_TIMEOUT_JOB = "job.context.bound.timeout"
+        const val BOUND_TIMEOUT_CONTEXT_STAGE = "stage.z.context.bound.timeout"
+        const val BOUND_TIMEOUT_PLAN_STAGE = "stage.a.plan.bound.timeout"
+        const val ROUTED_JOB = "job.context.routed"
+        const val ROUTED_CONTEXT_STAGE = "stage.z.context.routed"
+        const val ROUTED_PLAN_STAGE = "stage.a.plan.routed"
+        const val OVERFLOW_JOB = "job.context.overflow"
+        const val OVERFLOW_CONTEXT_STAGE = "stage.z.context.overflow"
+        const val OVERFLOW_PLAN_STAGE = "stage.a.plan.overflow"
+        const val REPAIR_JOB = "job.context.repair"
+        const val REPAIR_CONTEXT_STAGE = "stage.z.context.repair"
+        const val REPAIR_PLAN_STAGE = "stage.a.plan.repair"
         const val WORKER = "worker.context"
         val LARGE_OPTIONAL_MARKER = "optional-history-" + "x".repeat(40_000)
     }

@@ -154,7 +154,10 @@ class CostConfirmationScreenTest {
             context.contentResolver.insert(
                 MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
                 ContentValues().apply {
-                    put(MediaStore.Images.Media.DISPLAY_NAME, "zhijuan-task037-cost-confirmation.png")
+                    put(
+                        MediaStore.Images.Media.DISPLAY_NAME,
+                        "zhijuan-task037-cost-confirmation-${System.currentTimeMillis()}.png",
+                    )
                     put(MediaStore.Images.Media.MIME_TYPE, "image/png")
                     put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/ZhijuanTests")
                 },

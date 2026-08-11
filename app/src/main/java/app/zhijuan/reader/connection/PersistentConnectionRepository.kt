@@ -2,7 +2,9 @@ package app.zhijuan.reader.connection
 
 import android.content.Context
 import app.zhijuan.core.database.EncryptedZhijuanDatabaseFactory
+import app.zhijuan.core.database.connection.AcceptedDataDisclosureEvidence
 import app.zhijuan.core.database.connection.ConnectionProfileEntity
+import app.zhijuan.core.model.ExternalDataDestinationBindingV1
 import app.zhijuan.reader.storage.ZHIJUAN_DATABASE_NAME
 import app.zhijuan.provider.common.ProviderModelId
 import app.zhijuan.provider.common.ProviderProtocol
@@ -80,6 +82,15 @@ internal class PersistentConnectionRepository(context: Context) {
 
     suspend fun referencesSecret(secretRefId: String): Boolean = dao.countBySecretRef(secretRefId) > 0
 
+    suspend fun acceptDataDisclosure(
+        connectionId: String,
+        now: Long,
+    ): AcceptedDataDisclosureEvidence = dao.acceptDataDisclosureForCurrentDestination(connectionId, now)
+
+    suspend fun readAcceptedDataDisclosureEvidence(
+        connectionId: String,
+    ): AcceptedDataDisclosureEvidence = dao.readAcceptedDataDisclosureEvidence(connectionId)
+
     suspend fun edit(
         connectionId: String,
         displayName: String,
@@ -122,26 +133,32 @@ internal class PersistentConnectionRepository(context: Context) {
         require(draft.fullVerifiedAt == null || draft.fullVerifiedAt >= draft.basicVerifiedAt)
     }
 
-    private fun PersistentConnectionDraft.toEntity() = ConnectionProfileEntity(
-        connectionId = connectionId,
-        displayName = displayName.trim(),
-        serviceId = service.name,
-        protocolId = protocol.name,
-        baseUrl = baseUrl,
-        normalizedDestination = baseUrl,
-        secretRefId = secretRefId,
-        secretLastFour = secretLastFour,
-        selectedModelId = selectedModelId,
-        availableModelsJson = encodeModels(availableModels),
-        modelVerification = modelVerification.name,
-        basicVerifiedAt = basicVerifiedAt,
-        fullVerifiedAt = fullVerifiedAt,
-        dataDisclosureVersion = null,
-        dataDisclosureAcceptedAt = null,
-        dataDisclosureBindingHash = null,
-        createdAt = createdAt,
-        updatedAt = createdAt,
-    )
+    private fun PersistentConnectionDraft.toEntity(): ConnectionProfileEntity {
+        val destination = ExternalDataDestinationBindingV1.create(
+            baseUrl = baseUrl,
+            protocolId = protocol.name,
+        )
+        return ConnectionProfileEntity(
+            connectionId = connectionId,
+            displayName = displayName.trim(),
+            serviceId = service.name,
+            protocolId = protocol.name,
+            baseUrl = baseUrl,
+            normalizedDestination = destination.normalizedDestination,
+            secretRefId = secretRefId,
+            secretLastFour = secretLastFour,
+            selectedModelId = selectedModelId,
+            availableModelsJson = encodeModels(availableModels),
+            modelVerification = modelVerification.name,
+            basicVerifiedAt = basicVerifiedAt,
+            fullVerifiedAt = fullVerifiedAt,
+            dataDisclosureVersion = null,
+            dataDisclosureAcceptedAt = null,
+            dataDisclosureBindingHash = null,
+            createdAt = createdAt,
+            updatedAt = createdAt,
+        )
+    }
 
     private fun ConnectionProfileEntity.toSnapshotOrNull(isCurrent: Boolean): SavedConnectionSnapshot? =
         runCatching { toSnapshot(isCurrent) }.getOrNull()

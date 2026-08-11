@@ -2,6 +2,7 @@ package app.zhijuan.core.database.generation
 
 import app.zhijuan.core.database.ZhijuanDatabase
 import app.zhijuan.core.model.GenerationStageStatus
+import app.zhijuan.core.model.ProviderOpenDestinationEvidence
 import app.zhijuan.core.model.RequestAttemptStatus
 import app.zhijuan.core.task.ProviderRecoveryEvidence
 import app.zhijuan.core.task.RecoveryDraftEvidence
@@ -103,6 +104,9 @@ class ClaimedStreamingRequest internal constructor(
     val leaseValidatedAt: Long
         get() = claimedSend.leaseValidatedAt
 
+    fun isBoundTo(destination: ProviderOpenDestinationEvidence): Boolean =
+        claimedSend.destination.matches(destination)
+
     override fun toString(): String =
         "ClaimedStreamingRequest(bufferOpened=${bufferOpened.get()}, audit=redacted)"
 }
@@ -130,20 +134,152 @@ class GenerationStreamingDraftRepository(
 
     suspend fun prepareBeforeSend(
         draft: RequestIntentDraft,
+        budget: RequestBudgetReservationDraft,
         leaseToken: GenerationLeaseToken,
-    ): PersistedStreamingRequest = prepareBeforeSendInternal(draft, leaseToken, initialDraft = null)
+    ): PersistedStreamingRequest = LIFECYCLE_LOCK.withLock {
+        prepareBeforeSendLocked(
+            draft = draft,
+            budget = budget,
+            leaseToken = leaseToken,
+            initialDraft = null,
+            rolloverSource = null,
+            boundChapterPlan = null,
+        )
+    }
+
+    suspend fun prepareBoundChapterPlanBeforeSend(
+        snapshot: GenerationRunnerCurrentStageRouteSnapshot,
+        draft: RequestIntentDraft,
+        budget: RequestBudgetReservationDraft,
+    ): PersistedStreamingRequest = LIFECYCLE_LOCK.withLock {
+        require(snapshot.route == GenerationRunnerStageRoute.CHAPTER_PLAN_V1) {
+            "Bound request preparation route is not chapter-plan."
+        }
+        require(draft.stageId == snapshot.executionLease.stageId) {
+            "Bound chapter-plan request Stage does not match the route snapshot."
+        }
+        prepareBeforeSendLocked(
+            draft = draft,
+            budget = budget,
+            leaseToken = snapshot.executionLease.stageLeaseToken,
+            initialDraft = null,
+            rolloverSource = null,
+            boundChapterPlan = snapshot,
+        )
+    }
 
     internal suspend fun prepareContinuationBeforeSend(
         draft: RequestIntentDraft,
+        budget: RequestBudgetReservationDraft,
         leaseToken: GenerationLeaseToken,
         initialDraft: ByteArray,
-    ): PersistedStreamingRequest = prepareBeforeSendInternal(draft, leaseToken, initialDraft)
+    ): PersistedStreamingRequest = LIFECYCLE_LOCK.withLock {
+        prepareBeforeSendLocked(
+            draft = draft,
+            budget = budget,
+            leaseToken = leaseToken,
+            initialDraft = initialDraft,
+            rolloverSource = null,
+            boundChapterPlan = null,
+        )
+    }
 
-    private suspend fun prepareBeforeSendInternal(
+    suspend fun prepareDailyRolloverReplacementBeforeSend(
+        parentAttemptId: String,
         draft: RequestIntentDraft,
+        budget: RequestBudgetReservationDraft,
+        executionLease: GenerationRunnerExecutionLeaseSnapshot,
+    ): PersistedStreamingRequest = prepareDailyRolloverReplacementBeforeSendInternal(
+        parentAttemptId = parentAttemptId,
+        draft = draft,
+        budget = budget,
+        executionLease = executionLease,
+        boundChapterPlan = null,
+    )
+
+    suspend fun prepareBoundChapterPlanDailyRolloverReplacementBeforeSend(
+        parentAttemptId: String,
+        draft: RequestIntentDraft,
+        budget: RequestBudgetReservationDraft,
+        snapshot: GenerationRunnerCurrentStageRouteSnapshot,
+    ): PersistedStreamingRequest {
+        require(snapshot.route == GenerationRunnerStageRoute.CHAPTER_PLAN_V1) {
+            "Bound rollover route is not chapter-plan."
+        }
+        require(draft.stageId == snapshot.executionLease.stageId) {
+            "Bound chapter-plan rollover Stage does not match the route snapshot."
+        }
+        return prepareDailyRolloverReplacementBeforeSendInternal(
+            parentAttemptId = parentAttemptId,
+            draft = draft,
+            budget = budget,
+            executionLease = snapshot.executionLease,
+            boundChapterPlan = snapshot,
+        )
+    }
+
+    private suspend fun prepareDailyRolloverReplacementBeforeSendInternal(
+        parentAttemptId: String,
+        draft: RequestIntentDraft,
+        budget: RequestBudgetReservationDraft,
+        executionLease: GenerationRunnerExecutionLeaseSnapshot,
+        boundChapterPlan: GenerationRunnerCurrentStageRouteSnapshot?,
+    ): PersistedStreamingRequest = LIFECYCLE_LOCK.withLock {
+        require(draft.retryParentAttemptId == parentAttemptId) {
+            "Daily rollover replacement must name its released parent."
+        }
+        require(draft.stageId == executionLease.stageId) {
+            "Daily rollover replacement Stage does not match the execution lease."
+        }
+        val parent = database.generationDao().findAttempt(parentAttemptId)
+            ?: throw StaleGenerationStateException("Daily rollover replacement parent is missing.")
+        if (
+            parent.stageId != draft.stageId ||
+            parent.status != RequestAttemptStatus.FAILED_RETRYABLE ||
+            parent.standardErrorCode !=
+                app.zhijuan.core.model.StandardErrorCode.DAILY_BUDGET_PERIOD_EXPIRED_BEFORE_SEND
+        ) {
+            throw StaleGenerationStateException("Daily rollover replacement parent evidence changed.")
+        }
+        val sourceArtifactRefId = parent.streamDraftRef
+            ?: throw StaleGenerationStateException("Daily rollover replacement source artifact is missing.")
+        requireUniquePersistedReference(parentAttemptId, sourceArtifactRefId)
+        val sourceLease = artifactStore.readBytes(
+            artifactRefId = sourceArtifactRefId,
+            expectedType = ProtectedArtifactType.STREAM_DRAFT,
+            maximumBytes = draftPolicy.maximumPlaintextBytes,
+        )
+        val sourceDescriptor = sourceLease.descriptor
+        val seed = sourceLease.use { lease ->
+            lease.withBytes { bytes -> bytes.copyOf() }
+        }
+        try {
+            prepareBeforeSendLocked(
+                draft = draft,
+                budget = budget,
+                leaseToken = executionLease.stageLeaseToken,
+                initialDraft = seed,
+                rolloverSource = DailyRolloverArtifactSource(
+                    parentAttemptId = parentAttemptId,
+                    artifactRefId = sourceArtifactRefId,
+                    descriptor = sourceDescriptor,
+                    executionLease = executionLease,
+                ),
+                boundChapterPlan = boundChapterPlan,
+            )
+        } finally {
+            seed.fill(0)
+        }
+    }
+
+    private suspend fun prepareBeforeSendLocked(
+        draft: RequestIntentDraft,
+        budget: RequestBudgetReservationDraft,
         leaseToken: GenerationLeaseToken,
         initialDraft: ByteArray?,
-    ): PersistedStreamingRequest = LIFECYCLE_LOCK.withLock {
+        rolloverSource: DailyRolloverArtifactSource?,
+        boundChapterPlan: GenerationRunnerCurrentStageRouteSnapshot?,
+    ): PersistedStreamingRequest = try {
         require(draft.streamDraftRef == null) {
             "The protected stream draft reference is allocated by the repository."
         }
@@ -163,10 +299,45 @@ class GenerationStreamingDraftRepository(
             ).descriptor
         }
         try {
-            val audit = auditRepository.persistBeforeSend(
-                draft = draft.withStreamDraftRef(descriptor.artifactRefId),
-                leaseToken = leaseToken,
-            )
+            rolloverSource?.let { source ->
+                check(descriptor.artifactRefId != source.artifactRefId) {
+                    "Daily rollover replacement reused the source artifact."
+                }
+                check(artifactStore.descriptor(source.artifactRefId) == source.descriptor) {
+                    "Daily rollover replacement source artifact changed during copying."
+                }
+            }
+            val draftWithArtifact = draft.withStreamDraftRef(descriptor.artifactRefId)
+            val audit = when {
+                rolloverSource == null && boundChapterPlan == null ->
+                    auditRepository.persistBeforeSend(
+                        draft = draftWithArtifact,
+                        budget = budget,
+                        leaseToken = leaseToken,
+                    )
+                rolloverSource == null ->
+                    auditRepository.persistBoundChapterPlanBeforeSend(
+                        draft = draftWithArtifact,
+                        budget = budget,
+                        snapshot = requireNotNull(boundChapterPlan),
+                    )
+                boundChapterPlan == null ->
+                    auditRepository.persistDailyRolloverReplacementBeforeSend(
+                        draft = draftWithArtifact,
+                        budget = budget,
+                        executionLease = rolloverSource.executionLease,
+                        parentAttemptId = rolloverSource.parentAttemptId,
+                        sourceArtifactRefId = rolloverSource.artifactRefId,
+                    )
+                else ->
+                    auditRepository.persistBoundChapterPlanDailyRolloverReplacementBeforeSend(
+                        draft = draftWithArtifact,
+                        budget = budget,
+                        snapshot = boundChapterPlan,
+                        parentAttemptId = requireNotNull(rolloverSource).parentAttemptId,
+                        sourceArtifactRefId = rolloverSource.artifactRefId,
+                    )
+            }
             val persistedAttempt = requireNotNull(database.generationDao().findAttempt(audit.attempt.attemptId))
             check(persistedAttempt.streamDraftRef == descriptor.artifactRefId) {
                 "Persisted request intent does not reference its protected stream draft."
@@ -186,17 +357,21 @@ class GenerationStreamingDraftRepository(
             }
             throw error
         }
+    } finally {
+        initialDraft?.fill(0)
     }
 
     suspend fun claimForProviderOpen(
         request: PersistedStreamingRequest,
         validatedAt: Long,
+        destination: ProviderOpenDestinationEvidence,
     ): ClaimedStreamingRequest {
         requireUniquePersistedReference(request.attempt.attemptId, request.artifactRefId)
         requireDraftDescriptor(request.artifactRefId)
         val claimed = auditRepository.claimForProviderOpen(
             request.requestAudit.permit,
             validatedAt,
+            destination,
         )
         return ClaimedStreamingRequest(claimed, request.artifactRefId)
     }
@@ -543,6 +718,15 @@ class GenerationStreamingDraftRepository(
         val record: StreamingDraftRecoveryRecord,
     )
 
+    private class DailyRolloverArtifactSource(
+        val parentAttemptId: String,
+        val artifactRefId: String,
+        val descriptor: ProtectedArtifactDescriptor,
+        val executionLease: GenerationRunnerExecutionLeaseSnapshot,
+    ) {
+        override fun toString(): String = "DailyRolloverArtifactSource(redacted=true)"
+    }
+
     private companion object {
         val LIFECYCLE_LOCK = Mutex()
         val IDENTIFIER_PATTERN = Regex("[A-Za-z0-9._:-]{1,128}")
@@ -583,6 +767,5 @@ private fun RequestIntentDraft.withStreamDraftRef(artifactRefId: String) = Reque
     protocolSnapshotJson = protocolSnapshotJson,
     inputHash = inputHash,
     streamDraftRef = artifactRefId,
-    dailyPeriodKey = dailyPeriodKey,
     createdAt = createdAt,
 )

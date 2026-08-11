@@ -114,7 +114,7 @@
 - 无 usage 时标估算，不混入“精确”统计；
 - 服务方迟到的最终 usage 能幂等修正台账。
 
-实现基线（TASK-011）：请求意图事务会先创建 `UNKNOWN/PROVISIONAL` 台账，所有 token/金额字段为 `NULL` 而不是 0。台账可从未知→估算→服务方报告单向升级；已封账的估算值仍允许被一次迟到的 `PROVIDER_REPORTED` 最终值纠正，服务方最终值之后不可再改。三层预算的并发原子预留与结算由 TASK-084 完成。
+实现基线（TASK-011）：请求意图事务会先创建 `UNKNOWN/PROVISIONAL` 台账，所有 token/金额字段为 `NULL` 而不是 0。台账可从未知→估算→服务方报告单向升级；已封账的估算值仍允许被一次迟到的 `PROVIDER_REPORTED` 最终值纠正，服务方最终值之后不可再改。三层预算的并发原子预留与结算由 TASK-083 完成；TASK-084 只负责创建前调用/费用范围估算。
 
 TASK-046 已把主动暂停、取消和停止接入同一台账边界：若 Provider 已报告总量则按报告值 FINAL；只有可推导的部分量时按 ESTIMATED FINAL；完全没有可靠用量时按 UNKNOWN FINAL 且数值保持空。后续迟到的 Provider 报告仍可按既有单向升级规则纠正，取消动作不会抹掉可能已经产生的费用。
 
@@ -171,3 +171,81 @@ TASK-047 对未知结果采用同样的保守封账原则：进入用户确认�
 - 检查结果要求退修时，TASK-058 只返回决策，不自行发起改写。TASK-059 必须把修订次数、再次提取和复检成本纳入整章预算硬上限。
 - RequestIntent 后候选或来源变化时在 Provider-open 前拒绝；旧 Attempt 审计保留，新的候选需要新的预算和请求，不能复用已付费结果。
 - TASK-058 验收仅使用本地规则和假 Provider，真实费用 0；固定负例集不等于已测真实模型的中文检查性价比。
+
+## 17. 章节速度优化的费用边界（TASK-062～069）
+
+- 速度优化不能靠无条件并发多个 Provider 请求。任何并行或推测执行都必须先证明依赖独立，并为每个 Attempt 分别预留最坏合理预算；默认关闭可能因后续修订而整批作废的推测调用。
+- 正文/修订模型与规划/记忆/追踪/检查辅助模型可以按角色分工，但只能在同一已确认 host 或用户明确确认的新 host 内，从能力和速度均已验证的模型中选择；不得自动切换到更贵模型。
+- 5 分钟 slow watchdog 只停止新远程 Stage并尽力取消在途请求，不把取消当成“没有费用”。已发送请求的 Usage 继续按精确、估算或未知结算，结果不明时不自动重发。
+- 推荐模型档案必须同时展示性能样本范围和用量范围；不能为了更快只报告耗时而隐藏多次派生调用、修订或续接成本。
+- TASK-069 的真实模型校准必须在 TASK-080～085、TASK-110 和用户单独授权后运行，使用固定小样本和明确硬上限。
+
+## 18. TASK-064 Phase 2E4A 持久预算审计结论
+
+- `BudgetEngine` 当前是纯内存规则原型，只能证明三层计算逻辑，不能证明进程重启或两个并发请求不会突破上限。
+- `GenerationJobEntity.budgetSnapshotJson` 是任务创建时接受的不可变上限快照，不是共享余额、预留记录或结算计数器。
+- `UsageLedgerEntity` 能记录实际/估算/未知用量，但没有 reservation 身份和状态，不能单独阻止并发超支。
+- 正式实现必须让三层 reservation 与 RequestIntent、Attempt、UNKNOWN/PROVISIONAL Usage 在同一数据库事务中创建；失败或冲突必须零写入。
+- 价格未知时仍按 token 最坏上界预留；未知结果按保守占用结算，不能释放成 0。重试、续接和格式修复分别重新预留。
+
+## 19. TASK-083 Phase 1 持久预算设计冻结
+
+- 策略采用不可变 revision+head，request 级限制冻结在 reservation；book/daily 聚合包含同范围全部非 RELEASED 明细，调整上限不会删除旧用量。
+- RequestIntent 写事务先建立候选 reservation 并把自身纳入聚合检查，失败整笔回滚；不能在事务外先读余额。
+- FINAL 与迟到 Provider usage 只通过 `GenerationDao.recordUsage` 的唯一结算入口同步更新 reservation。UNKNOWN FINAL 保留最坏估计；只有 Provider 明确证明未执行可释放为0。
+- daily period 由持久 IANA zone 和 epoch 时间规范生成；跨午夜未发送请求重新预留，只重置 daily、不重置 book。
+- v16 旧 Attempt 保留为 enforcement v0 且不得新开 Provider；v17 前真实 Provider调用为0，不为旧 UNKNOWN 测试行伪造费用或 token。
+
+## 20. TASK-083 Phase 3B 公开预留边界
+
+- 每个公开远程 Attempt 必须在 prepare 时显式提供 request token/可选金额上限、估计值、连接和唯一reservation ID；系统不猜默认预算，也不允许测试或旧调用绕回v0发送。
+- 日键不再由调用方填写，必须在同一原子事务内从当前 DAILY policy 的持久IANA zone与请求时间派生，避免伪造日界线绕过额度。
+- 发送许可只在reservation、Attempt、UNKNOWN/PROVISIONAL Usage和Stage完整提交后产生，并在Provider-open、SENT和STREAMING三处重复核对同一条`RESERVED` reservation。
+- legacy v0/null Attempt仍可用于旧本地迁移/恢复测试，但不能领取Provider发送权；错误、缺失或已释放的reservation同样在联网前拒绝。
+- 本阶段尚未完成终值结算和释放：UNKNOWN仍按estimate占用；只有后续唯一结算事务才能根据高可信Provider证据调整accounted值或证明未执行后释放。
+
+## 21. TASK-083 Phase 4A 唯一结算边界
+
+- 所有现有提交、失败、取消和恢复路径只要调用 `GenerationDao.recordUsage`，就会在同一事务同步结算 enforcement v1 reservation，不允许上层遗漏或重复记账。
+- PROVISIONAL 不减少占用；FINAL UNKNOWN 保留最坏合理估计；已知终值直接替换 accounted，实际高于预留也必须保存并阻断后续请求。
+- 迟到 Provider 报告会替换 UNKNOWN/ESTIMATED 终值而不是追加差额；精确 replay 只返回相同结果，单书/每日聚合不会重复增加。
+- token、金额和币种成对使用持久终值；Provider 没有可靠金额时不伪造价格，配置金额上限的后续聚合因此继续保守拒绝。
+- 普通 FINAL 不能释放 reservation。只有 Provider 明确证明未执行的专用恢复事务可以进入 `RELEASED`，该入口与跨日重预留仍待下一阶段完成。
+
+## 22. TASK-083 Phase 4B 明确未执行的唯一释放边界
+
+- 断网、超时、空响应、Provider 查询无结论或本地无草稿都不能单独证明“请求未执行”；只有既有恢复策略同时取得 Provider `CONFIRMED_NOT_EXECUTED`、空草稿和未知用量，才会进入专用释放分支。
+- v1 release 与 UNKNOWN/FINAL Usage、Attempt/Stage/Job 回队共享一个外层 Room 事务；释放后 accounted 清零并从 book/daily 聚合排除。任何旧状态、身份、时间或 accounted CAS 冲突都会失败关闭，不留下半状态。
+- 本地已有正文、已知 Usage 或含糊 Provider 证据继续走等待/用户确认/保守结算，不能释放。普通 `recordUsage` 不暴露通用 release 开关。
+- 若已释放请求后来收到 FINAL `PROVIDER_REPORTED`，系统恢复为 `SETTLED` 并按实际终值重新占用；相同报告 replay 不重复累计，UNKNOWN/ESTIMATED 不能恢复占用。
+- 下一阶段仍需解决 Provider-open 跨午夜时旧日 reservation 的原子释放与新日重竞争；单书累计不得借换日重置。
+
+## 23. TASK-083 Phase 5B 跨日旧预留释放边界
+
+- 每次 Provider-open 都从当前持久 DAILY policy 的 IANA zone 和当次 `validatedAt` 重算日键；同日不重新扣费，跨日时旧日 permit 永久失效。
+- 跨日释放只接受完全未发送、无用量、仍按 estimate 占用的 v1 reservation。成功后旧 reservation 为 `RELEASED/accounted=0`，因此旧日 daily 与单书聚合都排除该请求；这不等于重置单书历史，新的请求仍会与同书其他非 RELEASED 明细重新竞争。
+- 换日释放与 Provider“明确未执行”使用不同事务入口和不同错误语义；普通断网、超时、UNKNOWN、取消或含糊恢复证据不能借此清零占用。
+- 旧 Attempt 已消耗一次 attempt。新日替代请求必须使用新的 Attempt 序号和新的 reservation，不能复用旧行或篡改 `attemptCount`；次数耗尽时停止自动重试。
+- Phase 5B 尚未创建替代请求。Phase 5C 将在 runner 重新取得精确租约后完成新日原子预留，并在旧草稿非空时以新的受保护工件复制有限续写种子。
+
+## 24. TASK-083 Phase 5C 新日重竞争边界
+
+- 替代请求不是“恢复旧 reservation”，而是创建新 Attempt 和新 `RESERVED` reservation；request 上限、estimate、币种与来源版本必须逐字段沿用父请求，不能借换日放宽本次请求成本。
+- 旧 `RELEASED` reservation 保持 accounted=0。新 reservation 重新计入同书所有非 RELEASED 明细，因此单书预算连续；它只进入当前新日键的 DAILY 聚合，因此每日额度按新周期重新竞争。
+- 当前 BOOK/DAILY policy revision 会在新事务中重新读取。新日策略变严时可以拒绝替代请求，拒绝必须使 candidate、Attempt 和 Usage 零落盘，不能因为旧请求已释放就强行发送。
+- 两个 worker 同时准备同一个父请求时，最新 Attempt、Stage 状态、attemptCount 与双租约门禁只允许一个成功，避免双预留和双扣占用。
+- 草稿复制本身不改变 token/金额 estimate，不产生 Provider Usage，也不打开 Provider；实际网络请求仍要经过后续 Provider-open 目的地匹配和同日预算许可。
+
+## 25. TASK-083 Phase 5D 实际发送目的地费用边界
+
+- reservation 预留的是某个 connection/canonical destination/protocol/disclosure binding 下的一次外部请求，不是对任意 Provider 的通用余额凭证。
+- 只有实际 profile、adapter protocol、当前 accepted disclosure 与 reservation 冻结事实全部匹配，才允许打开受保护草稿并调用 Provider。
+- 不匹配不会消耗预留、刷新发送 heartbeat、释放旧日余额或生成新的 Usage；纠正配置后仍可安全重试同一 permit。
+- 该门阻止“按低风险连接完成确认和预算预留，实际改向另一 endpoint 发送”的费用与隐私旁路。
+
+## 26. TASK-064 Phase 2E5A plan exact-token 预留边界
+
+- 普通 plan 的预算预留只能由 bound preparation 创建；裸 Stage token 无法进入 request/book/daily 三层竞争。
+- exact 双租约复核与 v1 reservation、Attempt、UNKNOWN/PROVISIONAL Usage、Stage 推进属于同一 Room 事务；任一授权或额度失败时四类数据库状态零写入。
+- streaming repository 在事务前创建的加密草稿不是费用事实；事务拒绝后必须删除，不能因为工件存在就计费或占用预算。
+- 本阶段没有 Provider-open、SENT 或 FINAL Usage。下一阶段即使增加请求工厂，也必须继续沿用 TASK-083 的目的地、日界和最终结算门禁。

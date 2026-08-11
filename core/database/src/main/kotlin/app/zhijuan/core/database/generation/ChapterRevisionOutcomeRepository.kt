@@ -37,6 +37,10 @@ class ChapterRevisionOutcomeRepository(
         settledAt: Long,
     ): ChapterRevisionNeedsActionSettlement = database.withTransaction {
         require(settledAt >= 0L)
+        require(reason in POST_RESPONSE_QUALITY_REASONS) {
+            "Only a validated revision-body quality failure can use response settlement."
+        }
+        val persistedReason = "CHAPTER_REVISION:${reason.name}"
         val dao = database.generationDao()
         val attempt = requireNotNull(dao.findAttempt(response.attemptId)) {
             "Revision attempt no longer exists."
@@ -60,6 +64,9 @@ class ChapterRevisionOutcomeRepository(
         if (stage.status == GenerationStageStatus.NEEDS_ACTION) {
             require(job.status in setOf(GenerationJobStatus.NEEDS_ACTION, GenerationJobStatus.PAUSED)) {
                 "Revision Stage and Job disagree about the persisted needs-action outcome."
+            }
+            require(job.pauseOrStopReason == persistedReason) {
+                "Replayed revision outcome does not match the persisted needs-action reason."
             }
             val ledger = requireNotNull(dao.findUsageForAttempt(attempt.attemptId))
             require(ledger.status == UsageLedgerStatus.FINAL) {
@@ -116,7 +123,7 @@ class ChapterRevisionOutcomeRepository(
                 jobId = job.jobId,
                 expectedStatus = job.status,
                 nextStatus = nextJobStatus,
-                reason = "CHAPTER_REVISION:${reason.name}",
+                reason = persistedReason,
                 updatedAt = settledAt,
             ) != 1
         ) throw StaleGenerationStateException("Revision outcome lost the current Job state.")
@@ -158,4 +165,12 @@ class ChapterRevisionOutcomeRepository(
         priceCatalogVersion = priceCatalogVersion,
         updatedAt = updatedAt,
     )
+
+    private companion object {
+        val POST_RESPONSE_QUALITY_REASONS = setOf(
+            ChapterRevisionNeedsActionReasonV1.REVISED_BODY_BELOW_MINIMUM,
+            ChapterRevisionNeedsActionReasonV1.REVISED_CANDIDATE_UNCHANGED,
+            ChapterRevisionNeedsActionReasonV1.REVISED_CANDIDATE_CYCLE,
+        )
+    }
 }

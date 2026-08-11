@@ -33,6 +33,7 @@ ksp {
 }
 
 dependencies {
+    implementation(project(":core:diagnostics"))
     implementation(project(":core:model"))
     implementation(project(":core:task"))
     implementation(project(":core:security"))

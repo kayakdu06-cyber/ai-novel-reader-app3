@@ -355,6 +355,7 @@ class ChapterDraftContinuationRepository(
 
     suspend fun prepareContinuationBeforeSend(
         draft: RequestIntentDraft,
+        budget: RequestBudgetReservationDraft,
         leaseToken: GenerationLeaseToken,
     ): PreparedChapterDraftContinuation {
         val dao = database.generationDao()
@@ -405,7 +406,7 @@ class ChapterDraftContinuationRepository(
         }
         val seed = inspected.text.toByteArray(Charsets.UTF_8)
         val request = GenerationStreamingDraftRepository(database, artifactStore, leasePolicy)
-            .prepareContinuationBeforeSend(draft, leaseToken, seed)
+            .prepareContinuationBeforeSend(draft, budget, leaseToken, seed)
         return PreparedChapterDraftContinuation(
             request = request,
             continuationIndex = decision.continuationIndex,

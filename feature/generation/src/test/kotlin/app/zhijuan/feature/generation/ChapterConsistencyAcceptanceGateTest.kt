@@ -11,6 +11,8 @@ import app.zhijuan.core.task.ChapterDeterministicConsistencyFactsV1
 import app.zhijuan.core.task.ConsistencyEvidenceRange
 import app.zhijuan.core.task.DeterministicEntityFactV1
 import app.zhijuan.core.task.DeterministicEntityReferenceV1
+import app.zhijuan.core.task.ChapterRevisionNeedsActionReasonV1
+import app.zhijuan.core.task.ChapterRevisionPolicyDecisionV1
 import app.zhijuan.provider.common.ProviderModelId
 import app.zhijuan.provider.common.ProviderTimeoutPolicy
 import java.security.MessageDigest
@@ -24,6 +26,117 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 class ChapterConsistencyAcceptanceGateTest {
+    @Test
+    fun productionRoutingPlannerKeepsMinorCandidateOnCommitPathWithoutBuildingRevisionRequest() {
+        val bound = proportionalBound()
+        val report = parseValid(
+            bound,
+            document(
+                bound.expectation,
+                listOf(issue("model.voice", ConsistencyIssueCode.VOICE_CONTINUITY_BREAK, ConsistencyIssueSeverity.MINOR)),
+            ),
+        )
+
+        val plan = ChapterCandidateConsistencyRoutingPlannerV1.plan(
+            report,
+            bound,
+            routingSpec(bound, revisionIndex = 0, revisionRequest = revisionSeed(strict = false)),
+        )
+
+        assertTrue(plan.policyDecision is ChapterRevisionPolicyDecisionV1.AcceptCandidate)
+        assertEquals(ChapterConsistencyGateDecisionV1.ACCEPT_CANDIDATE, plan.gate.decision)
+        assertEquals(null, plan.revisionRequest)
+    }
+
+    @Test
+    fun productionRoutingPlannerBuildsRevisionRequestFromSameMajorIssueSet() {
+        val bound = proportionalBound()
+        val report = parseValid(
+            bound,
+            document(
+                bound.expectation,
+                listOf(issue("model.action", ConsistencyIssueCode.ACTION_REACTION_GAP, ConsistencyIssueSeverity.MAJOR)),
+            ),
+        )
+
+        val plan = ChapterCandidateConsistencyRoutingPlannerV1.plan(
+            report,
+            bound,
+            routingSpec(bound, revisionIndex = 0, revisionRequest = revisionSeed(strict = false)),
+        )
+        val decision = plan.policyDecision as ChapterRevisionPolicyDecisionV1.ReviseAutomatically
+
+        assertEquals(ChapterConsistencyGateDecisionV1.REVISE_CANDIDATE, plan.gate.decision)
+        assertEquals(listOf("model.action"), plan.policyInput.issues.map { it.issueId })
+        assertEquals("stage.route.next.0", requireNotNull(plan.revisionRequest).request.stageId)
+        assertEquals(decision.repairPlanHash, plan.revisionRequest.plan.repairPlanHash)
+    }
+
+    @Test
+    fun productionRoutingPlannerExhaustsBeforeBuildingAnotherRevisionRequest() {
+        val bound = proportionalBound()
+        val report = parseValid(
+            bound,
+            document(
+                bound.expectation,
+                listOf(issue("model.action", ConsistencyIssueCode.ACTION_REACTION_GAP, ConsistencyIssueSeverity.MAJOR)),
+            ),
+        )
+
+        val plan = ChapterCandidateConsistencyRoutingPlannerV1.plan(
+            report,
+            bound,
+            routingSpec(bound, revisionIndex = 1, revisionRequest = revisionSeed(strict = false)),
+        )
+        val decision = plan.policyDecision as ChapterRevisionPolicyDecisionV1.NeedsAction
+
+        assertEquals(ChapterRevisionNeedsActionReasonV1.AUTOMATIC_REVISION_LIMIT_REACHED, decision.reason)
+        assertEquals(null, plan.revisionRequest)
+    }
+
+    @Test
+    fun productionRoutingPlannerRejectsCandidateContentThatDiffersFromFrozenCheck() {
+        val bound = proportionalBound()
+        val report = parseValid(bound, document(bound.expectation, emptyList()))
+        val wrongCandidate = routingSpec(bound, revisionIndex = 0, revisionRequest = null).copy(
+            candidate = ChapterCandidatePipelineIdentityV1(
+                chapterVersionId = bound.expectation.sourceChapterVersionId,
+                chapterId = bound.expectation.chapterId,
+                chapterIndex = bound.expectation.chapterIndex,
+                contentHash = sha256("different body"),
+                revisionIndex = 0,
+                routeBindingHash = null,
+            ),
+            candidateContent = "different body",
+            candidateContentHashHistory = listOf(sha256("different body")),
+        )
+
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException::class.java) {
+            ChapterCandidateConsistencyRoutingPlannerV1.plan(report, bound, wrongCandidate)
+        }
+    }
+
+    @Test
+    fun productionRoutingPlannerRejectsRevisionSeedFromDifferentJobBeforeBuildingRequest() {
+        val bound = proportionalBound()
+        val report = parseValid(
+            bound,
+            document(
+                bound.expectation,
+                listOf(issue("model.action", ConsistencyIssueCode.ACTION_REACTION_GAP, ConsistencyIssueSeverity.MAJOR)),
+            ),
+        )
+        val wrongJobSeed = revisionSeed(strict = false).copy(generationId = "job.other.9")
+
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException::class.java) {
+            ChapterCandidateConsistencyRoutingPlannerV1.plan(
+                report,
+                bound,
+                routingSpec(bound, revisionIndex = 0, revisionRequest = wrongJobSeed),
+            )
+        }
+    }
+
     @Test
     fun test039FixedContinuityNegativeSetForcesRevisionAtFrozenSeverities() {
         val bound = strictBound()
@@ -136,17 +249,7 @@ class ChapterConsistencyAcceptanceGateTest {
     private fun proportionalBound() = ready(strict = false)
 
     private fun ready(strict: Boolean): BoundChapterConsistencyCheckRequest {
-        val scene = SceneExecutionContract.Allowed(
-            automatic = true,
-            intimacyDetailLevel = if (strict) 4 else 2,
-            fadePolicy = if (strict) FadePolicy.AVOID else FadePolicy.ALLOW,
-            strictBodyAndSensoryContinuity = strict,
-            requiredKeyProcessCoveragePercent = if (strict) 100 else null,
-            fadeSubstitutionAllowed = !strict,
-            requiresStateContinuity = true,
-            requiresRelevantAftermath = true,
-            instructions = listOf(PromptInstruction("scene.fixture", "fixture")),
-        )
+        val scene = sceneExecution(strict)
         val spec = ChapterConsistencyCheckRequestSpec(
             requestId = "request.check.1",
             generationId = "job.check.1",
@@ -209,6 +312,71 @@ class ChapterConsistencyAcceptanceGateTest {
         return (ChapterConsistencyCheckRequestFactoryV1.prepare(spec) as ChapterConsistencyRequestPreparationV1.Ready)
             .boundRequest
     }
+
+    private fun sceneExecution(strict: Boolean) = SceneExecutionContract.Allowed(
+        automatic = true,
+        intimacyDetailLevel = if (strict) 4 else 2,
+        fadePolicy = if (strict) FadePolicy.AVOID else FadePolicy.ALLOW,
+        strictBodyAndSensoryContinuity = strict,
+        requiredKeyProcessCoveragePercent = if (strict) 100 else null,
+        fadeSubstitutionAllowed = !strict,
+        requiresStateContinuity = true,
+        requiresRelevantAftermath = true,
+        instructions = listOf(PromptInstruction("scene.fixture", "fixture")),
+    )
+
+    private fun routingSpec(
+        bound: BoundChapterConsistencyCheckRequest,
+        revisionIndex: Int,
+        revisionRequest: ChapterCandidateRevisionRequestSeedV1?,
+    ): ChapterCandidateConsistencyRoutingSpecV1 {
+        val currentHash = bound.expectation.sourceChapterContentHash
+        return ChapterCandidateConsistencyRoutingSpecV1(
+            candidate = ChapterCandidatePipelineIdentityV1(
+                chapterVersionId = bound.expectation.sourceChapterVersionId,
+                chapterId = bound.expectation.chapterId,
+                chapterIndex = bound.expectation.chapterIndex,
+                contentHash = currentHash,
+                revisionIndex = revisionIndex,
+                routeBindingHash = sha256("revision-result-$revisionIndex").takeIf { revisionIndex > 0 },
+            ),
+            candidateContent = BODY,
+            candidateContentHashHistory = if (revisionIndex == 0) {
+                listOf(currentHash)
+            } else {
+                listOf(sha256("prior-candidate"), currentHash)
+            },
+            minimumBodyCodePoints = 100,
+            totalRevisionAttemptsUsed = revisionIndex,
+            revisionStageMaximumAttempts = 2,
+            nextStageId = "stage.route.next.$revisionIndex",
+            expectedCurrentVersionId = null,
+            revisionRequest = revisionRequest,
+            routedAt = 200L,
+        )
+    }
+
+    private fun revisionSeed(strict: Boolean) = ChapterCandidateRevisionRequestSeedV1(
+        requestId = "request.revision.1",
+        generationId = "job.check.1",
+        attemptId = "attempt.revision.1",
+        modelId = ProviderModelId.from("local-fake"),
+        sceneExecutionContract = sceneExecution(strict),
+        sceneParticipantEntityIds = setOf("char.hero"),
+        requiredProcessNodeIds = if (strict) setOf("process.1", "process.2") else emptySet(),
+        knownEntities = listOf(
+            ChapterConsistencyKnownEntityV1(
+                entityId = "char.hero",
+                canonicalName = "主角",
+                entityType = StoryEntityType.CHARACTER,
+                adultStatus = AdultStatus.CONFIRMED_ADULT,
+                ageYears = 24,
+                realIdentifiablePerson = false,
+            ),
+        ),
+        maximumOutputTokens = 2_048,
+        timeouts = ProviderTimeoutPolicy(1_000, 1_000, 1_000, 2_000),
+    )
 
     private fun parseValid(
         bound: BoundChapterConsistencyCheckRequest,

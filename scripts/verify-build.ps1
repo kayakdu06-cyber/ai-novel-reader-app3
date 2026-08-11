@@ -28,7 +28,7 @@ $gradleArguments = @(
     '--console=plain',
     'test',
     ':app:assembleDebug',
-    ':app:processReleaseManifest'
+    ':app:assembleRelease'
 )
 
 if ($Offline) {
@@ -40,6 +40,11 @@ try {
     & '.\gradlew.bat' @gradleArguments
     if ($LASTEXITCODE -ne 0) {
         throw "Gradle verification failed with exit code $LASTEXITCODE."
+    }
+
+    & (Join-Path $PSScriptRoot 'test-security-scan.ps1')
+    if ($LASTEXITCODE -ne 0) {
+        throw "Security scan regression tests failed with exit code $LASTEXITCODE."
     }
 
     & (Join-Path $PSScriptRoot 'security-scan.ps1') -ProjectRoot $projectRoot

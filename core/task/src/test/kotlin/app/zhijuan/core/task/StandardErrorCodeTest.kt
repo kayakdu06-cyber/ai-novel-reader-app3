@@ -37,4 +37,12 @@ class StandardErrorCodeTest {
             StandardErrorCode.CREDENTIAL_UNAVAILABLE.retryDisposition,
         )
     }
+
+    @Test
+    fun `expired daily budget period before send allows only bounded retry handling`() {
+        assertEquals(
+            RetryDisposition.LIMITED_AUTOMATIC_RETRY,
+            StandardErrorCode.DAILY_BUDGET_PERIOD_EXPIRED_BEFORE_SEND.retryDisposition,
+        )
+    }
 }

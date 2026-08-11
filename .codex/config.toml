@@ -1,0 +1,21 @@
+# Project-scoped model configuration for app开发2.
+# This file is loaded only when Codex works inside this trusted repository.
+
+model = "deepseek-v4-flash"
+model_provider = "deepseek-app2"
+model_reasoning_effort = "max"
+model_catalog_json = 'D:\gptuser\projects\ai-novel-reader-app2\.codex\models.json'
+
+[model_providers.deepseek-app2]
+name = "DeepSeek V4 Flash (app开发2 only)"
+base_url = "https://api.deepseek.com"
+wire_api = "responses"
+requires_openai_auth = false
+supports_websockets = false
+
+[model_providers.deepseek-app2.auth]
+command = "powershell.exe"
+args = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", "D:\\gptuser\\projects\\ai-novel-reader-app2\\scripts\\get-deepseek-key.ps1"]
+cwd = 'D:\gptuser\projects\ai-novel-reader-app2'
+timeout_ms = 5000
+refresh_interval_ms = 0

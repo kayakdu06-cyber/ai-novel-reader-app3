@@ -9,23 +9,44 @@ import app.zhijuan.core.database.generation.GenerationControlDisposition
 import app.zhijuan.core.database.generation.GenerationControlRepository
 import app.zhijuan.core.database.generation.ChapterDraftContinuationRepository
 import app.zhijuan.core.database.generation.ChapterDraftTruncationAction
+import app.zhijuan.core.database.generation.DailyBudgetPeriodRolloverRequiredException
 import app.zhijuan.core.database.generation.GenerationExecutionControl
 import app.zhijuan.core.database.generation.GenerationLeasePolicy
 import app.zhijuan.core.database.generation.GenerationOutputValidationRepository
 import app.zhijuan.core.database.generation.GenerationRecoveryDisposition
+import app.zhijuan.core.database.generation.GenerationRunnerExecutionLeaseRepository
+import app.zhijuan.core.database.generation.GenerationRunnerExecutionLeaseSnapshot
+import app.zhijuan.core.database.generation.GenerationRunnerQueueRepository
 import app.zhijuan.core.database.generation.GenerationStateRepository
 import app.zhijuan.core.database.generation.GenerationStreamingDraftRepository
+import app.zhijuan.core.database.generation.GenerationTimingRepository
+import app.zhijuan.core.database.generation.PersistedStreamingRequest
+import app.zhijuan.core.database.generation.ProviderOpenDestinationMismatchException
+import app.zhijuan.core.database.generation.ProviderOpenDestinationMismatchReason
 import app.zhijuan.core.database.generation.RequestIntentDraft
 import app.zhijuan.core.database.generation.RecoveredChapterDraftSettlement
 import app.zhijuan.core.database.generation.PreparedChapterDraftContinuation
 import app.zhijuan.core.database.generation.StreamingDraftRecoveryDisposition
+import app.zhijuan.core.database.generation.StaleGenerationStateException
 import app.zhijuan.core.model.GenerationJobStatus
 import app.zhijuan.core.model.GenerationStageStatus
+import app.zhijuan.core.model.FailureRequestState
 import app.zhijuan.core.model.RequestAttemptStatus
 import app.zhijuan.core.model.StandardErrorCode
 import app.zhijuan.core.model.UsageLedgerStatus
+import app.zhijuan.core.diagnostics.GenerationTimingClock
+import app.zhijuan.core.diagnostics.GenerationTimingBenchmarkReporter
+import app.zhijuan.core.diagnostics.GenerationTimingDuration
+import app.zhijuan.core.diagnostics.GenerationTimingEventFactory
+import app.zhijuan.core.diagnostics.GenerationTimingMark
+import app.zhijuan.core.diagnostics.GenerationTimingMilestone
+import app.zhijuan.core.diagnostics.GenerationTimingOutcome
+import app.zhijuan.core.diagnostics.GenerationTimingPhase
+import app.zhijuan.core.diagnostics.GenerationTimingReporter
+import app.zhijuan.core.diagnostics.GenerationTimingUnavailableReason
 import app.zhijuan.core.security.AndroidProtectedArtifactStore
 import app.zhijuan.core.security.ProtectedArtifactType
+import app.zhijuan.core.security.resumeStreamingDraftBuffer
 import app.zhijuan.core.task.StageEvent
 import app.zhijuan.core.task.JobEvent
 import app.zhijuan.core.task.ChapterDraftContinuationPolicyV1
@@ -53,6 +74,9 @@ import app.zhijuan.provider.common.ProviderTimeoutPolicy
 import app.zhijuan.provider.common.ProviderUsage
 import app.zhijuan.provider.common.ProviderUsageQuality
 import app.zhijuan.provider.common.SensitiveProviderText
+import app.zhijuan.provider.fake.FakeProviderAdapter
+import app.zhijuan.provider.fake.VirtualFakeStreamClock
+import app.zhijuan.provider.fake.fakeStreamScript
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.async
@@ -65,7 +89,10 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.After
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -88,6 +115,11 @@ class AuditedStreamingProviderExecutorTest {
             .build()
             .also { it.openHelper.writableDatabase }
         seedGenerationRows()
+        BudgetedGenerationTestSupport.seedBudgetedRequestEnvironment(
+            database = database,
+            bookId = "book-runtime",
+            connectionId = "connection-1",
+        )
         val states = GenerationStateRepository(database)
         states.transitionJob(
             jobId = "job-runtime",
@@ -168,6 +200,682 @@ class AuditedStreamingProviderExecutorTest {
                 assertEquals("第一段，第二段。", bytes.toString(Charsets.UTF_8))
             }
         }
+    }
+
+    @Test
+    fun fakeChapterStreamPersistsRedactedFirstByteParagraphAndBodyTimings() = runBlocking {
+        val attemptId = "attempt-runtime-timing"
+        val prepared = prepareRequest(attemptId, "ledger-runtime-timing")
+        val timingRepository = GenerationTimingRepository(database)
+        val timingFactory = GenerationTimingEventFactory()
+        suspend fun recordPrerequisite(milestone: GenerationTimingMilestone, elapsed: Long) {
+            timingRepository.record(
+                timingFactory.create(
+                    phase = if (milestone == GenerationTimingMilestone.CHAPTER_REQUESTED) {
+                        GenerationTimingPhase.CHAPTER
+                    } else {
+                        GenerationTimingPhase.CONTEXT
+                    },
+                    milestone = milestone,
+                    mark = GenerationTimingMark(
+                        epochMillis = 1_000L + elapsed,
+                        elapsedRealtimeMillis = elapsed,
+                        bootFingerprint = TIMING_BOOT,
+                    ),
+                    runId = TIMING_RUN_ID,
+                    bookId = "book-runtime",
+                    jobId = if (milestone == GenerationTimingMilestone.CHAPTER_REQUESTED) null else "job-runtime",
+                    stageId = if (milestone == GenerationTimingMilestone.CHAPTER_REQUESTED) null else STAGE_ID,
+                ),
+            )
+        }
+        recordPrerequisite(GenerationTimingMilestone.CHAPTER_REQUESTED, 0L)
+        recordPrerequisite(GenerationTimingMilestone.STAGE_QUEUED, 1L)
+        recordPrerequisite(GenerationTimingMilestone.STAGE_STARTED, 2L)
+        recordPrerequisite(GenerationTimingMilestone.LOCAL_CONTEXT_READY, 3L)
+
+        val body = "第一段正文。\n第二段继续。"
+        val virtualClock = VirtualFakeStreamClock(startMillis = 10L)
+        val adapter = FakeProviderAdapter(
+            script = fakeStreamScript {
+                wait(1L)
+                started("remote-timing")
+                wait(1L)
+                structured(completeBodyEnvelope(body))
+                usage(inputTokens = 100L, outputTokens = 200L)
+                wait(1L)
+                completed()
+            },
+            protocol = ProviderProtocol.OPENAI_CHAT_COMPAT,
+            clock = virtualClock,
+        )
+        val completed = AuditedStreamingProviderExecutor(
+            drafts = drafts,
+            outputs = outputs,
+            clock = IncrementingClock(4L),
+            timingClock = VirtualGenerationTimingClock(virtualClock),
+            timingRecorder = DatabaseGenerationTimingEventRecorder(timingRepository),
+        ).execute(
+            persistedRequest = prepared,
+            adapter = adapter,
+            profile = profile(),
+            request = generationRequest(attemptId),
+            payloadDecoder = ChapterDraftV1StreamPayloadDecoder(),
+            timingContext = GenerationTimingExecutionContext(
+                runId = TIMING_RUN_ID,
+                bookId = "book-runtime",
+                phase = GenerationTimingPhase.BODY,
+                jobId = "job-runtime",
+                stageId = STAGE_ID,
+                attemptId = attemptId,
+                attemptNo = 1,
+                connectionId = TIMING_CONNECTION_CANARY,
+                modelId = TIMING_MODEL_CANARY,
+            ),
+        )
+
+        assertTrue(completed is AuditedStreamingExecutionResult.Completed)
+        val events = timingRepository.eventsForRun(TIMING_RUN_ID)
+        assertEquals(
+            listOf(
+                GenerationTimingMilestone.PROVIDER_OPENED,
+                GenerationTimingMilestone.FIRST_BYTE,
+                GenerationTimingMilestone.FIRST_FULL_PARAGRAPH,
+                GenerationTimingMilestone.BODY_STREAM_ENDED,
+            ),
+            events.filter { it.correlations.attemptFingerprint != null }.map { it.milestone },
+        )
+        val report = GenerationTimingReporter().report(events)
+        assertEquals(GenerationTimingDuration.Available(1L), report.providerToFirstByte)
+        assertEquals(GenerationTimingDuration.Available(2L), report.providerToFirstParagraph)
+        assertEquals(GenerationTimingDuration.Available(3L), report.bodyStream)
+        assertEquals(3L, adapter.stats.snapshot().virtualMillis)
+        assertEquals(1L, adapter.stats.snapshot().generateCalls)
+        val bodyEnd = events.single { it.milestone == GenerationTimingMilestone.BODY_STREAM_ENDED }
+        assertEquals(body.codePointCount(0, body.length).toLong(), bodyEnd.characterCount)
+        assertEquals(300L, bodyEnd.totalTokenCount)
+
+        database.openHelper.readableDatabase.query("SELECT * FROM generation_timing_event").use { cursor ->
+            while (cursor.moveToNext()) {
+                repeat(cursor.columnCount) { column ->
+                    if (cursor.getType(column) == android.database.Cursor.FIELD_TYPE_STRING) {
+                        val value = cursor.getString(column)
+                        assertTrue(!value.contains(body))
+                        assertTrue(!value.contains(TIMING_CONNECTION_CANARY))
+                        assertTrue(!value.contains(TIMING_MODEL_CANARY))
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    fun dailyRolloverBeforeProviderOpenSkipsAdapterAndPreservesProtectedDraft() = runBlocking {
+        val attemptId = "attempt-daily-rollover"
+        val prepared = prepareRequest(attemptId, "ledger-daily-rollover")
+        val artifactRef = artifactStore.listArtifactReferenceIds().single()
+        val before = artifactStore.descriptor(artifactRef)
+        var providerOpenCount = 0
+        val adapter = FakeAdapter(
+            onGenerate = { providerOpenCount += 1 },
+            events = emptyList(),
+        )
+
+        val error = expectFailure {
+            AuditedStreamingProviderExecutor(
+                drafts = drafts,
+                outputs = outputs,
+                clock = IncrementingClock(86_400_003L),
+            ).execute(prepared, adapter, profile(), generationRequest(attemptId))
+        }
+
+        assertTrue(error is DailyBudgetPeriodRolloverRequiredException)
+        assertTrue((error as DailyBudgetPeriodRolloverRequiredException).retryAllowed)
+        assertEquals(0, providerOpenCount)
+        val after = artifactStore.descriptor(artifactRef)
+        assertEquals(before.revision, after.revision)
+        assertEquals(before.updatedAt, after.updatedAt)
+        artifactStore.readBytes(artifactRef, ProtectedArtifactType.STREAM_DRAFT).use { lease ->
+            lease.withBytes { bytes -> assertEquals(0, bytes.size) }
+        }
+        assertEquals(RequestAttemptStatus.FAILED_RETRYABLE.name, scalarString(
+            "SELECT status FROM request_attempt WHERE attempt_id = '$attemptId'",
+        ))
+        assertEquals(
+            StandardErrorCode.DAILY_BUDGET_PERIOD_EXPIRED_BEFORE_SEND.name,
+            scalarString("SELECT standard_error_code FROM request_attempt WHERE attempt_id = '$attemptId'"),
+        )
+        assertEquals(UsageLedgerStatus.FINAL.name, scalarString(
+            "SELECT status FROM usage_ledger WHERE attempt_id = '$attemptId'",
+        ))
+        assertEquals("UNKNOWN", scalarString(
+            "SELECT source FROM usage_ledger WHERE attempt_id = '$attemptId'",
+        ))
+        assertEquals("RELEASED", scalarString(
+            "SELECT status FROM request_budget_reservation WHERE attempt_id = '$attemptId'",
+        ))
+        assertEquals(0L, scalarLong(
+            "SELECT accounted_tokens FROM request_budget_reservation WHERE attempt_id = '$attemptId'",
+        ))
+        assertEquals(GenerationStageStatus.READY.name, scalarString(
+            "SELECT status FROM generation_stage WHERE stage_id = '$STAGE_ID'",
+        ))
+        assertEquals(GenerationJobStatus.READY.name, scalarString(
+            "SELECT status FROM generation_job WHERE job_id = 'job-runtime'",
+        ))
+        assertEquals(0L, scalarLong(
+            "SELECT COUNT(*) FROM generation_stage WHERE stage_id = '$STAGE_ID' AND lease_owner_id IS NOT NULL",
+        ))
+        assertEquals(0L, scalarLong(
+            "SELECT COUNT(*) FROM generation_job WHERE job_id = 'job-runtime' AND lease_owner_id IS NOT NULL",
+        ))
+    }
+
+    @Test
+    fun wrongProfileDestinationNeverOpensArtifactOrAdapterAndCorrectProfileCanRetry() = runBlocking {
+        val attemptId = "attempt-destination-mismatch"
+        val prepared = prepareRequest(attemptId, "ledger-destination-mismatch")
+        val artifactRef = artifactStore.listArtifactReferenceIds().single()
+        val artifactBefore = artifactStore.descriptor(artifactRef)
+        val attemptBefore = rowSnapshot(
+            "SELECT * FROM request_attempt WHERE attempt_id = '$attemptId'",
+        )
+        val reservationBefore = rowSnapshot(
+            "SELECT * FROM request_budget_reservation WHERE attempt_id = '$attemptId'",
+        )
+        var providerOpenCount = 0
+        val adapter = FakeAdapter(
+            onGenerate = { providerOpenCount += 1 },
+            events = listOf(
+                ProviderStreamEvent.Started(),
+                ProviderStreamEvent.TextDelta(SensitiveProviderText.from("可重试正文。")),
+                ProviderStreamEvent.Completed(ProviderFinishReason.STOP),
+            ),
+        )
+        val wrongProfile = ProviderConnectionProfile.create(
+            connectionId = "connection-1",
+            protocol = ProviderProtocol.OPENAI_CHAT_COMPAT,
+            baseUrl = "https://wrong.example.invalid/v1",
+        )
+
+        val error = expectFailure {
+            AuditedStreamingProviderExecutor(drafts, outputs, IncrementingClock(4L)).execute(
+                prepared,
+                adapter,
+                wrongProfile,
+                generationRequest(attemptId),
+            )
+        }
+
+        assertTrue(error is ProviderOpenDestinationMismatchException)
+        assertEquals(
+            ProviderOpenDestinationMismatchReason.DESTINATION_ORIGIN,
+            (error as ProviderOpenDestinationMismatchException).reason,
+        )
+        assertEquals(0, providerOpenCount)
+        assertEquals(artifactBefore, artifactStore.descriptor(artifactRef))
+        assertEquals(
+            attemptBefore,
+            rowSnapshot("SELECT * FROM request_attempt WHERE attempt_id = '$attemptId'"),
+        )
+        assertEquals(
+            reservationBefore,
+            rowSnapshot("SELECT * FROM request_budget_reservation WHERE attempt_id = '$attemptId'"),
+        )
+        assertFalseSensitive(error.toString(), "wrong.example.invalid", "connection-1")
+
+        val result = AuditedStreamingProviderExecutor(drafts, outputs, IncrementingClock(4L)).execute(
+            prepared,
+            adapter,
+            profile(),
+            generationRequest(attemptId),
+        )
+        assertTrue(result is AuditedStreamingExecutionResult.Completed)
+        assertEquals(1, providerOpenCount)
+    }
+
+    @Test
+    fun adapterProtocolMismatchFailsBeforeClaimAndCorrectAdapterCanRetry() = runBlocking {
+        val attemptId = "attempt-adapter-protocol-mismatch"
+        val prepared = prepareRequest(attemptId, "ledger-adapter-protocol-mismatch")
+        val artifactRef = artifactStore.listArtifactReferenceIds().single()
+        val artifactBefore = artifactStore.descriptor(artifactRef)
+        var mismatchedCalls = 0
+        val mismatched = FakeAdapter(
+            onGenerate = { mismatchedCalls += 1 },
+            events = emptyList(),
+            protocol = ProviderProtocol.OPENAI_RESPONSES,
+        )
+
+        val error = expectFailure {
+            AuditedStreamingProviderExecutor(drafts, outputs, IncrementingClock(4L)).execute(
+                prepared,
+                mismatched,
+                profile(),
+                generationRequest(attemptId),
+            )
+        }
+
+        assertTrue(error is IllegalArgumentException)
+        assertEquals(0, mismatchedCalls)
+        assertEquals(artifactBefore, artifactStore.descriptor(artifactRef))
+        assertEquals(
+            RequestAttemptStatus.INTENT_RECORDED.name,
+            scalarString("SELECT status FROM request_attempt WHERE attempt_id = '$attemptId'"),
+        )
+
+        var correctCalls = 0
+        val correct = FakeAdapter(
+            onGenerate = { correctCalls += 1 },
+            events = listOf(
+                ProviderStreamEvent.Started(),
+                ProviderStreamEvent.TextDelta(SensitiveProviderText.from("协议匹配。")),
+                ProviderStreamEvent.Completed(ProviderFinishReason.STOP),
+            ),
+        )
+        val result = AuditedStreamingProviderExecutor(drafts, outputs, IncrementingClock(4L)).execute(
+            prepared,
+            correct,
+            profile(),
+            generationRequest(attemptId),
+        )
+        assertTrue(result is AuditedStreamingExecutionResult.Completed)
+        assertEquals(1, correctCalls)
+    }
+
+    @Test
+    fun dailyRolloverReplacementCopiesProtectedSeedIntoANewArtifactWithoutOpeningProvider() = runBlocking {
+        val parentAttemptId = "attempt-daily-rollover-seeded"
+        val replacementAttemptId = "attempt-daily-rollover-seeded-2"
+        val prepared = prepareRequest(parentAttemptId, "ledger-daily-rollover-seeded")
+        val sourceRef = artifactStore.listArtifactReferenceIds().single()
+        val seed = "保留上一轮已经生成的连续正文。".toByteArray(Charsets.UTF_8)
+        try {
+            artifactStore.resumeStreamingDraftBuffer(sourceRef).use { buffer ->
+                buffer.appendAndClear(seed.copyOf(), now = 4L)
+                buffer.flush(now = 4L)
+            }
+            val sourceBefore = artifactStore.descriptor(sourceRef)
+            assertEquals(0, forceDailyRollover(prepared, validatedAt = 86_400_003L))
+            val executionLease = reacquireRolloverExecution(
+                claimedAt = 86_400_004L,
+                acquiredAt = 86_400_005L,
+            )
+            val replacementDraft = rolloverReplacementDraft(
+                parentAttemptId = parentAttemptId,
+                attemptId = replacementAttemptId,
+                ledgerId = "ledger-daily-rollover-seeded-2",
+                createdAt = 86_400_006L,
+            )
+
+            val genericError = expectFailure {
+                drafts.prepareBeforeSend(
+                    draft = replacementDraft,
+                    budget = BudgetedGenerationTestSupport.budgetedDraft(
+                        attemptId = replacementAttemptId,
+                        connectionId = "connection-1",
+                    ),
+                    leaseToken = executionLease.stageLeaseToken,
+                )
+            }
+            assertTrue(genericError is StaleGenerationStateException)
+            assertEquals(setOf(sourceRef), artifactStore.listArtifactReferenceIds().toSet())
+
+            val replacement = drafts.prepareDailyRolloverReplacementBeforeSend(
+                parentAttemptId = parentAttemptId,
+                draft = replacementDraft,
+                budget = BudgetedGenerationTestSupport.budgetedDraft(
+                    attemptId = replacementAttemptId,
+                    connectionId = "connection-1",
+                ),
+                executionLease = executionLease,
+            )
+            val replacementRef = requireNotNull(scalarString(
+                "SELECT stream_draft_ref FROM request_attempt WHERE attempt_id = '$replacementAttemptId'",
+            ))
+
+            assertNotEquals(sourceRef, replacementRef)
+            assertEquals(2, artifactStore.listArtifactReferenceIds().size)
+            assertEquals(sourceBefore, artifactStore.descriptor(sourceRef))
+            artifactStore.readBytes(sourceRef, ProtectedArtifactType.STREAM_DRAFT).use { lease ->
+                lease.withBytes { bytes -> assertArrayEquals(seed, bytes) }
+            }
+            artifactStore.readBytes(replacementRef, ProtectedArtifactType.STREAM_DRAFT).use { lease ->
+                lease.withBytes { bytes -> assertArrayEquals(seed, bytes) }
+            }
+            assertEquals(2, replacement.attempt.attemptNo)
+            assertEquals(parentAttemptId, replacement.attempt.retryParentAttemptId)
+            assertEquals("RELEASED", scalarString(
+                "SELECT status FROM request_budget_reservation WHERE attempt_id = '$parentAttemptId'",
+            ))
+            assertEquals("RESERVED", scalarString(
+                "SELECT status FROM request_budget_reservation WHERE attempt_id = '$replacementAttemptId'",
+            ))
+            assertEquals(GenerationStageStatus.REQUEST_INTENT_RECORDED.name, scalarString(
+                "SELECT status FROM generation_stage WHERE stage_id = '$STAGE_ID'",
+            ))
+        } finally {
+            seed.fill(0)
+        }
+    }
+
+    @Test
+    fun dailyRolloverReplacementCreatesDistinctProtectedArtifactForEmptySeed() = runBlocking {
+        val parentAttemptId = "attempt-daily-rollover-empty"
+        val replacementAttemptId = "attempt-daily-rollover-empty-2"
+        val prepared = prepareRequest(parentAttemptId, "ledger-daily-rollover-empty")
+        val sourceRef = artifactStore.listArtifactReferenceIds().single()
+        val sourceBefore = artifactStore.descriptor(sourceRef)
+        assertEquals(0, forceDailyRollover(prepared, validatedAt = 86_400_003L))
+        val executionLease = reacquireRolloverExecution(
+            claimedAt = 86_400_004L,
+            acquiredAt = 86_400_005L,
+        )
+
+        val replacement = drafts.prepareDailyRolloverReplacementBeforeSend(
+            parentAttemptId = parentAttemptId,
+            draft = rolloverReplacementDraft(
+                parentAttemptId = parentAttemptId,
+                attemptId = replacementAttemptId,
+                ledgerId = "ledger-daily-rollover-empty-2",
+                createdAt = 86_400_006L,
+            ),
+            budget = BudgetedGenerationTestSupport.budgetedDraft(
+                attemptId = replacementAttemptId,
+                connectionId = "connection-1",
+            ),
+            executionLease = executionLease,
+        )
+        val replacementRef = requireNotNull(scalarString(
+            "SELECT stream_draft_ref FROM request_attempt WHERE attempt_id = '$replacementAttemptId'",
+        ))
+
+        assertNotEquals(sourceRef, replacementRef)
+        assertEquals(2, artifactStore.listArtifactReferenceIds().size)
+        assertEquals(sourceBefore, artifactStore.descriptor(sourceRef))
+        listOf(sourceRef, replacementRef).forEach { ref ->
+            artifactStore.readBytes(ref, ProtectedArtifactType.STREAM_DRAFT).use { lease ->
+                lease.withBytes { bytes -> assertEquals(0, bytes.size) }
+            }
+        }
+        assertEquals(2, replacement.attempt.attemptNo)
+        assertEquals(parentAttemptId, replacement.attempt.retryParentAttemptId)
+    }
+
+    @Test
+    fun rejectedDailyRolloverReplacementDeletesOnlyItsNewArtifact() = runBlocking {
+        val parentAttemptId = "attempt-daily-rollover-rejected"
+        val replacementAttemptId = "attempt-daily-rollover-rejected-2"
+        val prepared = prepareRequest(parentAttemptId, "ledger-daily-rollover-rejected")
+        val sourceRef = artifactStore.listArtifactReferenceIds().single()
+        val sourceBefore = artifactStore.descriptor(sourceRef)
+        assertEquals(0, forceDailyRollover(prepared, validatedAt = 86_400_003L))
+        val executionLease = reacquireRolloverExecution(
+            claimedAt = 86_400_004L,
+            acquiredAt = 86_400_005L,
+        )
+
+        val error = expectFailure {
+            drafts.prepareDailyRolloverReplacementBeforeSend(
+                parentAttemptId = parentAttemptId,
+                draft = rolloverReplacementDraft(
+                    parentAttemptId = parentAttemptId,
+                    attemptId = replacementAttemptId,
+                    ledgerId = "ledger-daily-rollover-rejected-2",
+                    createdAt = 86_400_006L,
+                    modelSnapshotJson = "{\"model\":\"changed\"}",
+                ),
+                budget = BudgetedGenerationTestSupport.budgetedDraft(
+                    attemptId = replacementAttemptId,
+                    connectionId = "connection-1",
+                ),
+                executionLease = executionLease,
+            )
+        }
+
+        assertTrue(error is StaleGenerationStateException)
+        assertEquals(setOf(sourceRef), artifactStore.listArtifactReferenceIds().toSet())
+        assertEquals(sourceBefore, artifactStore.descriptor(sourceRef))
+        assertNull(scalarString(
+            "SELECT attempt_id FROM request_attempt WHERE attempt_id = '$replacementAttemptId'",
+        ))
+        assertEquals(1L, scalarLong(
+            "SELECT attempt_count FROM generation_stage WHERE stage_id = '$STAGE_ID'",
+        ))
+        assertEquals(GenerationStageStatus.PREPARING.name, scalarString(
+            "SELECT status FROM generation_stage WHERE stage_id = '$STAGE_ID'",
+        ))
+    }
+
+    @Test
+    fun fakeFailureWithoutResponsePersistsFiniteTerminalTimingWithoutFirstByte() = runBlocking {
+        val attemptId = "attempt-runtime-timing-failed"
+        val runId = "$TIMING_RUN_ID-failed"
+        val prepared = prepareRequest(attemptId, "ledger-runtime-timing-failed")
+        val timingRepository = GenerationTimingRepository(database)
+
+        val result = AuditedStreamingProviderExecutor(
+            drafts = drafts,
+            outputs = outputs,
+            clock = IncrementingClock(4L),
+            timingClock = IncrementingTimingClock(20L),
+            timingRecorder = DatabaseGenerationTimingEventRecorder(timingRepository),
+        ).execute(
+            persistedRequest = prepared,
+            adapter = FakeAdapter(
+                onGenerate = {},
+                events = listOf(
+                    ProviderStreamEvent.Failed(
+                        code = StandardErrorCode.NETWORK_OFFLINE,
+                        requestState = FailureRequestState.NOT_SENT,
+                    ),
+                ),
+            ),
+            profile = profile(),
+            request = generationRequest(attemptId),
+            payloadDecoder = ChapterDraftV1StreamPayloadDecoder(),
+            timingContext = GenerationTimingExecutionContext(
+                runId = runId,
+                bookId = "book-runtime",
+                phase = GenerationTimingPhase.BODY,
+                jobId = "job-runtime",
+                stageId = STAGE_ID,
+                attemptId = attemptId,
+                attemptNo = 1,
+                connectionId = TIMING_CONNECTION_CANARY,
+                modelId = TIMING_MODEL_CANARY,
+            ),
+        )
+
+        assertTrue(result is AuditedStreamingExecutionResult.Failed)
+        val events = timingRepository.eventsForRun(runId)
+        assertEquals(
+            listOf(
+                GenerationTimingMilestone.PROVIDER_OPENED,
+                GenerationTimingMilestone.BODY_STREAM_ENDED,
+            ),
+            events.map { it.milestone },
+        )
+        assertEquals(GenerationTimingOutcome.FAILED_CLOSED, events.last().outcome)
+        assertEquals(0L, events.last().characterCount)
+    }
+
+    @Test
+    fun fiveMinuteVirtualUnexpectedEofBecomesUnknownWithoutASecondProviderCall() = runBlocking {
+        val attemptId = "attempt-runtime-five-minute-eof"
+        val runId = "$TIMING_RUN_ID-five-minute-eof"
+        val prepared = prepareRequest(attemptId, "ledger-runtime-five-minute-eof")
+        val timingRepository = GenerationTimingRepository(database)
+        val virtualClock = VirtualFakeStreamClock()
+        val adapter = FakeProviderAdapter(
+            script = fakeStreamScript {
+                wait(20_000L)
+                started()
+                wait(281_000L)
+                structured(completeBodyEnvelope("第一段完整。\n第二段仍未取得终态。"))
+            },
+            protocol = ProviderProtocol.OPENAI_CHAT_COMPAT,
+            clock = virtualClock,
+        )
+
+        val result = withTimeout(5_000L) {
+            AuditedStreamingProviderExecutor(
+                drafts = drafts,
+                outputs = outputs,
+                clock = IncrementingClock(4L),
+                timingClock = VirtualGenerationTimingClock(virtualClock),
+                timingRecorder = DatabaseGenerationTimingEventRecorder(timingRepository),
+            ).execute(
+                persistedRequest = prepared,
+                adapter = adapter,
+                profile = profile(),
+                request = generationRequest(attemptId),
+                payloadDecoder = ChapterDraftV1StreamPayloadDecoder(),
+                timingContext = GenerationTimingExecutionContext(
+                    runId = runId,
+                    bookId = "book-runtime",
+                    phase = GenerationTimingPhase.BODY,
+                    jobId = "job-runtime",
+                    stageId = STAGE_ID,
+                    attemptId = attemptId,
+                    attemptNo = 1,
+                    connectionId = TIMING_CONNECTION_CANARY,
+                    modelId = TIMING_MODEL_CANARY,
+                ),
+            )
+        }
+
+        assertTrue(result is AuditedStreamingExecutionResult.Interrupted)
+        val events = timingRepository.eventsForRun(runId)
+        assertEquals(
+            listOf(
+                GenerationTimingMilestone.PROVIDER_OPENED,
+                GenerationTimingMilestone.FIRST_BYTE,
+                GenerationTimingMilestone.FIRST_FULL_PARAGRAPH,
+                GenerationTimingMilestone.BODY_STREAM_ENDED,
+            ),
+            events.map { it.milestone },
+        )
+        val report = GenerationTimingReporter().report(events)
+        assertEquals(GenerationTimingDuration.Available(20_000L), report.providerToFirstByte)
+        assertEquals(GenerationTimingDuration.Available(301_000L), report.providerToFirstParagraph)
+        assertEquals(
+            GenerationTimingDuration.Unavailable(
+                app.zhijuan.core.diagnostics.GenerationTimingUnavailableReason
+                    .TERMINAL_OUTCOME_NOT_SUCCESSFUL,
+            ),
+            report.bodyStream,
+        )
+        assertEquals(GenerationTimingOutcome.UNKNOWN, events.last().outcome)
+        assertEquals(301_000L, virtualClock.elapsedMillis)
+        assertEquals(301_000L, adapter.stats.snapshot().virtualMillis)
+        assertEquals(1L, adapter.stats.snapshot().generateCalls)
+        assertEquals(
+            RequestAttemptStatus.UNKNOWN_RESULT,
+            drafts.inspectAttempt(attemptId, 20L).attemptStatus,
+        )
+    }
+
+    @Test
+    fun twentyReferenceBodyFakeRunsReportP50P95SlowestWithoutPretendingCommitExists() = runBlocking {
+        val timingFactory = GenerationTimingEventFactory()
+        val reports = (0 until 20).map { runIndex ->
+            val firstByteMillis = 10_000L + runIndex * 100L
+            val firstParagraphMillis = 17_000L + runIndex * 150L
+            val bodyEndMillis = 120_000L + runIndex * 3_000L
+            val body = "章".repeat(2_499 + runIndex * 50) + "。\n收束。"
+            val virtualClock = VirtualFakeStreamClock()
+            val adapter = FakeProviderAdapter(
+                script = fakeStreamScript {
+                    wait(firstByteMillis)
+                    started()
+                    wait(firstParagraphMillis - firstByteMillis)
+                    structured(completeBodyEnvelope(body))
+                    wait(bodyEndMillis - firstParagraphMillis)
+                    usage(inputTokens = 1_000L, outputTokens = 2_000L)
+                    completed()
+                },
+                protocol = ProviderProtocol.OPENAI_CHAT_COMPAT,
+                clock = virtualClock,
+            )
+            val runId = "run-reference-body-$runIndex"
+            val attemptId = "attempt-reference-body-$runIndex"
+            val timingEvents = mutableListOf(
+                timingFactory.create(
+                    phase = GenerationTimingPhase.BODY,
+                    milestone = GenerationTimingMilestone.PROVIDER_OPENED,
+                    mark = benchmarkTimingMark(virtualClock.nowMillis()),
+                    runId = runId,
+                    bookId = "book-reference",
+                    jobId = "job-reference-$runIndex",
+                    stageId = "stage-reference-$runIndex",
+                    attemptId = attemptId,
+                    attemptNo = 1,
+                    connectionId = TIMING_CONNECTION_CANARY,
+                    modelId = TIMING_MODEL_CANARY,
+                ),
+            )
+            adapter.generate(profile(), generationRequest(attemptId)).collect { event ->
+                val milestone = when (event) {
+                    is ProviderStreamEvent.Started -> GenerationTimingMilestone.FIRST_BYTE
+                    is ProviderStreamEvent.StructuredDelta ->
+                        GenerationTimingMilestone.FIRST_FULL_PARAGRAPH
+                    is ProviderStreamEvent.Completed -> GenerationTimingMilestone.BODY_STREAM_ENDED
+                    else -> null
+                }
+                if (milestone != null) {
+                    timingEvents += timingFactory.create(
+                        phase = GenerationTimingPhase.BODY,
+                        milestone = milestone,
+                        mark = benchmarkTimingMark(virtualClock.nowMillis()),
+                        runId = runId,
+                        bookId = "book-reference",
+                        jobId = "job-reference-$runIndex",
+                        stageId = "stage-reference-$runIndex",
+                        attemptId = attemptId,
+                        attemptNo = 1,
+                        outcome = if (milestone == GenerationTimingMilestone.BODY_STREAM_ENDED) {
+                            GenerationTimingOutcome.SUCCEEDED
+                        } else {
+                            null
+                        },
+                        characterCount = if (
+                            milestone == GenerationTimingMilestone.FIRST_FULL_PARAGRAPH ||
+                            milestone == GenerationTimingMilestone.BODY_STREAM_ENDED
+                        ) {
+                            body.codePointCount(0, body.length).toLong()
+                        } else {
+                            null
+                        },
+                        connectionId = TIMING_CONNECTION_CANARY,
+                        modelId = TIMING_MODEL_CANARY,
+                    )
+                }
+            }
+            assertTrue(body.codePointCount(0, body.length) in 2_500..4_000)
+            assertEquals(bodyEndMillis, adapter.stats.snapshot().virtualMillis)
+            assertEquals(1L, adapter.stats.snapshot().generateCalls)
+            GenerationTimingReporter().report(timingEvents)
+        }
+
+        val benchmark = GenerationTimingBenchmarkReporter().report(reports)
+        assertEquals(20, benchmark.runCount)
+        assertEquals(10_900L, benchmark.providerToFirstByte.p50Millis)
+        assertEquals(11_800L, benchmark.providerToFirstByte.p95Millis)
+        assertEquals(11_900L, benchmark.providerToFirstByte.slowestMillis)
+        assertEquals(18_350L, benchmark.providerToFirstParagraph.p50Millis)
+        assertEquals(19_700L, benchmark.providerToFirstParagraph.p95Millis)
+        assertEquals(19_850L, benchmark.providerToFirstParagraph.slowestMillis)
+        assertEquals(147_000L, benchmark.bodyStream.p50Millis)
+        assertEquals(174_000L, benchmark.bodyStream.p95Millis)
+        assertEquals(177_000L, benchmark.bodyStream.slowestMillis)
+        assertTrue(benchmark.providerToFirstParagraph.complete)
+        assertTrue(benchmark.bodyStream.complete)
+        assertTrue(!benchmark.total.complete)
+        assertEquals(
+            mapOf(GenerationTimingUnavailableReason.MISSING_EVENT to 20),
+            benchmark.total.unavailableReasonCounts,
+        )
     }
 
     @Test
@@ -361,8 +1069,11 @@ class AuditedStreamingProviderExecutorTest {
                 protocolSnapshotJson = "{\"protocol\":\"fixture\"}",
                 inputHash = continuationHash,
                 streamDraftRef = null,
-                dailyPeriodKey = "2026-08-03|Asia/Shanghai",
                 createdAt = 22L,
+            ),
+            budget = BudgetedGenerationTestSupport.budgetedDraft(
+                attemptId = "attempt-chapter-length-2",
+                connectionId = "connection-1",
             ),
             leaseToken = requireNotNull(states.findStage(STAGE_ID)?.leaseToken),
         )
@@ -474,8 +1185,11 @@ class AuditedStreamingProviderExecutorTest {
                     1,
                 ),
                 streamDraftRef = null,
-                dailyPeriodKey = "2026-08-03|Asia/Shanghai",
                 createdAt = 22L,
+            ),
+            BudgetedGenerationTestSupport.budgetedDraft(
+                attemptId = "attempt-anchor-2",
+                connectionId = "connection-1",
             ),
             requireNotNull(states.findStage(STAGE_ID)?.leaseToken),
         )
@@ -602,8 +1316,11 @@ class AuditedStreamingProviderExecutorTest {
                         continuationIndex = attemptNumber,
                     ),
                     streamDraftRef = null,
-                    dailyPeriodKey = "2026-08-03|Asia/Shanghai",
                     createdAt = readyAt + 1L,
+                ),
+                BudgetedGenerationTestSupport.budgetedDraft(
+                    attemptId = "attempt-cap-$nextAttemptNumber",
+                    connectionId = "connection-1",
                 ),
                 requireNotNull(states.findStage(STAGE_ID)?.leaseToken),
             )
@@ -926,6 +1643,68 @@ class AuditedStreamingProviderExecutorTest {
         ))
     }
 
+    private suspend fun forceDailyRollover(
+        prepared: PersistedStreamingRequest,
+        validatedAt: Long,
+    ): Int {
+        var providerOpenCount = 0
+        val error = expectFailure {
+            AuditedStreamingProviderExecutor(
+                drafts = drafts,
+                outputs = outputs,
+                clock = IncrementingClock(validatedAt),
+            ).execute(
+                persistedRequest = prepared,
+                adapter = FakeAdapter(
+                    onGenerate = { providerOpenCount += 1 },
+                    events = emptyList(),
+                ),
+                profile = profile(),
+                request = generationRequest(prepared.attempt.attemptId),
+            )
+        }
+        assertTrue(error is DailyBudgetPeriodRolloverRequiredException)
+        assertTrue((error as DailyBudgetPeriodRolloverRequiredException).retryAllowed)
+        return providerOpenCount
+    }
+
+    private suspend fun reacquireRolloverExecution(
+        claimedAt: Long,
+        acquiredAt: Long,
+    ): GenerationRunnerExecutionLeaseSnapshot {
+        val queue = GenerationRunnerQueueRepository(database)
+        val candidate = queue.scanReadyJobs(observedAt = claimedAt)
+            .candidates
+            .single { it.jobId == "job-runtime" }
+        val claim = queue.claimReadyJob(candidate, "runner-rollover", claimedAt)
+        return GenerationRunnerExecutionLeaseRepository(database).acquireCurrentStageLease(
+            jobId = "job-runtime",
+            jobLeaseToken = claim.jobLeaseToken,
+            stageId = STAGE_ID,
+            runnerOwnerId = "runner-rollover",
+            acquiredAt = acquiredAt,
+        )
+    }
+
+    private fun rolloverReplacementDraft(
+        parentAttemptId: String,
+        attemptId: String,
+        ledgerId: String,
+        createdAt: Long,
+        modelSnapshotJson: String = "{\"model\":\"fixture\"}",
+    ) = RequestIntentDraft(
+        attemptId = attemptId,
+        usageLedgerId = ledgerId,
+        stageId = STAGE_ID,
+        retryParentAttemptId = parentAttemptId,
+        connectionSnapshotJson = "{\"secretRefId\":\"fixture-ref\"}",
+        modelSnapshotJson = modelSnapshotJson,
+        protocolSnapshotJson = "{\"protocol\":\"fixture\"}",
+        inputHash = "a".repeat(64),
+        streamDraftRef = null,
+        createdAt = createdAt,
+    )
+
     private suspend fun prepareRequest(
         attemptId: String,
         ledgerId: String,
@@ -943,8 +1722,11 @@ class AuditedStreamingProviderExecutorTest {
                 protocolSnapshotJson = "{\"protocol\":\"fixture\"}",
                 inputHash = "a".repeat(64),
                 streamDraftRef = null,
-                dailyPeriodKey = "2026-08-02|Asia/Shanghai",
                 createdAt = createdAt,
+            ),
+            BudgetedGenerationTestSupport.budgetedDraft(
+                attemptId = attemptId,
+                connectionId = "connection-1",
             ),
             requireNotNull(GenerationStateRepository(database).findStage(STAGE_ID)?.leaseToken),
         )
@@ -972,6 +1754,12 @@ class AuditedStreamingProviderExecutorTest {
     private fun completeBodyEnvelope(body: String): String =
         "{\"body\":" + JsonPrimitive(body).toString() + "}"
 
+    private fun benchmarkTimingMark(elapsed: Long) = GenerationTimingMark(
+        epochMillis = Math.addExact(20_000L, elapsed),
+        elapsedRealtimeMillis = elapsed,
+        bootFingerprint = TIMING_BOOT,
+    )
+
     private fun providerUsage(input: Long, output: Long) = ProviderUsage(
         inputTokens = input,
         outputTokens = output,
@@ -988,6 +1776,15 @@ class AuditedStreamingProviderExecutorTest {
         baseUrl = "https://example.invalid",
     )
 
+    private suspend fun GenerationStreamingDraftRepository.claimForProviderOpen(
+        request: PersistedStreamingRequest,
+        validatedAt: Long,
+    ) = claimForProviderOpen(
+        request,
+        validatedAt,
+        BudgetedGenerationTestSupport.budgetedDestinationEvidence("connection-1"),
+    )
+
     private fun scalarString(sql: String): String? =
         database.openHelper.readableDatabase.query(sql).use { cursor ->
             if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getString(0) else null
@@ -996,6 +1793,14 @@ class AuditedStreamingProviderExecutorTest {
     private fun scalarLong(sql: String): Long? =
         database.openHelper.readableDatabase.query(sql).use { cursor ->
             if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getLong(0) else null
+        }
+
+    private fun rowSnapshot(sql: String): List<String?> =
+        database.openHelper.readableDatabase.query(sql).use { cursor ->
+            check(cursor.moveToFirst()) { "Expected one persisted test row." }
+            List(cursor.columnCount) { column ->
+                if (cursor.isNull(column)) null else cursor.getString(column)
+            }
         }
 
     private fun seedGenerationRows() {
@@ -1056,8 +1861,16 @@ class AuditedStreamingProviderExecutorTest {
         error
     }
 
+    private fun assertFalseSensitive(value: String, vararg forbidden: String) {
+        forbidden.forEach { assertTrue(!value.contains(it)) }
+    }
+
     private companion object {
         const val STAGE_ID = "stage-runtime"
+        const val TIMING_BOOT = "111111111111111111111111"
+        const val TIMING_RUN_ID = "run-runtime-timing"
+        const val TIMING_CONNECTION_CANARY = "connection-sensitive-timing-canary"
+        const val TIMING_MODEL_CANARY = "model-sensitive-timing-canary"
     }
 }
 
@@ -1091,6 +1904,32 @@ private class IncrementingClock(startAt: Long) : GenerationExecutionClock {
     override fun nowMillis(): Long = next.getAndIncrement()
 }
 
+private class IncrementingTimingClock(startAt: Long) : GenerationTimingClock {
+    private val next = AtomicLong(startAt)
+
+    override fun capture(): GenerationTimingMark {
+        val elapsed = next.getAndIncrement()
+        return GenerationTimingMark(
+            epochMillis = 1_000L + elapsed,
+            elapsedRealtimeMillis = elapsed,
+            bootFingerprint = "111111111111111111111111",
+        )
+    }
+}
+
+private class VirtualGenerationTimingClock(
+    private val clock: VirtualFakeStreamClock,
+) : GenerationTimingClock {
+    override fun capture(): GenerationTimingMark {
+        val elapsed = clock.nowMillis()
+        return GenerationTimingMark(
+            epochMillis = Math.addExact(10_000L, elapsed),
+            elapsedRealtimeMillis = elapsed,
+            bootFingerprint = "111111111111111111111111",
+        )
+    }
+}
+
 private class ControllableClock(startAt: Long) : GenerationExecutionClock {
     private val next = AtomicLong(startAt)
 
@@ -1116,8 +1955,8 @@ private class FakeAdapter(
     private val onRecoveryQuery: () -> ProviderRequestRecoveryResult = {
         ProviderRequestRecoveryResult.NotSupported
     },
+    override val protocol: ProviderProtocol = ProviderProtocol.OPENAI_CHAT_COMPAT,
 ) : ProviderAdapter {
-    override val protocol = ProviderProtocol.OPENAI_CHAT_COMPAT
     override val adapterVersion = "test-1"
     override val requestRecoveryCapability = recoveryCapability
 

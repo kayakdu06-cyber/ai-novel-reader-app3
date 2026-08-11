@@ -5,6 +5,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
+import app.zhijuan.core.model.ExternalDataDestinationBindingV1
 
 data class StoredConnectionsSnapshot(
     val connections: List<ConnectionProfileEntity>,
@@ -15,6 +16,18 @@ data class DeletedConnectionResult(
     val deleted: ConnectionProfileEntity,
     val newCurrentConnectionId: String?,
 )
+
+data class AcceptedDataDisclosureEvidence(
+    val connectionId: String,
+    val normalizedDestination: String,
+    val protocolId: String,
+    val disclosureVersion: Int,
+    val acceptedAt: Long,
+    val bindingHash: String,
+) {
+    override fun toString(): String =
+        "AcceptedDataDisclosureEvidence(disclosureVersion=$disclosureVersion, redacted=true)"
+}
 
 @Dao
 interface ConnectionDao {
@@ -44,6 +57,28 @@ interface ConnectionDao {
 
     @Query("DELETE FROM connection_profile WHERE connection_id = :connectionId")
     suspend fun deleteConnection(connectionId: String): Int
+
+    @Query(
+        """
+        UPDATE connection_profile
+        SET normalized_destination = :normalizedDestination,
+            data_disclosure_version = :disclosureVersion,
+            data_disclosure_accepted_at = :acceptedAt,
+            data_disclosure_binding_hash = :bindingHash
+        WHERE connection_id = :connectionId
+          AND base_url = :expectedBaseUrl
+          AND protocol_id = :expectedProtocolId
+        """,
+    )
+    suspend fun updateDataDisclosureIfDestinationUnchanged(
+        connectionId: String,
+        expectedBaseUrl: String,
+        expectedProtocolId: String,
+        normalizedDestination: String,
+        disclosureVersion: Int,
+        acceptedAt: Long,
+        bindingHash: String,
+    ): Int
 
     @Query(
         """
@@ -117,6 +152,38 @@ interface ConnectionDao {
     }
 
     @Transaction
+    suspend fun acceptDataDisclosureForCurrentDestination(
+        connectionId: String,
+        acceptedAt: Long,
+    ): AcceptedDataDisclosureEvidence {
+        val current = requireNotNull(findConnection(connectionId)) { "Connection does not exist." }
+        require(acceptedAt >= current.createdAt) { "Data disclosure acceptance time is invalid." }
+        val binding = ExternalDataDestinationBindingV1.create(
+            baseUrl = current.baseUrl,
+            protocolId = current.protocolId,
+        )
+        check(
+            updateDataDisclosureIfDestinationUnchanged(
+                connectionId = connectionId,
+                expectedBaseUrl = current.baseUrl,
+                expectedProtocolId = current.protocolId,
+                normalizedDestination = binding.normalizedDestination,
+                disclosureVersion = binding.disclosureVersion,
+                acceptedAt = acceptedAt,
+                bindingHash = binding.bindingHash,
+            ) == 1,
+        ) { "Connection destination changed before disclosure acceptance." }
+        return requireNotNull(findConnection(connectionId)).toAcceptedDataDisclosureEvidence()
+    }
+
+    @Transaction
+    suspend fun readAcceptedDataDisclosureEvidence(
+        connectionId: String,
+    ): AcceptedDataDisclosureEvidence =
+        requireNotNull(findConnection(connectionId)) { "Connection does not exist." }
+            .toAcceptedDataDisclosureEvidence()
+
+    @Transaction
     suspend fun deleteAndChooseFallback(connectionId: String, updatedAt: Long): DeletedConnectionResult {
         val existing = requireNotNull(findConnection(connectionId)) { "Connection does not exist." }
         val wasCurrent = currentConnectionId() == connectionId
@@ -140,4 +207,43 @@ interface ConnectionDao {
         check(deleteConnection(connectionId) == 1)
         return DeletedConnectionResult(existing, fallback?.connectionId)
     }
+}
+
+private fun ConnectionProfileEntity.toAcceptedDataDisclosureEvidence(): AcceptedDataDisclosureEvidence {
+    val version = dataDisclosureVersion
+    val acceptedAt = dataDisclosureAcceptedAt
+    val storedHash = dataDisclosureBindingHash
+    check(version != null && acceptedAt != null && storedHash != null) {
+        "Data disclosure has not been accepted."
+    }
+    check(version == ExternalDataDestinationBindingV1.CURRENT_DISCLOSURE_VERSION) {
+        "Data disclosure evidence is not current."
+    }
+    check(acceptedAt >= createdAt) { "Data disclosure evidence is invalid." }
+    val binding = runCatching {
+        ExternalDataDestinationBindingV1.create(
+            baseUrl = baseUrl,
+            protocolId = protocolId,
+            disclosureVersion = version,
+        )
+    }.getOrElse { throw IllegalStateException("Data disclosure evidence is invalid.", it) }
+    val validatedHash = runCatching {
+        ExternalDataDestinationBindingV1.requireValidStoredHash(storedHash)
+    }.getOrElse { throw IllegalStateException("Data disclosure evidence is invalid.", it) }
+    check(
+        binding.matches(
+            normalizedDestination = normalizedDestination,
+            protocolId = protocolId,
+            disclosureVersion = version,
+            bindingHash = validatedHash,
+        ),
+    ) { "Data disclosure evidence does not match the current destination." }
+    return AcceptedDataDisclosureEvidence(
+        connectionId = connectionId,
+        normalizedDestination = binding.normalizedDestination,
+        protocolId = binding.protocolId,
+        disclosureVersion = binding.disclosureVersion,
+        acceptedAt = acceptedAt,
+        bindingHash = binding.bindingHash,
+    )
 }

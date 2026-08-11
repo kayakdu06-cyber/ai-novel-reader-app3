@@ -15,7 +15,7 @@ if (-not ($resolvedRoot.TrimEnd("\") + "\").StartsWith($allowedRoot, [StringComp
 }
 
 $patterns = @(
-    'sk-[A-Za-z0-9_-]{20,}',
+    '(?<![A-Za-z0-9_-])sk-[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])',
     'AIza[0-9A-Za-z_-]{30,}',
     '(?i)(api[_-]?key|authorization|bearer|client[_-]?secret|access[_-]?token)\s*[:=]\s*[\x22\x27]?[A-Za-z0-9._-]{20,}'
 )
@@ -31,8 +31,7 @@ $sourceArguments = @(
     '--no-ignore',
     '--pcre2',
     '--glob', '!.git/**',
-    '--glob', '!**/build/**',
-    '--glob', '!reports/**'
+    '--glob', '!**/build/**'
 )
 
 foreach ($pattern in $patterns) {

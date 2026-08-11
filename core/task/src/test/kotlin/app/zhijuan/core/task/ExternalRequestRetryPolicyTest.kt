@@ -10,10 +10,15 @@ import org.junit.jupiter.api.Test
 
 class ExternalRequestRetryPolicyTest {
     @Test
-    fun `thirteen remote failure classes have an explicit safe decision`() {
+    fun `fourteen remote failure classes have an explicit safe decision`() {
         val cases = listOf(
             Triple(StandardErrorCode.NETWORK_OFFLINE, FailureRequestState.NOT_SENT, ExternalRequestRetryDecision.WaitForCondition::class),
             Triple(StandardErrorCode.DNS_FAILED, FailureRequestState.NOT_SENT, ExternalRequestRetryDecision.RetryAfter::class),
+            Triple(
+                StandardErrorCode.DAILY_BUDGET_PERIOD_EXPIRED_BEFORE_SEND,
+                FailureRequestState.NOT_SENT,
+                ExternalRequestRetryDecision.RetryAfter::class,
+            ),
             Triple(StandardErrorCode.TLS_FAILED, FailureRequestState.NOT_SENT, ExternalRequestRetryDecision.Stop::class),
             Triple(StandardErrorCode.AUTH_FAILED, FailureRequestState.PROVIDER_REJECTED, ExternalRequestRetryDecision.Stop::class),
             Triple(StandardErrorCode.MODEL_NOT_FOUND, FailureRequestState.PROVIDER_REJECTED, ExternalRequestRetryDecision.Stop::class),
@@ -27,7 +32,7 @@ class ExternalRequestRetryPolicyTest {
             Triple(StandardErrorCode.UNKNOWN_RESULT, FailureRequestState.RESULT_UNKNOWN, ExternalRequestRetryDecision.RequireUserConfirmation::class),
         )
 
-        assertEquals(13, cases.size)
+        assertEquals(14, cases.size)
         cases.forEach { (code, state, decisionClass) ->
             assertEquals(decisionClass, evaluate(code, state)::class, code.name)
         }

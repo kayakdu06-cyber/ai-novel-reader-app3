@@ -1,5 +1,6 @@
 package app.zhijuan.core.database.generation
 
+import app.zhijuan.core.model.ProviderOpenDestinationEvidence
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -64,16 +65,51 @@ class GenerationRequestAuditPolicyTest {
             inputHash = hash,
             leaseToken = GenerationLeaseToken("worker-secret", 3L),
             intentRecordedAt = 3L,
+            reservationId = "reservation-secret",
         )
 
-        val claimed = permit.claimAfterPersistedLeaseValidation(3L)
-        val rendered = permit.toString() + claimed.toString()
+        val destination = ProviderOpenDestinationEvidence.create(
+            connectionId = "connection-secret",
+            baseUrl = "https://destination-secret.example.invalid/v1",
+            protocolId = "OPENAI_CHAT_COMPAT",
+        )
+        val claimed = permit.claimAfterPersistedLeaseValidation(3L, destination)
+        val rendered = permit.toString() + claimed.toString() + destination.toString()
         assertFalse(rendered.contains("attempt-secret"))
         assertFalse(rendered.contains("stage-secret"))
         assertFalse(rendered.contains("worker-secret"))
+        assertFalse(rendered.contains("reservation-secret"))
+        assertFalse(rendered.contains("connection-secret"))
+        assertFalse(rendered.contains("destination-secret.example.invalid"))
         assertFalse(rendered.contains(hash))
         assertTrue(permit.toString().contains("claimed=true"))
-        expectFailure { permit.claimAfterPersistedLeaseValidation(4L) }
+        expectFailure { permit.claimAfterPersistedLeaseValidation(4L, destination) }
+    }
+
+    @Test
+    fun `public intent draft and budget draft redact identifiers amounts and destinations`() {
+        val intent = draft()
+        val budget = RequestBudgetReservationDraft(
+            reservationId = "reservation-secret",
+            requestMaxTokens = 1_000_000L,
+            requestMaxCostMicros = 123_456L,
+            requestCurrency = "USD",
+            estimatedTokens = 42L,
+            estimatedCostMicros = 9_999L,
+            estimatedCurrency = "USD",
+            estimateSourceVersion = "zhijuan.estimate.v1",
+            connectionId = "connection-secret",
+        )
+
+        val rendered = intent.toString() + budget.toString()
+        assertFalse(rendered.contains("reservation-secret"))
+        assertFalse(rendered.contains("connection-secret"))
+        assertFalse(rendered.contains("123456"))
+        assertFalse(rendered.contains("9999"))
+        assertFalse(rendered.contains("USD"))
+        assertFalse(rendered.contains("deepseek"))
+        assertFalse(rendered.contains("policy-derived"))
+        assertFalse(rendered.contains(hashValue))
     }
 
     private fun draft(
@@ -92,9 +128,10 @@ class GenerationRequestAuditPolicyTest {
         protocolSnapshotJson = "{\"protocol\":\"fixture\"}",
         inputHash = inputHash,
         streamDraftRef = streamDraftRef,
-        dailyPeriodKey = "2026-08-02|Asia/Shanghai",
         createdAt = createdAt,
     )
+
+    private val hashValue = "a".repeat(64)
 
     private fun expectFailure(block: () -> Unit): Throwable = try {
         block()

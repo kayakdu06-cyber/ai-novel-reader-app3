@@ -9,7 +9,10 @@ import app.zhijuan.core.database.generation.GenerationOutputValidationRepository
 import app.zhijuan.core.database.generation.GenerationStreamingDraftRepository
 import app.zhijuan.core.database.generation.PersistedStreamingRequest
 import app.zhijuan.core.database.generation.StaleGenerationStateException
+import app.zhijuan.core.diagnostics.GenerationTimingClock
+import app.zhijuan.core.diagnostics.GenerationTimingOutcome
 import app.zhijuan.core.model.FailureRequestState
+import app.zhijuan.core.model.ProviderOpenDestinationEvidence
 import app.zhijuan.core.model.StandardErrorCode
 import app.zhijuan.core.model.UsageSource
 import app.zhijuan.core.security.StreamingDraftBuffer
@@ -95,6 +98,8 @@ class AuditedStreamingProviderExecutor(
     private val drafts: GenerationStreamingDraftRepository,
     private val outputs: GenerationOutputValidationRepository,
     private val clock: GenerationExecutionClock = SystemGenerationExecutionClock,
+    private val timingClock: GenerationTimingClock? = null,
+    private val timingRecorder: GenerationTimingEventRecorder = NoOpGenerationTimingEventRecorder,
 ) {
     suspend fun execute(
         persistedRequest: PersistedStreamingRequest,
@@ -102,11 +107,28 @@ class AuditedStreamingProviderExecutor(
         profile: ProviderConnectionProfile,
         request: GenerationRequest,
         payloadDecoder: ProviderStreamPayloadDecoder = PassthroughProviderStreamPayloadDecoder,
+        timingContext: GenerationTimingExecutionContext? = null,
     ): AuditedStreamingExecutionResult {
-        val claimed = drafts.claimForProviderOpen(persistedRequest, now())
+        require(profile.protocol == adapter.protocol) {
+            "Provider profile protocol must match adapter protocol."
+        }
+        val timing = timingContext?.let { context ->
+            ProviderGenerationTimingTracker(
+                context = context,
+                clock = requireNotNull(timingClock) {
+                    "A generation timing context requires a monotonic timing clock."
+                },
+                recorder = timingRecorder,
+            )
+        }
+        val destination = destinationEvidence(profile)
+        val claimed = drafts.claimForProviderOpen(persistedRequest, now(), destination)
+        check(claimed.isBoundTo(destinationEvidence(profile))) {
+            "Provider profile changed after send authorization."
+        }
         val buffer = drafts.openDraftBuffer(claimed)
         return try {
-            collectAuthorized(claimed, buffer, adapter, profile, request, payloadDecoder)
+            collectAuthorized(claimed, buffer, adapter, profile, request, payloadDecoder, timing)
         } catch (error: CancellationException) {
             runCatching { buffer.flush(now()) }
             throw error
@@ -118,6 +140,16 @@ class AuditedStreamingProviderExecutor(
         }
     }
 
+    private fun destinationEvidence(
+        profile: ProviderConnectionProfile,
+    ): ProviderOpenDestinationEvidence = profile.withBaseUrl { baseUrl ->
+        ProviderOpenDestinationEvidence.create(
+            connectionId = profile.connectionId,
+            baseUrl = baseUrl,
+            protocolId = profile.protocol.name,
+        )
+    }
+
     private suspend fun collectAuthorized(
         claimed: ClaimedStreamingRequest,
         buffer: StreamingDraftBuffer,
@@ -125,6 +157,7 @@ class AuditedStreamingProviderExecutor(
         profile: ProviderConnectionProfile,
         request: GenerationRequest,
         payloadDecoder: ProviderStreamPayloadDecoder,
+        timing: ProviderGenerationTimingTracker?,
     ): AuditedStreamingExecutionResult {
         val gate = ProviderEventGate()
         val sent = AtomicBoolean(false)
@@ -172,6 +205,7 @@ class AuditedStreamingProviderExecutor(
                     drafts.executionControl(claimed)?.let { action ->
                         throw GenerationExecutionControlSignal(action)
                     }
+                    timing?.providerOpened()
                     adapter.generate(profile, request).collect { rawEvent ->
                         val event = when (val decision = gate.accept(rawEvent)) {
                             is ProviderEventDecision.Emit -> decision.event
@@ -181,35 +215,43 @@ class AuditedStreamingProviderExecutor(
                         }
                         when (event) {
                             is ProviderStreamEvent.Started -> {
+                                timing?.firstByte()
                                 val providerRequestId = event.remoteRequestId?.withValue { it }
                                 ensureRequestSent(providerRequestId)
                                 ensureStreamStarted()
                             }
                             is ProviderStreamEvent.TextDelta -> {
+                                timing?.firstByte()
                                 ensureStreamStarted()
-                                event.text.withValue { value ->
-                                    payloadDecoder.onTextDelta(value).takeIf(String::isNotEmpty)
-                                        ?.let { buffer.appendUtf8(it, now()) }
+                                val decoded = event.text.withValue(payloadDecoder::onTextDelta)
+                                if (decoded.isNotEmpty()) {
+                                    timing?.decodedBody(decoded)
+                                    buffer.appendUtf8(decoded, now())
                                 }
                             }
                             is ProviderStreamEvent.StructuredDelta -> {
+                                timing?.firstByte()
                                 ensureStreamStarted()
-                                event.fragment.withValue { value ->
-                                    payloadDecoder.onStructuredDelta(value).takeIf(String::isNotEmpty)
-                                        ?.let { buffer.appendUtf8(it, now()) }
+                                val decoded = event.fragment.withValue(payloadDecoder::onStructuredDelta)
+                                if (decoded.isNotEmpty()) {
+                                    timing?.decodedBody(decoded)
+                                    buffer.appendUtf8(decoded, now())
                                 }
                             }
                             is ProviderStreamEvent.UsageUpdate -> {
+                                timing?.firstByte()
                                 ensureStreamStarted()
                                 latestUsage = event.usage
                             }
                             is ProviderStreamEvent.Completed -> {
+                                timing?.firstByte()
                                 if (!streamStarted.get()) {
                                     throw ProviderStreamContractException(
                                         "Provider completed without proving that a response stream started.",
                                     )
                                 }
                                 val payloadCompletion = payloadDecoder.complete(event.reason)
+                                timing?.bodyEnded(payloadCompletion, event.reason, latestUsage)
                                 val checkpoint = buffer.flush(now())
                                 terminal = AuditedStreamingExecutionResult.Completed(
                                     reason = event.reason,
@@ -220,7 +262,9 @@ class AuditedStreamingProviderExecutor(
                                 )
                             }
                             is ProviderStreamEvent.Refused -> {
+                                timing?.firstByte()
                                 ensureRequestSent(providerRequestId = null)
+                                timing?.settleIfOpen(GenerationTimingOutcome.FAILED_CLOSED, latestUsage)
                                 terminal = AuditedStreamingExecutionResult.Refused(
                                     category = event.category,
                                     checkpoint = buffer.flush(now()),
@@ -228,6 +272,9 @@ class AuditedStreamingProviderExecutor(
                                 )
                             }
                             is ProviderStreamEvent.Failed -> {
+                                if (event.requestState == FailureRequestState.RESPONSE_STARTED) {
+                                    timing?.firstByte()
+                                }
                                 if (streamStarted.get() && event.requestState == FailureRequestState.NOT_SENT) {
                                     throw ProviderStreamContractException(
                                         "Provider cannot report NOT_SENT after a response stream started.",
@@ -239,6 +286,17 @@ class AuditedStreamingProviderExecutor(
                                 if (event.requestState == FailureRequestState.RESPONSE_STARTED) {
                                     ensureStreamStarted()
                                 }
+                                timing?.settleIfOpen(
+                                    outcome = if (
+                                        event.code == StandardErrorCode.UNKNOWN_RESULT ||
+                                        event.requestState == FailureRequestState.RESULT_UNKNOWN
+                                    ) {
+                                        GenerationTimingOutcome.UNKNOWN
+                                    } else {
+                                        GenerationTimingOutcome.FAILED_CLOSED
+                                    },
+                                    usage = latestUsage,
+                                )
                                 terminal = AuditedStreamingExecutionResult.Failed(
                                     code = event.code,
                                     httpStatus = event.httpStatus,
@@ -257,6 +315,15 @@ class AuditedStreamingProviderExecutor(
                 }
             }
         } catch (signal: GenerationExecutionControlSignal) {
+            timing?.settleIfOpen(
+                outcome = when (signal.action) {
+                    GenerationExecutionControl.PAUSE -> GenerationTimingOutcome.NEEDS_ACTION
+                    GenerationExecutionControl.CANCEL_CURRENT,
+                    GenerationExecutionControl.STOP,
+                    -> GenerationTimingOutcome.CANCELLED
+                },
+                usage = latestUsage,
+            )
             return settleControlled(
                 action = signal.action,
                 claimed = claimed,
@@ -267,8 +334,14 @@ class AuditedStreamingProviderExecutor(
                 latestUsage = latestUsage,
             )
         } catch (cancelled: CancellationException) {
+            runCatching {
+                timing?.settleIfOpen(GenerationTimingOutcome.CANCELLED, latestUsage)
+            }.onFailure(cancelled::addSuppressed)
             throw cancelled
         } catch (error: Throwable) {
+            runCatching {
+                timing?.settleIfOpen(GenerationTimingOutcome.UNKNOWN, latestUsage)
+            }.onFailure(error::addSuppressed)
             runCatching { buffer.flush(now()) }
             runCatching {
                 drafts.markLiveAttemptUnknown(
@@ -280,10 +353,20 @@ class AuditedStreamingProviderExecutor(
             throw error
         }
         drafts.executionControl(claimed)?.let { action ->
+            timing?.settleIfOpen(
+                outcome = when (action) {
+                    GenerationExecutionControl.PAUSE -> GenerationTimingOutcome.NEEDS_ACTION
+                    GenerationExecutionControl.CANCEL_CURRENT,
+                    GenerationExecutionControl.STOP,
+                    -> GenerationTimingOutcome.CANCELLED
+                },
+                usage = latestUsage,
+            )
             return settleControlled(action, claimed, buffer, adapter, profile, request, latestUsage)
         }
         val collected = terminal ?: run {
             val checkpoint = buffer.flush(now())
+            timing?.settleIfOpen(GenerationTimingOutcome.UNKNOWN, latestUsage)
             drafts.markLiveAttemptUnknown(
                 request = claimed,
                 usage = latestUsage.toFinalUsageCommit(),

@@ -24,6 +24,7 @@ android {
 
 dependencies {
     implementation(project(":core:database"))
+    implementation(project(":core:diagnostics"))
     implementation(project(":core:model"))
     implementation(project(":core:security"))
     implementation(project(":core:task"))
@@ -41,6 +42,7 @@ dependencies {
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.junit)
     androidTestImplementation(libs.kotlinx.coroutines.core)
+    androidTestImplementation(project(":provider:fake"))
 }
 
 tasks.withType<Test>().configureEach {

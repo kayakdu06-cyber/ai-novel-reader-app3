@@ -54,7 +54,10 @@ class ConnectionListFlowTest {
             context.contentResolver.insert(
                 MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
                 ContentValues().apply {
-                    put(MediaStore.Images.Media.DISPLAY_NAME, "zhijuan-task032-connections.png")
+                    put(
+                        MediaStore.Images.Media.DISPLAY_NAME,
+                        "zhijuan-task032-connections-${System.currentTimeMillis()}.png",
+                    )
                     put(MediaStore.Images.Media.MIME_TYPE, "image/png")
                     put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/ZhijuanTests")
                 },

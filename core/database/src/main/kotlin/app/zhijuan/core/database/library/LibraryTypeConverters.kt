@@ -1,8 +1,13 @@
 package app.zhijuan.core.database.library
 
 import androidx.room.TypeConverter
+import app.zhijuan.core.diagnostics.GenerationTimingPhase
+import app.zhijuan.core.diagnostics.GenerationTimingMilestone
+import app.zhijuan.core.diagnostics.GenerationTimingOutcome
 import app.zhijuan.core.model.BookLengthMode
 import app.zhijuan.core.model.BookStatus
+import app.zhijuan.core.model.BudgetReservationStatus
+import app.zhijuan.core.model.BudgetScope
 import app.zhijuan.core.model.AdultStatus
 import app.zhijuan.core.model.CanonLevel
 import app.zhijuan.core.model.ChapterStatus
@@ -30,6 +35,36 @@ import app.zhijuan.core.model.TemplateTagSource
 import app.zhijuan.core.model.TemplateUseMode
 
 class LibraryTypeConverters {
+    @TypeConverter
+    fun budgetScope(value: BudgetScope): String = value.name
+
+    @TypeConverter
+    fun budgetScope(value: String): BudgetScope = enumValueOf(value)
+
+    @TypeConverter
+    fun budgetReservationStatus(value: BudgetReservationStatus): String = value.name
+
+    @TypeConverter
+    fun budgetReservationStatus(value: String): BudgetReservationStatus = enumValueOf(value)
+
+    @TypeConverter
+    fun generationTimingPhase(value: GenerationTimingPhase): String = value.name
+
+    @TypeConverter
+    fun generationTimingPhase(value: String): GenerationTimingPhase = enumValueOf(value)
+
+    @TypeConverter
+    fun generationTimingMilestone(value: GenerationTimingMilestone): String = value.name
+
+    @TypeConverter
+    fun generationTimingMilestone(value: String): GenerationTimingMilestone = enumValueOf(value)
+
+    @TypeConverter
+    fun generationTimingOutcome(value: GenerationTimingOutcome?): String? = value?.name
+
+    @TypeConverter
+    fun generationTimingOutcome(value: String?): GenerationTimingOutcome? = value?.let(::enumValueOf)
+
     @TypeConverter
     fun bookStatus(value: BookStatus): String = value.name
 
@@ -191,4 +226,28 @@ class LibraryTypeConverters {
 
     @TypeConverter
     fun templateTagSource(value: String): TemplateTagSource = enumValueOf(value)
+
+    @TypeConverter
+    fun futureChapterPolicy(value: FutureChapterPolicy): String = value.name
+
+    @TypeConverter
+    fun futureChapterPolicy(value: String): FutureChapterPolicy = enumValueOf(value)
+
+    @TypeConverter
+    fun chapterEditRebuildExecutionStatus(value: ChapterEditRebuildExecutionStatus): String = value.name
+
+    @TypeConverter
+    fun chapterEditRebuildExecutionStatus(value: String): ChapterEditRebuildExecutionStatus = enumValueOf(value)
+
+    @TypeConverter
+    fun chapterEditRebuildExecutionStepType(value: ChapterEditRebuildExecutionStepType): String = value.name
+
+    @TypeConverter
+    fun chapterEditRebuildExecutionStepType(value: String): ChapterEditRebuildExecutionStepType = enumValueOf(value)
+
+    @TypeConverter
+    fun chapterEditRebuildPreparedStepState(value: ChapterEditRebuildPreparedStepState): String = value.name
+
+    @TypeConverter
+    fun chapterEditRebuildPreparedStepState(value: String): ChapterEditRebuildPreparedStepState = enumValueOf(value)
 }

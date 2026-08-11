@@ -31,6 +31,7 @@ hs_err_pid*.log
 *.key
 **/secrets.properties
 **/google-services.json
+.codex/deepseek-key.local
 
 # Local backup payloads must stay outside the repository
 backups/

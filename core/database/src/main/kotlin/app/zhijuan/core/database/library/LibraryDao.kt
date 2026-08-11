@@ -23,6 +23,15 @@ internal data class CommitChapterVersionCommand(
     val createdAt: Long,
 )
 
+internal data class CurrentChapterVersionSnapshot(
+    val chapterId: String,
+    val chapterIndex: Int,
+    val chapterStatus: ChapterStatus,
+    val consistencyStatus: ConsistencyStatus,
+    val chapterVersionId: String,
+    val contentHash: String,
+)
+
 internal class StaleChapterVersionException(message: String) : IllegalStateException(message)
 
 @Dao
@@ -69,6 +78,24 @@ internal interface LibraryDao {
         """,
     )
     suspend fun chaptersForBook(bookId: String): List<ChapterEntity>
+
+    @Query(
+        """
+        SELECT chapter.chapter_id AS chapterId,
+               chapter.chapter_index AS chapterIndex,
+               chapter.status AS chapterStatus,
+               chapter.consistency_status AS consistencyStatus,
+               chapter_version.chapter_version_id AS chapterVersionId,
+               chapter_version.content_hash AS contentHash
+        FROM chapter
+        INNER JOIN chapter_version
+          ON chapter_version.chapter_id = chapter.chapter_id
+         AND chapter_version.chapter_version_id = chapter.current_version_id
+        WHERE chapter.book_id = :bookId
+        ORDER BY chapter.chapter_index ASC
+        """,
+    )
+    suspend fun currentChapterVersionSnapshotsForBook(bookId: String): List<CurrentChapterVersionSnapshot>
 
     @Query(
         """
@@ -140,6 +167,31 @@ internal interface LibraryDao {
         newVersionId: String,
         status: ChapterStatus,
         consistencyStatus: ConsistencyStatus,
+        updatedAt: Long,
+    ): Int
+
+    @Query(
+        """
+        UPDATE chapter
+        SET current_version_id = :newVersionId,
+            status = :newStatus,
+            consistency_status = :newConsistencyStatus,
+            updated_at = :updatedAt
+        WHERE chapter_id = :chapterId
+          AND current_version_id = :expectedCurrentVersionId
+          AND status = :expectedStatus
+          AND consistency_status = :expectedConsistencyStatus
+          AND updated_at <= :updatedAt
+        """,
+    )
+    suspend fun compareAndSetUserEditedCurrentVersion(
+        chapterId: String,
+        expectedCurrentVersionId: String,
+        expectedStatus: ChapterStatus,
+        expectedConsistencyStatus: ConsistencyStatus,
+        newVersionId: String,
+        newStatus: ChapterStatus,
+        newConsistencyStatus: ConsistencyStatus,
         updatedAt: Long,
     ): Int
 

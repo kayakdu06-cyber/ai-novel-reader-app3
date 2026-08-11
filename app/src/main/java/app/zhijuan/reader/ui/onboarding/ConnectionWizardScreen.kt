@@ -709,6 +709,7 @@ private fun errorMessage(error: StandardErrorCode): String = when (error) {
     StandardErrorCode.FORMAT_INVALID,
     StandardErrorCode.STREAM_INTERRUPTED,
     StandardErrorCode.BUDGET_EXCEEDED,
+    StandardErrorCode.DAILY_BUDGET_PERIOD_EXPIRED_BEFORE_SEND,
     StandardErrorCode.UNKNOWN_RESULT,
     -> "没有拿到可靠结果。织卷不会自动重复发送，请直接重试一次。"
 }

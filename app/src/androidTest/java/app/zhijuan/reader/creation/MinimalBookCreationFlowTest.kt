@@ -3,6 +3,8 @@ package app.zhijuan.reader.creation
 import android.content.ContentValues
 import android.graphics.Bitmap
 import android.provider.MediaStore
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHeightIsAtLeast
@@ -21,6 +23,7 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.junit4.StateRestorationTester
@@ -146,7 +149,10 @@ class MinimalBookCreationFlowTest {
         var submitted: MinimalBookDraft? = null
         showCreation(onStartBook = { submitted = it })
 
-        composeRule.onNodeWithTag("story-idea").performTextInput("两位旧友在封城中重新建立信任。")
+        composeRule.onNodeWithTag("story-idea")
+            .performSemanticsAction(SemanticsActions.SetText) {
+                it(AnnotatedString("两位旧友在封城中重新建立信任。"))
+            }
         composeRule.onNodeWithTag("create-book-list").performScrollToIndex(4)
         composeRule.onNodeWithTag("length-SHORT").performClick()
         composeRule.onNodeWithTag("create-book-list").performScrollToNode(hasTestTag("advanced-toggle"))
@@ -155,18 +161,32 @@ class MinimalBookCreationFlowTest {
         composeRule.onNodeWithTag("create-book-list")
             .performScrollToNode(hasTestTag("advanced-characters"))
         composeRule.onNodeWithTag("advanced-characters")
-            .performTextInput("  顾言 29 岁；沈闻 31 岁，两人曾是搭档。  ")
+            .performSemanticsAction(SemanticsActions.SetText) {
+                it(AnnotatedString("  顾言 29 岁；沈闻 31 岁，两人曾是搭档。  "))
+            }
         composeRule.onNodeWithTag("create-book-list").performScrollToNode(hasTestTag("advanced-world"))
-        composeRule.onNodeWithTag("advanced-world").performTextInput("近未来沿海城")
+        composeRule.onNodeWithTag("advanced-world")
+            .performSemanticsAction(SemanticsActions.SetText) {
+                it(AnnotatedString("近未来沿海城"))
+            }
         composeRule.onNodeWithTag("create-book-list")
             .performScrollToNode(hasTestTag("advanced-narrative"))
-        composeRule.onNodeWithTag("advanced-narrative").performTextInput("第三人称双视角")
+        composeRule.onNodeWithTag("advanced-narrative")
+            .performSemanticsAction(SemanticsActions.SetText) {
+                it(AnnotatedString("第三人称双视角"))
+            }
         composeRule.onNodeWithTag("create-book-list")
             .performScrollToNode(hasTestTag("advanced-required"))
-        composeRule.onNodeWithTag("advanced-required").performTextInput("保留共同调查")
+        composeRule.onNodeWithTag("advanced-required")
+            .performSemanticsAction(SemanticsActions.SetText) {
+                it(AnnotatedString("保留共同调查"))
+            }
         composeRule.onNodeWithTag("create-book-list")
             .performScrollToNode(hasTestTag("advanced-excluded"))
-        composeRule.onNodeWithTag("advanced-excluded").performTextInput("不要失忆")
+        composeRule.onNodeWithTag("advanced-excluded")
+            .performSemanticsAction(SemanticsActions.SetText) {
+                it(AnnotatedString("不要失忆"))
+            }
 
         composeRule.onNodeWithTag("create-book-list").performScrollToNode(hasTestTag("advanced-toggle"))
         composeRule.onNodeWithTag("advanced-toggle").performClick()
@@ -278,7 +298,10 @@ class MinimalBookCreationFlowTest {
             context.contentResolver.insert(
                 MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
                 ContentValues().apply {
-                    put(MediaStore.Images.Media.DISPLAY_NAME, "zhijuan-task034-create.png")
+                    put(
+                        MediaStore.Images.Media.DISPLAY_NAME,
+                        "zhijuan-task034-create-${System.currentTimeMillis()}.png",
+                    )
                     put(MediaStore.Images.Media.MIME_TYPE, "image/png")
                     put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/ZhijuanTests")
                 },

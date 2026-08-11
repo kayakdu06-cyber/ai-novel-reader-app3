@@ -298,7 +298,7 @@ stateDiagram-v2
 
 发请求前先创建预算预留；请求结束按实际/估计用量结算并释放差额。无价格时必须使用 token 预留，不可因为“算不出钱”而无限调用。
 
-TASK-011 已实现“每个请求意图立即拥有一条未知用量台账”和迟到服务方 usage 的单向精度升级；三层预算计数器的数据库原子竞争仍属于 TASK-084，不因已有 UsageLedger 而提前标为完成。
+TASK-011 已实现“每个请求意图立即拥有一条未知用量台账”和迟到服务方 usage 的单向精度升级；三层预算 reservation 的数据库原子竞争仍属于 TASK-083，不因已有 UsageLedger 而提前标为完成。
 
 ## 10. 备份状态机
 
@@ -474,6 +474,38 @@ PLANNED/PLANTED/DEVELOPING --ABANDON(明确不可能)--> ABANDONED
 - tracking 重建 Job 沿用 TASK-056 的远程 Stage 状态链；格式失败最多一次修复，来源变化在 Provider-open 或提交点失败关闭。
 - 旧章节替换会把相关当前投影标为 STALE；TASK-061 完成自动顺序重建前，不允许跳过后续已提交章节直接重建中间章。
 
+### 22.1 编辑后的受审计 rewind 特例
+
+普通生成仍严格遵守上述单向业务状态机，不能把 `RESOLVED/ABANDONED` 重新打开。唯一回退入口是 TASK-061 schema v13 的数据库内部 rewind 事务，它不是一次模型状态转换，而是把“被编辑区间的投影历史”撤销到编辑点前最后一个可证明的完整 revision：
+
+```text
+冻结且重验 plan
+  → revision VALID → STALE
+  → transition VALID → STALE
+  → 区间 VALID 计数必须为 0
+  → 可信旧 item 全字段 CAS 恢复 / 区间新生 item → STALE
+  → 删除并重建受影响 FTS
+  → 写不可变 rewind 审计
+```
+
+任一步、任何 legacy 基线、CAS、hash、范围或版本栅栏不一致都回滚整个事务。精确 replay 只核验证据并返回，不重新改写 current item 或时间戳。该特例完成后仍需从编辑点按章节顺序生成新的 tracking/aggregate 等派生头，不能直接跳到后续章。
+
+### 22.2 聚合状态单章写入
+
+```text
+冻结计划中的 aggregate READY
+  → 重验完整 current 章节范围
+  → 重验目标章有效 tracking 代次
+  → 有界读取最新实体属性 + 当前活动伏笔
+  → 规范编码并计算内容 hash
+  → 精确 replay？是：零写入返回
+  → 当前槽旧 VALID 头转 STALE
+  → 插入新 VALID aggregate
+  → 精确回读
+```
+
+任何来源超界、未来/旧版本伏笔、tracking 换代、坏旧聚合、时间倒退、并发不同证据或非 READY 步骤都会在事务内失败关闭。新聚合写成后，计划重算会把该步识别为 `ALREADY_SATISFIED`，下一章只有在 tracking 与上一章 aggregate 都已满足时才可能解锁。该 writer 不自行创建远程 Job/Stage，也不构成跨章 runner。
+
 ## 23. TASK-058 检查与接受状态
 
 ```text
@@ -491,3 +523,528 @@ PLANNED/PLANTED/DEVELOPING --ABANDON(明确不可能)--> ABANDONED
 - 本地 blocker/major 和 `SCENE_BLOCKED` 都发生在 Provider 打开前；不得为了继续流水线把严格场景降级。
 - 检查结果来源 hash、本地快照 hash、场景契约 hash 或持久 input hash 任一不一致，都不能从旧结果继续。
 - `REVISE_CANDIDATE` 的次数和后续再检查由 TASK-059 的有限状态机冻结，TASK-058 不自行循环改稿。
+
+## 24. TASK-061 Phase 2B3B1 执行准备状态
+
+```text
+冻结计划 + 用户编辑 current
+  → 同事务 audited rewind
+  → 重验完整 current 范围与时间
+  → 写入 PREPARED execution + immutable prepared steps
+      ├─ 已有且严格有效的基线 → SATISFIED
+      └─ 尚待真实计算/模型结果 → PENDING
+```
+
+- v14 的 `PREPARED`、`PENDING`、`SATISFIED` 是不可变准备事实，不是远程执行租约或完整 runner 状态；数据库拒绝 UPDATE/DELETE。
+- stable fence 是执行身份；`planHash` 是准备时快照，不能作为长期身份，因为合法写入 summary/tracking/aggregate 后计划步骤状态会变化。
+- prepare 任意位置失败都回滚 rewind 与账本，不能留下没有执行凭据的投影回退。
+- 下一阶段必须从 ledger 的第一个 `PENDING` 关键步骤开始，只在直接前驱真实落库后创建对应 Stage。普通 tracking 顺序保护继续有效，只有受 stable fence、精确基线和同事务提交保护的重建入口可以使用专门许可。
+- 当前尚无 `PREPARED → RUNNING/NEEDS_ACTION/COMPLETED` 持久转换，也没有总 phase dispatcher；这些状态不能被文档或 UI 预先宣称。
+
+### 24.1 Phase 2B3B2A 首个远程步骤
+
+```text
+PREPARED execution + first PENDING = EDITED_MEMORY
+  → 同事务重验完整 current 范围与 initial plan
+  → 创建确定性 CREATED Job + PENDING memory Stage
+      ├─ 相同 immutable setup 已存在 → exact replay
+      └─ 身份部分存在/来源不同 → fail closed
+  → 正式 Job/Stage/Attempt/Usage 状态机继续推进
+  → Provider-open 再验 rebuild binding + memory source
+  → COMMITTING 时再验 rebuild binding + memory source
+```
+
+- rebuild ledger 不获得伪造的 RUNNING 状态；远程生命周期继续只由现有 Job/Stage 状态机、lease、Attempt 和 Usage 表表示。
+- Stage 成功后的 commit replay 可回读同一成功输出；未成功 Stage 若 summary 已被其他路径写入，或完整 current 范围改变，则拒绝继续。
+- 本入口遇到首个实际 PENDING 已是 tracking 时明确停止，不能借机提前创建 tracking；下一子阶段必须使用 memory 的真实落库快照生成 tracking source。
+
+### 24.2 Phase 2B3B2B1 第一 tracking 步骤
+
+```text
+PREPARED execution + ordinal 2 = TRACKING
+  → ordinal 1 memory 是准备时 SATISFIED 且指纹未变？
+      ├─ 是：继续
+      └─ 否：要求绑定 memory Job COMPLETED
+              + Stage SUCCEEDED
+              + latest Attempt SUCCEEDED
+              + Usage FINAL
+              + output reference 与权威 memory 行一致
+  → 重验完整 current 范围与当前 plan blocker
+  → TASK-061 专用来源读取，冻结正文/memory/伏笔/实体快照
+  → 创建确定性 CREATED Job + PENDING tracking Stage
+  → Provider-open/commit 前再次重验 binding、前驱和来源
+```
+
+- 普通 tracking 顺序保护没有状态迁移捷径；只有上述专用许可可以在保留后续已提交正文时通过。
+- immutable ledger step 仍不更新为 `RUNNING/SUCCEEDED`；真实完成度继续由绑定 Stage 和业务表权威证据推导。
+
+### 24.3 Phase 2B3B2B2 第一 tracking→aggregate 原子提交
+
+```text
+tracking Stage COMMITTING + rebuild binding
+  → 重验 execution / stable fence / memory predecessor / current range
+  → 写 tracking / timeline / foreshadow transition+revision / FTS
+  → 当前计划 tracking = ALREADY_SATISFIED
+  → 同事务写 aggregate
+  → 当前计划 aggregate = ALREADY_SATISFIED
+  → FINAL Usage + Stage SUCCEEDED + Job COMPLETED
+      ├─ aggregate 任一步失败 → 整笔回滚，Stage 仍 COMMITTING
+      └─ SUCCEEDED replay → 只验证 tracking+aggregate，不重复写入
+```
+
+- Stage 创建后但 Provider-open 前若同章 aggregate 槽被占用，旧 Stage 失败关闭且不创建 Attempt。
+- 普通 tracking 路径不经过本状态分支。
+- 下一阶段只能在本章 aggregate 严格满足后处理下一保留章节；后续章节循环和 TEST-033 尚未完成。
+
+### 24.4 Phase 2B3B2C 第一个保留章节的退役准备
+
+```text
+prepared later tracking VALID + exact timeline/search set
+  → 重验 first tracking+aggregate 已完成、current range 与 prepared baseline
+  → tracking/timeline VALID → STALE + 删除旧搜索源
+  → 读取退役后的真实 current source
+  → 创建确定性 replacement Job CREATED / Stage PENDING
+  → 插入 immutable retirement evidence
+      ├─ 任一步失败或身份碰撞 → 整笔回滚到旧基线仍 VALID
+      └─ exact replay → 复核 stale 历史、搜索缺席、Job/Stage 与命令 provenance，零写入
+```
+
+- 当前只允许 ordinal 4，即编辑章后的第一章；不会自动跳到更后章节。
+- retirement 行本身没有可变 `RUNNING/SUCCEEDED` 状态。后续完成度必须由同一 deterministic Stage、权威 tracking projection 和 aggregate 共同证明。
+- Provider-open/commit 仍未泛化到该分支；在下一阶段完成前，新 Stage 会保持可恢复但不能发起 Provider 请求。
+
+### 24.5 Phase 2B3B2D 第一个保留章节完成
+
+```text
+immutable retirement + replacement Stage PENDING
+  → 重验 execution/current range/first tracking+aggregate/retirement/source
+  → Provider-open + Fake/正式适配器响应处理
+  → Stage COMMITTING
+  → 写 replacement tracking/timeline/foreshadow/search
+  → planner 以 exact replacement identity 认定 tracking ALREADY_SATISFIED
+  → 同事务写同章 aggregate
+  → FINAL Usage + Stage SUCCEEDED + Job COMPLETED
+      ├─ aggregate 失败 → 本次新 projection 与结算回滚，retirement 保留，Stage COMMITTING
+      └─ exact replay → 只复核 tracking+aggregate，不重复写入
+```
+
+- retained 分支允许显式 ordinal 4、6、8……；每一步必须证明直接前驱 tracking+aggregate 已完成，不能伪造 ordinal、跳章或提前创建未来 Stage。
+- retirement 是可恢复准备事实，不会因一次 Provider 后本地提交失败而恢复旧 tracking 为 `VALID`。
+
+### 31.1 通用 retained-step 推进
+
+```text
+PREPARED execution
+  → 选择显式目标偶数 ordinal（4/6/8/...）
+  → 校验前驱 ordinal-2 tracking 与 ordinal-1 aggregate 完成及时间下界
+  → 校验 retirement evidence 为连续前缀
+  → 同事务退役目标旧 tracking/timeline/search + 创建 replacement Job/Stage + 写 evidence
+  → Provider-open 重验相同 fence/前驱/前缀/source
+  → tracking commit 与同章 aggregate 原子完成
+  → 下一目标才可解锁
+      ├─ 前驱未完成或时间倒退 → 失败关闭，零新 Stage
+      ├─ retirement 前缀有缺口 → 较后 projection 不获授权
+      └─ exact ordinal replay → 返回原 Stage，不猜测别的章节
+```
+
+execution 本身不转换到人工维护的 `COMPLETED`。当冻结 memory/tracking/aggregate 全部被权威 planner 判定为 `ALREADY_SATISFIED` 时，TASK-061 执行原语已闭合；持续自动调度和重启游标由 TASK-064 runner 状态机负责。
+
+## 32. TASK-062 时序证据状态机
+
+```text
+CHAPTER_REQUESTED
+  → CONTEXT/STAGE_QUEUED → CONTEXT/STAGE_STARTED → LOCAL_CONTEXT_READY
+  → BODY/PROVIDER_OPENED
+      ├─ FIRST_BYTE → FIRST_FULL_PARAGRAPH → BODY_STREAM_ENDED(SUCCEEDED/TRUNCATED/...)
+      └─ 无响应失败/暂停/取消 → BODY_STREAM_ENDED(FAILED_CLOSED/UNKNOWN/NEEDS_ACTION/CANCELLED)
+  → MEMORY_STARTED → MEMORY_ENDED(outcome)
+  → TRACKING_STARTED → TRACKING_ENDED(outcome)
+  → CONSISTENCY_STARTED → CONSISTENCY_ENDED(outcome)
+  → [REVISION_STARTED → REVISION_ENDED(outcome)]
+  → COMMIT_STARTED → FORMAL_COMMIT(SUCCEEDED)
+  → [NEXT_CHAPTER_STARTED]
+```
+
+- 同一逻辑事件的确定性 ID 只允许精确 replay；同 ID 不同 mark/outcome/count 失败关闭。
+- 结束事件必须有对应开始/Provider-open；首完整段落还必须有同 Attempt 首字节。
+- 同一 run+boot 的新事件不得比已写事件更早；正式提交成功后除 `NEXT_CHAPTER_STARTED` 外不接受迟到事件。
+- 跨 boot 的事件可以保留审计，但跨 boot duration 明确不可计算。可选修订未开始时报告 `NotApplicable`，不是缺事件错误。
+
+## 33. TASK-064 Phase 1A 空闲 Job lease 恢复
+
+```text
+Job READY + current Stage READY(no lease)
+  → acquire Job lease
+Job RUNNING + current Stage READY(no lease)
+  ├─ acquire Stage lease → Stage PREPARING（正常执行）
+  ├─ Job lease 未过期 → maintenance 不处理
+  └─ 进程崩溃且 Job lease 到期
+       → exact scan candidate
+       → transaction re-read
+       ├─ Stage 仍 READY 且无 lease、Job lease/currentStage/heartbeat 全匹配
+       │    → RUNNING + RECOVERY_REQUEUED → READY，清 Job lease
+       └─ 任一证据变化 → StaleGenerationStateException，零写入
+```
+
+恢复不转换 Stage，不创建或修改 Attempt，不增加 attempt count。若扫描后另一个执行器已经取得 Stage lease，专用 CAS 的 `EXISTS` 条件失败，维护器不能抢占活跃执行。
+
+## 34. TASK-064 Phase 1B runner queue 与 Job token 续跑
+
+```text
+Job READY + current Stage READY + Job/Stage no lease
+  → bounded observedAt scan candidate
+  → transaction exact re-read
+     ├─ evidence changed → stale-fail, zero writes
+     └─ evidence exact → Job lease CAS
+          → Job RUNNING + Job lease(token J)
+          → current Stage remains READY + no Stage lease
+
+RUNNING Job(token J) + current Stage A
+  → heartbeat J + load A
+  → business commit atomically advances currentStage A → B
+  → heartbeat same J + load B
+     ├─ wrong/expired J → stale-fail, no revival
+     └─ exact active J → continue without reacquiring Job
+```
+
+token J 只能由当前运行实例持有；重启后不能按 owner 字符串收养。两个 runner 对同一 READY candidate 并发 claim 时，Room 事务与 Job CAS 保证精确一个成功。Phase 1B 不触发 Stage `READY→PREPARING`，因此尚未形成完整双层 heartbeat 状态机。
+
+## 35. TASK-064 Phase 1C 原子 current Stage lease
+
+```text
+Job RUNNING(token J, currentStage=S) + Stage S READY(no lease)
+  → transaction verify J/currentStage/owner/time
+  → heartbeat Job J
+  → acquire Stage S lease(token S)
+     ├─ second step fails → rollback Job heartbeat, Stage unchanged
+     └─ success → Job RUNNING(J) + Stage PREPARING(S)
+
+Active Job(J) + current leased Stage(S)
+  → transaction verify same owner + currentStage
+  → heartbeat Job J
+  → heartbeat Stage S
+     ├─ wrong/expired S or cursor changed → rollback both
+     └─ success → both heartbeatAt advance together
+```
+
+`PAUSING/STOPPING` 可以续正在执行的两层 lease 以到达安全点，但不能通过 acquire 接口开启新 READY Stage。业务提交推进 cursor 后，旧 Stage 的双 heartbeat 必须 stale-fail；runner 回到 Phase 1B 的 Job heartbeat/load 再读取新 current Stage。
+
+## 36. TASK-064 Phase 1D heartbeat envelope 生命周期
+
+```text
+start Stage action + schedule next heartbeat
+  ├─ action completes/fails first → cancel waiter, return/propagate action result, no late beat
+  └─ tick first → atomic Job+Stage heartbeat
+       ├─ success → schedule next tick
+       └─ failure → inspect authoritative Job
+            ├─ same token + cursor A→B → durable handoff; stop old beats, await action
+            ├─ COMPLETED/PAUSED/STOPPED/NEEDS_ACTION/BLOCKED + no lease
+            │    → durable boundary; stop old beats, await action
+            └─ still same Stage / token lost / inspection failed
+                 → cancel action, propagate heartbeat failure
+```
+
+parent cancellation 始终由结构化并发向 action 与 waiter 传播。该 envelope 不实现 5 分钟慢服务 watchdog；action 在 durable commit 后异常长时间不返回仍由 TASK-066 处理。
+
+## 37. TASK-064 Phase 2A 派生 route 失败关闭
+
+```text
+persisted Stage input_sources_json
+  → strict JSON object + string sourcePolicyVersion
+  → select exactly one authoritative frozen-source parser
+       ├─ memory v1 / memory rebuild v2
+       ├─ tracking v1 / tracking rebuild v2
+       ├─ candidate role + phase finite mapping
+       └─ final commit v3
+  → full parser succeeds → one finite route enum
+  → unknown/malformed/conflicting/hash-stale → fail; no fallback, no state write
+```
+
+`EXTRACT_MEMORY` 只能在 memory 或 tracking 的完整来源合同验证后分流。route identity 本身不触发 `READY→PREPARING`、Attempt、Provider 或 commit；这些状态变化仍需 current lease 证明和唯一 executor。
+
+## 38. TASK-064 Phase 2B current route 授权边界
+
+```text
+Job RUNNING + currentStageId=S + exact live Job token
+Stage S PREPARING + belongs to Job + exact live Stage token
+same owner + time monotonic + attempts remaining
+  → authoritative frozen contract parser
+  → route + exact dual-lease snapshot
+
+any mismatch / PAUSING / STOPPING / request already recorded /
+timeout boundary / malformed contract
+  → fail closed; zero database writes; zero Provider calls
+```
+
+route binding 只发生在 Stage lease 已从 `READY→PREPARING` 后、请求意图尚未落库前。到达 `REQUEST_INTENT_RECORDED` 后，恢复逻辑必须沿 Attempt/UNKNOWN 合同处理，不能重新 route 并开启第二次请求。
+
+## 39. TASK-064 Phase 2C2 final commit exact-token 状态边界
+
+```text
+bound FINAL route + exact Stage token T
+  ├─ PREPARING(T, live) → coordinator → COMMITTING(T) → atomic commit
+  ├─ COMMITTING(T, live) → coordinator deterministic resume
+  ├─ SUCCEEDED → AlreadySucceeded; zero artifact/commit
+  └─ READY / other status / token != T / expired / backwards time
+       → fail before coordinator; zero commit
+```
+
+owner 相同不等于 token 相同。任何 acquiredAt 变化都代表新的租约身份，旧绑定快照不能跟随它继续执行。
+
+## 40. TASK-064 Phase 2C3 最小 registry 分发边界
+
+```text
+database-bound route snapshot + live exact dual lease
+  → registry rechecks RUNNING + PREPARING + same owner + time
+  → exhaustive finite route dispatch
+       ├─ FINAL_CHAPTER_COMMIT_V3
+       │    → executeBound(stageId, exact Stage token, requestedAt)
+       └─ other 9 known remote routes
+            → RouteNotRegistered; zero executor/Attempt/Provider/state write
+```
+
+registry 不把“已知 route”解释为“已有生产执行权限”。未注册路线必须显式失败；只有在对应 adapter 的输入、恢复、UNKNOWN 与防重复发送边界都经过独立验收后，才能改变注册集合。
+
+## 41. TASK-064 Phase 2D1 initial draft 失败关闭边界
+
+```text
+initial DRAFT before Provider
+  ├─ candidate output version/hash do not exist yet
+  ├─ bound candidate BODY guard requires REVISE_CHAPTER
+  └─ seal/recovery treat revisionIndex=0 DRAFT as unbound root
+
+therefore:
+  CANDIDATE_CHAPTER_DRAFT_V1 → keep unregistered
+  no Provider open / no Attempt send / no cursor advance
+```
+
+新的 initial-draft route 必须从请求前已经持久化的 planning/context/scene contract 形成可验证 input hash。它不能引用本次请求尚未产生的正文 hash；request intent、Provider-open、validation、seal 和 crash recovery 必须对同一冻结身份达成对称解释。
+
+## 42. TASK-064 Phase 2D2 context route 身份边界
+
+```text
+ASSEMBLE_CONTEXT + CHAPTER + maxAttempts=1
+  → exact sourcePolicyVersion
+  → strict root/context fields + empty dependencies
+  → budget/prompt/progression self-hash + chapter id/index + input hash
+       ├─ all valid → CHAPTER_CONTEXT_ASSEMBLY_V1
+       └─ any mismatch → fail closed; zero state write
+
+registry in Phase 2D2
+  ├─ FINAL_CHAPTER_COMMIT_V3 → registered
+  └─ CHAPTER_CONTEXT_ASSEMBLY_V1 → explicitly not registered
+```
+
+route 识别不执行 `PREPARING→SUCCEEDED`，也不激活 chapter-plan successor。现有 `ChapterContextAssemblyRepository` 事务继续是业务状态变更的唯一入口；exact-token bound adapter 与 registry 注册留给 Phase 2D3。
+
+## 43. TASK-064 Phase 2D3 context exact-token 状态边界
+
+```text
+bound CHAPTER_CONTEXT_ASSEMBLY_V1 snapshot
+  → same Room transaction re-reads Job + Stage
+  ├─ RUNNING Job + current PREPARING Stage
+  ├─ exact Job/Stage tokens + same owner
+  ├─ monotonic live heartbeats + attempts remaining
+  │    → shared context assembly
+  │    ├─ Ready → snapshot + context SUCCEEDED + plan READY + cursor advance
+  │    └─ Blocked → existing BLOCKED/NEEDS_ACTION transaction
+  ├─ Stage already SUCCEEDED → durable read-only replay
+  └─ any changed evidence → fail before business write
+
+registry
+  ├─ FINAL_CHAPTER_COMMIT_V3 → registered local executor
+  ├─ CHAPTER_CONTEXT_ASSEMBLY_V1 → registered local executor
+  └─ remaining nine remote routes → explicitly not registered
+```
+
+bound 入口不创建 Attempt、Usage 或 Provider 请求。context 成功后激活的 `BUILD_CHAPTER_PLAN` 仍没有已注册 route，runner 必须在下一轮解析时失败关闭，直到 chapter-plan 独立合同与 executor 完成。
+
+## 44. TASK-064 Phase 2E1 chapter-plan 失败关闭与持久交接
+
+```text
+context SUCCEEDED → BUILD_CHAPTER_PLAN READY
+  ├─ 当前无 sourcePolicyVersion / route / output contract
+  │    → resolver fail closed; zero Provider / Attempt / Usage write
+  └─ future complete path
+       → exact source + exact dual lease + destination/budget reserve
+       → audited structured Provider attempt
+       → strict chapter-plan.v1 parse + business validation
+       → one Room commit
+            ├─ Usage FINAL + plan Stage SUCCEEDED
+            ├─ canonical bounded plan frozen into new initial DRAFT input
+            ├─ plan output reference binds Attempt/raw/canonical hashes/DRAFT id
+            └─ Job cursor advances to initial DRAFT
+```
+
+plan artifact 只用于提交时证明；即使成功 artifact 按 24 小时策略清理，initial DRAFT 仍必须依靠自身不可变 SQLCipher 输入恢复。任何输入 identity、context/progression 权威事实、预算/目的地、artifact hash 或 DRAFT successor 冲突都会在推进 cursor 前整笔失败。
+
+## 45. TASK-064 Phase 2E2 chapter-plan route 识别边界
+
+```text
+BUILD_CHAPTER_PLAN frozen input
+  → strict JSON object + exact sourcePolicyVersion
+  → exact root/version/schema/context dependency
+  → context input hash + progression self-hash/target/index
+  → full inputVersionHash
+       ├─ all valid → CHAPTER_PLAN_V1
+       │    → registry explicitly notRegistered
+       └─ any mismatch → fail closed
+```
+
+route 成功只说明冻结合同可识别，不转换 Stage、不创建 Attempt/Usage、不读取连接且不打开 Provider。context currentness、exact 双租约、目的地、预算和输出合同仍是后续独立门禁。
+
+## 46. TASK-064 Phase 2E3 chapter-plan 输出校验边界
+
+```text
+future audited Provider result bytes
+  → 48 KiB / UTF-8 / JSON bounds scanner
+  → exact chapter-plan.v1 schema + local typed parser
+  → canonical object-key ordering + content hash
+  → dynamic expectation validation
+       ├─ exact chapter/context identity
+       ├─ known character + POV/participant binding
+       ├─ NotApplicable / Allowed / Blocked scene policy
+       └─ adult-fictional gate + strict process/aftermath rules
+            ├─ valid → finite canonical ChapterPlanV1 (not yet committed)
+            └─ invalid → finite structural or cross issue; zero business write
+```
+
+Phase 2E3 只建立上述纯函数校验层，不改变现有 Job/Stage。`CHAPTER_PLAN_V1` 仍在 registry 中显式未注册，因此当前不会真的取得 Provider result。后续 executor 即使收到结构合法输出，也必须在同一发送/提交链重新验证 exact lease、context currentness、目的地、预算、Attempt/artifact 和 DEC-068 的 initial DRAFT 原子 successor，不能把 parser 成功直接等同于 Stage 成功。
+
+## 47. TASK-064 Phase 2E4A 发送许可前置状态边界
+
+```text
+bound CHAPTER_PLAN_V1 snapshot
+  -> destination disclosure binding valid?
+       no  -> NEEDS_ACTION / zero Attempt / zero Provider open
+       yes -> atomically reserve request + book + daily budget
+                insufficient -> BUDGET_EXCEEDED / zero RequestIntent
+                reserved -> in the same transaction create RequestIntent
+                              + Attempt + UNKNOWN/PROVISIONAL Usage
+                              -> exact one-shot provider-open permit
+```
+
+`budgetSnapshotJson` 不能从“记录”升级成隐式计数器；预算 reservation 也不能早于或晚于 RequestIntent 单独提交，否则崩溃会留下“扣了预算但没有请求”或“有请求但没扣预算”的半状态。目的地确认绑定失效、预算不足或 exact lease 改变时必须在打开 Provider 前结束，不得先发请求再补记录。
+
+## 48. TASK-064 Phase 2E4B 目的地确认状态边界
+
+```text
+new connection
+  -> canonical destination stored
+  -> disclosure fields = null
+       -> fixed non-story connection test remains allowed
+       -> story request remains blocked
+
+explicit accept(connectionId, acceptedAt)
+  -> transaction reads current base URL + protocol
+  -> canonical binding v1
+  -> CAS update on same connection/base URL/protocol
+  -> immediate dynamic read-back verification
+       -> ACCEPTED evidence (not a send permit)
+
+later read
+  -> recompute from current endpoint/protocol/version
+       -> exact match: evidence may enter later atomic send gate
+       -> any drift/corruption/missing field: fail closed and request one new confirmation
+```
+
+同 origin 的 path/大小写/默认端口变化不打扰用户；host、scheme、非默认端口、Provider protocol 或 disclosure version 变化必须重新确认。读取证据不创建 Attempt/Usage，不推进 Job/Stage，也不打开 Provider。
+
+## 49. TASK-083 reservation 与结算状态冻结
+
+```text
+candidate reservation inserted inside write transaction
+  -> aggregate includes candidate
+       over any hard limit -> rollback reservation + Attempt + Usage + Stage
+       allowed -> RESERVED + INTENT_RECORDED
+
+RESERVED
+  -> FINAL known/estimated -> SETTLED(accounted = terminal value)
+  -> FINAL unknown -> SETTLED(accounted = original estimate)
+  -> provider proved not executed -> RELEASED(accounted = 0)
+
+SETTLED unknown/estimated -> late provider report -> SETTLED(recomputed terminal value)
+RELEASED -> late provider report -> SETTLED(recomputed terminal value)
+```
+
+accounted 永远按当前终值重算，不做 delta 累计。PROVISIONAL usage 不释放预留；实际超过预留仍必须提交真实 Usage，再由新的 reservation 检查阻断后续请求。跨午夜但尚未发送的旧日 reservation 不能直接打开 Provider，必须按新日重新预留。
+
+## 50. TASK-083 Phase 5B Provider-open 换日状态机
+
+```text
+claim unsent v1 permit
+  -> recompute current DAILY key from persisted zone + validatedAt
+       same key -> exact Job/Stage/lease checks -> heartbeat -> one-shot claimed permit
+       different key -> one Room transaction
+           Attempt INTENT_RECORDED -> FAILED_RETRYABLE(daily-period-expired)
+           Usage UNKNOWN/PROVISIONAL -> UNKNOWN/FINAL
+           reservation RESERVED -> RELEASED(accounted=0)
+           attempts remaining?
+             yes -> Stage READY + Job READY + clear leases
+             no  -> Stage NEEDS_ACTION + Job NEEDS_ACTION(reason=daily-period-expired)
+           commit -> throw redacted rollover-required signal
+```
+
+业务异常必须在 Room 事务提交后抛出，否则会把正确释放一起回滚。旧 permit 重放因持久证据已变化而失败；并发 claim 最多一个完成换日事务。换日不能借用“Provider 已证实未执行”的事件或 DAO，也不能修改旧日键、复用旧 Attempt、在 claim 内直接创建替代请求。
+
+## 51. TASK-083 Phase 5C 新日替代请求状态机
+
+```text
+Phase 5B committed old request release
+  -> Job READY + Stage READY + no lease
+  -> persistent queue scans and claims Job
+  -> exact current Stage lease acquired
+       Job RUNNING + Stage PREPARING + same-owner double lease
+  -> dedicated rollover preparation
+       revalidate latest parent Attempt/Usage/RELEASED reservation
+       revalidate exact Job+Stage tokens/current cursor/heartbeat
+       copy old protected seed into a distinct protected artifact
+       derive current policy and a different daily period
+       atomically compete for request/book/new-daily budget
+          rejected -> no new Attempt/Usage/reservation; Stage remains PREPARING
+          accepted -> new Attempt(parent+1, retryParent=old)
+                      + UNKNOWN/PROVISIONAL Usage
+                      + new RESERVED reservation
+                      + Stage REQUEST_INTENT_RECORDED
+  -> later Provider-open gate (not executed by this phase)
+```
+
+普通 prepare 不能承接 Phase 5B 父 Attempt；即使调用方传入 `retryParentAttemptId` 也必须失败，避免生成一个没有复制种子、没有双租约证据的替代请求。两个并发专用 prepare 最多一个提交；另一个因最新 Attempt/Stage 已变化而回滚并删除自己的新工件。空种子也必须分配新工件，不能把“内容为空”解释为“可以共享旧引用”。
+
+## 52. TASK-083 Phase 5D Provider-open 目的地匹配门
+
+```text
+audited executor receives immutable ProviderConnectionProfile + adapter
+  -> profile.protocol == adapter.protocol ?
+       no  -> fail before claim / artifact open / adapter call
+       yes -> derive short-lived canonical ProviderOpenDestinationEvidence
+              -> claimForProviderOpen transaction
+                   compare actual connection + origin + protocol
+                   compare current accepted disclosure
+                   compare frozen reservation disclosure/destination
+                     mismatch -> zero writes, permit remains retryable
+                     exact match -> same-day heartbeat or existing rollover branch
+              -> re-derive evidence from the same immutable profile
+                   mismatch -> fail before protected draft/provider
+                   exact match -> open protected draft -> adapter.generate
+```
+
+目的地门必须先于同日 heartbeat 和跨日 release，避免错误 profile 触发任何持久副作用。`mark sent` 与 `mark stream started` 还会重验 claimed evidence 对 reservation 的绑定；因此一次 claim 不能被换接到其他连接、origin 或 protocol。
+
+## 53. TASK-064 Phase 2E5A chapter-plan 请求准备状态门
+
+```text
+Job RUNNING + current plan Stage PREPARING
+  -> resolveCurrentStageRoute => CHAPTER_PLAN_V1 + exact Job/Stage snapshot
+  -> prepareBoundChapterPlanBeforeSend
+       re-read Job + Stage in the RequestIntent transaction
+       verify current cursor / route / exact dual lease / heartbeat / attempts
+         mismatch -> delete new protected draft; zero DB writes
+         exact match -> atomically create RESERVED reservation
+                        + INTENT_RECORDED Attempt
+                        + UNKNOWN/PROVISIONAL Usage
+                        + Stage REQUEST_INTENT_RECORDED
+  -> later Provider-open executor (not implemented by this phase)
+```
+
+普通 Stage-token prepare 对普通 plan 必须拒绝；它不能形成 reservation、Attempt 或 Usage，也不能消耗 attempt。首章 bootstrap 继续沿用其既有合同。换日替代的 bound API 复用同一 snapshot 复核，但本阶段的新增专项主要证明首次准备和通用旁路关闭。

@@ -5,6 +5,8 @@ import app.zhijuan.core.model.GenerationPhase
 import app.zhijuan.core.model.GenerationStageStatus
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotEquals
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -32,6 +34,47 @@ class ChapterTrackingProjectionJobFactoryTest {
         val entity = setup.stages.single().toEntity("job.tracking", 10L)
         assertEquals(source, ChapterTrackingProjectionJobFactory.parseAndVerify(entity))
         assertTrue(ChapterTrackingProjectionJobFactory.isBound(entity))
+        assertNull(ChapterTrackingProjectionJobFactory.parseRebuildBindingIfPresent(entity))
+    }
+
+    @Test
+    fun rebuildBindingUsesStrictV2EnvelopeAndParticipatesInTheInputHash() {
+        val source = source()
+        val binding = rebuildBinding()
+        val legacy = ChapterTrackingProjectionJobFactory.create(
+            ChapterTrackingProjectionJobSpec(
+                jobId = "job.tracking.legacy",
+                stageId = "stage.tracking.legacy",
+                bookId = "book.one",
+                userIntentJson = "{}",
+                budgetSnapshotJson = "{}",
+                source = source,
+                createdAt = 10L,
+            ),
+        ).stages.single().toEntity("job.tracking.legacy", 10L)
+        val rebuilt = ChapterTrackingProjectionJobFactory.create(
+            ChapterTrackingProjectionJobSpec(
+                jobId = "job.tracking.rebuild",
+                stageId = "stage.tracking.rebuild",
+                bookId = "book.one",
+                userIntentJson = "{}",
+                budgetSnapshotJson = "{}",
+                source = source,
+                rebuildBinding = binding,
+                createdAt = 10L,
+            ),
+        ).stages.single().toEntity("job.tracking.rebuild", 10L)
+
+        assertEquals(source, ChapterTrackingProjectionJobFactory.parseAndVerify(rebuilt))
+        assertEquals(binding, ChapterTrackingProjectionJobFactory.parseRebuildBindingIfPresent(rebuilt))
+        assertNotEquals(legacy.inputVersionHash, rebuilt.inputVersionHash)
+
+        val tampered = rebuilt.copy(
+            inputSourcesJson = rebuilt.inputSourcesJson.replace("execution.one", "execution.two"),
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            ChapterTrackingProjectionJobFactory.parseAndVerify(tampered)
+        }
     }
 
     @Test
@@ -82,6 +125,16 @@ class ChapterTrackingProjectionJobFactoryTest {
         memorySnapshotHash = HASH_B,
         priorForeshadowSnapshotHash = HASH_C,
         knownEntitySnapshotHash = HASH_D,
+    )
+
+    private fun rebuildBinding() = ChapterEditRebuildStageBindingV1(
+        executionId = "execution.one",
+        stableFenceHash = HASH_D,
+        stepOrdinal = 2,
+        stepType = app.zhijuan.core.database.library.ChapterEditRebuildExecutionStepType.TRACKING,
+        chapterIndex = 2,
+        sourceChapterVersionId = "version.one",
+        sourceContentHash = HASH_A,
     )
 
     private fun GenerationStageSetup.toEntity(jobId: String, createdAt: Long) = GenerationStageEntity(
