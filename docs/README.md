@@ -51,7 +51,7 @@
 | `28-WRITING-POLICY-PACK-SPEC.md` | 创作策略包、组合能力、叙事义务、状态变化和合并分析合同 | 产品、AI、开发、测试 |
 | `29-HANDS-ON-VERTICAL-SLICE-SPEC.md` | 第一份可亲手验证 APK 的用户流程、范围和 P0 验收 | 全员 |
 | `30-IMPLEMENTATION-BACKLOG-V2.md` | TASK-120 起的新权威任务顺序、边界、依赖和验收 | AI、开发、测试 |
-| `31-REAL-API-QUALITY-PERFORMANCE-TEST-PLAN.md` | DeepSeek V4 Flash 真实 API 的质量、速度、费用和安全测试 | AI、开发、测试 |
+| `31-REAL-API-QUALITY-PERFORMANCE-TEST-PLAN.md` | DeepSeek V4 Flash 真实 API 的小说逻辑、最高敏感度场景合同、速度、费用和安全测试；不评文笔 | AI、开发、测试 |
 | `ai/APP3-MODIFICATIONS-2026-08-11.md` | app3 精简导入、十模块整改、逐阶段验证与最终交付记录 | AI、开发、测试 |
 | `ai/CURRENT-CONTEXT.md` | 当前代码现场、下一任务和未验证风险 | AI、开发、测试 |
 | `ai/CURRENT-CONTEXT-APP2-HISTORY.md` | app2 迁移前历史上下文，仅供追溯 | AI、开发、测试 |
