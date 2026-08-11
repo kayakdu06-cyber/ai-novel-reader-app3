@@ -104,16 +104,21 @@
 
 ## 8. 备份
 
-- 备份 ZIP：`D:\gptuser\backups\ai-novel-reader-app3\2026-08-11\ai-novel-reader-app3-2026-08-11-verified.zip`（封装中）
-- SHA-256：待填写
-- 可读性/恢复校验：待执行
+- 备份 ZIP：`D:\gptuser\backups\ai-novel-reader-app3\2026-08-11\ai-novel-reader-app3-2026-08-11-verified.zip`
+- 大小：29,024,442 bytes
+- SHA-256：`7e003321a6c8c165335c813a5a88b824e0dbbc87bda6ee95986c1c72b8a9c8f3`
+- SHA-256 sidecar：同目录 `ai-novel-reader-app3-2026-08-11-verified.zip.sha256`
+- 可读性/恢复校验：通过；ZIP 可列出 1,284 个条目，已确认包含 `.git/HEAD`、本报告、Debug APK 与三份最终日志
+- 恢复基线提交：`ace038d`；其 `.git` 历史包含 Phase 0–8 全部代码和验证文档
 - 排除项：`.gradle`、`.kotlin`、所有模块 `build`、本地密钥、`local.properties`、签名文件
+
+ZIP 不能在自身内部可靠记录自己的最终 SHA-256（写入后会改变哈希），因此最终哈希保存在 ZIP 旁的 sidecar、本工作树报告和公开远端后续元数据提交中。备份内代码与 APK 已完整，备份生成后的 Git 变更仅为该哈希元数据。
 
 ## 9. Git 同步
 
 - 公开远端：`https://github.com/kayakdu06-cyber/ai-novel-reader-app3`
 - 本地 `main` 已设置跟踪 `origin/main`。
-- Phase 0–8 的逐阶段提交已推送；备份哈希元数据将在 ZIP 生成后另行提交并推送。
+- Phase 0–8 的逐阶段提交及备份哈希元数据均已推送。
 
 ## 10. 未完成风险
 

@@ -62,7 +62,9 @@ if ($actual -cne 'D:/gptuser/projects/ai-novel-reader-app3') { throw "WRONG_ROOT
 - 最终强制重跑 `assembleDebug test --rerun-tasks` 成功：361/361 tasks，JVM 130/130；源码与最终 APK 安全扫描通过。
 - 最终 APK：`app/build/outputs/apk/debug/app-debug.apk`，SHA-256 `692bb864c4aab2c83706ea322c06d142329fb14963c9a22770a054524793332b`。
 - 公开 GitHub 远端已创建并推送：`https://github.com/kayakdu06-cyber/ai-novel-reader-app3`，本地 `main` 跟踪 `origin/main`。
-- 尚需完成本轮恢复 ZIP、哈希与可读性校验；最终事实以 `APP3-MODIFICATIONS-2026-08-11.md` 更新为准。
+- 可恢复 ZIP 已完成并校验：`D:\gptuser\backups\ai-novel-reader-app3\2026-08-11\ai-novel-reader-app3-2026-08-11-verified.zip`，SHA-256 `7e003321a6c8c165335c813a5a88b824e0dbbc87bda6ee95986c1c72b8a9c8f3`。
+- ZIP 含完整 `.git` 历史、源码、验证文档、Debug APK 和三份最终日志；恢复基线为 `ace038d`。ZIP 自身哈希以 sidecar 和本工作树最终元数据提交记录。
+- Phase 0–8、最终验证、公开远端和备份交付均已完成；后续开发以 `APP3-MODIFICATIONS-2026-08-11.md` 为事实入口。
 
 ## Git 同步规则
 
