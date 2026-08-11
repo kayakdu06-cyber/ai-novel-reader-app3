@@ -2,7 +2,7 @@
 
 > 文档性质：产品架构评审提案与后续交付计划  
 > 日期：2026-08-09  
-> 项目根目录：`D:\gptuser\projects\ai-novel-reader-app2`  
+> 项目根目录：`D:\gptuser\projects\ai-novel-reader-app3`  
 > 当前状态：等待用户确认；本文档不代表相关代码已经完成
 
 ## 1. 本次评审结论

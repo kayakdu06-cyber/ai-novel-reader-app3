@@ -3,7 +3,7 @@
     {
       "slug": "deepseek-v4-flash",
       "display_name": "DeepSeek-V4-Flash",
-      "description": "DeepSeek text-only agent model isolated to app开发2.",
+      "description": "DeepSeek text-only agent model isolated to app开发3.",
       "default_reasoning_level": "max",
       "supported_reasoning_levels": [
         {

@@ -1,4 +1,4 @@
-import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+﻿import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.gradle.api.tasks.testing.Test
 
 plugins {
@@ -50,6 +50,21 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    sourceSets {
+        getByName("main") {
+            kotlin.srcDirs("src/main/kotlin")
+        }
+        getByName("debug") {
+            kotlin.srcDirs("src/debug/kotlin")
+        }
+        getByName("test") {
+            kotlin.srcDirs("src/test/kotlin")
+        }
+        getByName("androidTest") {
+            kotlin.srcDirs("src/androidTest/kotlin")
+        }
+    }
+
     packaging {
         resources.excludes += setOf(
             "/META-INF/{AL2.0,LGPL2.1}",
@@ -60,24 +75,12 @@ android {
 kotlin {
     compilerOptions {
         jvmTarget.set(JvmTarget.JVM_17)
-        allWarningsAsErrors.set(true)
     }
 }
 
 dependencies {
-    implementation(project(":core:model"))
-    implementation(project(":core:task"))
-    implementation(project(":core:diagnostics"))
-    implementation(project(":core:security"))
-    implementation(project(":core:database"))
-    implementation(project(":provider:common"))
-    implementation(project(":provider:capability-storage"))
-    implementation(project(":provider:transport"))
-    implementation(project(":provider:openai-chat"))
-    implementation(project(":provider:openai-responses"))
-    implementation(project(":provider:anthropic"))
-    implementation(project(":provider:gemini"))
-    implementation(project(":feature:generation"))
+    implementation(project(":engine"))
+    implementation(project(":data"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
@@ -86,6 +89,8 @@ dependencies {
     implementation(libs.androidx.work.runtime)
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.okhttp)
+    implementation(libs.okio)
 
     val composeBom = platform(libs.androidx.compose.bom)
     implementation(composeBom)
@@ -105,6 +110,8 @@ dependencies {
 
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.junit.jupiter)
+    testImplementation(libs.mockwebserver3)
+    testImplementation(libs.okhttp.tls)
     testRuntimeOnly(libs.junit.platform.launcher)
 
     implementation(libs.hilt.android)

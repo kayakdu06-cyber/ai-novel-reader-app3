@@ -1,6 +1,6 @@
-# app开发2 的 Codex 模型隔离
+# app开发3 的 Codex 模型隔离
 
-此目录只控制 `D:\gptuser\projects\ai-novel-reader-app2`。它不会修改用户级
+此目录只控制 `D:\gptuser\projects\ai-novel-reader-app3`。它不会修改用户级
 `C:\Users\du\.codex\config.toml`，也不会影响 APP开发1 或其他项目。
 
 - 默认模型：`deepseek-v4-flash`

@@ -137,7 +137,7 @@ function Get-LatestRunState {
 }
 
 $projectRoot = (Resolve-Path -LiteralPath (Split-Path -Parent $PSScriptRoot)).Path
-$expectedRoot = "D:\gptuser\projects\ai-novel-reader-app2"
+$expectedRoot = "D:\gptuser\projects\ai-novel-reader-app3"
 $gitRoot = (& git -C $projectRoot rev-parse --show-toplevel).Trim().Replace("/", "\")
 
 if ($projectRoot -ne $expectedRoot -or $gitRoot -ne $expectedRoot) {
@@ -150,10 +150,10 @@ if ($Prompt -and $TaskPacketPath) {
 
 $dataRoot = "D:\gptuser"
 $cacheRoot = Join-Path $dataRoot "cache"
-$codexHome = Join-Path $cacheRoot "codex\ai-novel-reader-app2"
-$tempRoot = Join-Path $cacheRoot "temp\ai-novel-reader-app2"
+$codexHome = Join-Path $cacheRoot "codex\ai-novel-reader-app3"
+$tempRoot = Join-Path $cacheRoot "temp\ai-novel-reader-app3"
 $gradleHome = Join-Path $cacheRoot "gradle"
-$logRoot = Join-Path $dataRoot "logs\ai-novel-reader-app2\deepseek"
+$logRoot = Join-Path $dataRoot "logs\ai-novel-reader-app3\deepseek"
 $sandboxMode = if ($PatchProposalOnly) { "read-only" } else { "workspace-write" }
 $additionalWritableRoots = if ($PatchProposalOnly) { @() } else { @($codexHome, $tempRoot, $gradleHome) }
 $totalTokenLimitLabel = if ($NoTotalTokenLimit) { "none" } else { [string]$MaxTotalTokens }
@@ -284,7 +284,7 @@ $resourceGuard = @"
 
 ## Mandatory resource guard
 
-- Work only inside D:\gptuser\projects\ai-novel-reader-app2. Do not access another project copy.
+- Work only inside D:\gptuser\projects\ai-novel-reader-app3. Do not access another project copy.
 - Treat this packet as the complete scope. Read only files named here or directly required by a named code reference; do not recursively scan unrelated documentation or history.
 - Do not reread the same large file, rerun a completed command, or retry a sandbox failure repeatedly.
 - Do not use network tools, inspect secrets, invoke the Zhijuan App's real generation APIs, or change formal task-completion status.
@@ -365,7 +365,7 @@ try {
         )
     }
     catch [System.IO.IOException] {
-        throw "Another bounded DeepSeek run is already active for app开发2."
+        throw "Another bounded DeepSeek run is already active for app开发3."
     }
 
     [System.IO.File]::WriteAllText($promptPath, $guardedPrompt, (New-Object System.Text.UTF8Encoding($false)))

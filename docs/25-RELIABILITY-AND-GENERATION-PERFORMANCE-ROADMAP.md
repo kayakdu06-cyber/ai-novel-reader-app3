@@ -2,7 +2,7 @@
 
 > 状态：用户已确认，执行中  
 > 规划日期：2026-08-06  
-> 适用项目：`D:\gptuser\projects\ai-novel-reader-app2`  
+> 适用项目：`D:\gptuser\projects\ai-novel-reader-app3`  
 > 本文只规定产品与开发路线，不表示对应功能已经实现。
 
 ## 1. 本次重排的结论

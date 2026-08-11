@@ -47,8 +47,10 @@
 | `24-AI-DEVELOPMENT-PROTOCOL.md` | Sol/DeepSeek 分工、启动读取顺序、交接与验收规则 | AI、开发、测试 |
 | `25-RELIABILITY-AND-GENERATION-PERFORMANCE-ROADMAP.md` | 可靠性优先、章节速度硬指标、总 runner 与后续开发顺序 | 产品、开发、测试 |
 | `26-COMPOSABLE-NOVEL-PRODUCT-AND-DELIVERY-PLAN.md` | 组合式小说能力、统一故事语义、亲手验证版本与最新工期评估 | 产品、开发、测试 |
-| `ai/HANDOFF-2026-08-11.md` | 可脱离对话使用的项目总交接、当前断点、下一步和备份恢复入口 | AI、开发、测试 |
+| `ai/APP3-MODIFICATIONS-2026-08-11.md` | app3 精简导入、十模块整改、逐阶段验证与最终交付记录 | AI、开发、测试 |
 | `ai/CURRENT-CONTEXT.md` | 当前代码现场、下一任务和未验证风险 | AI、开发、测试 |
+| `ai/CURRENT-CONTEXT-APP2-HISTORY.md` | app2 迁移前历史上下文，仅供追溯 | AI、开发、测试 |
+| `ai/HANDOFF-APP2-2026-08-11.md` | app2 迁移前总交接，仅供追溯 | AI、开发、测试 |
 | `ai/TASK-PACKET-TEMPLATE.md` | 交给文本模型的任务包模板 | AI、开发 |
 | `GLOSSARY.md` | 统一术语 | 全员 |
 

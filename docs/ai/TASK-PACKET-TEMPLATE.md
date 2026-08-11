@@ -5,7 +5,7 @@
 ## 任务身份
 
 - 任务 ID：`TASK-___ / 子任务名称`
-- 仓库根目录：`D:\gptuser\projects\ai-novel-reader-app2`
+- 仓库根目录：`D:\gptuser\projects\ai-novel-reader-app3`
 - 基准分支与 HEAD：
 - 当前未提交改动：
 - 执行模型：DeepSeek（纯文本）

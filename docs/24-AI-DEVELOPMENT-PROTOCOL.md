@@ -1,12 +1,12 @@
-# app开发2 AI 协作开发规程
+# app开发3 AI 协作开发规程
 
 > 版本：v1.2  
 > 更新日期：2026-08-09  
-> 适用范围：`D:\gptuser\projects\ai-novel-reader-app2`
+> 适用范围：`D:\gptuser\projects\ai-novel-reader-app3`
 
 ## 1. 目的
 
-本文件是 Sol 与 DeepSeek 在 app开发2 中协作的统一入口。它解决四件事：
+本文件是 Sol 与 DeepSeek 在 app开发3 中协作的统一入口。它解决四件事：
 
 1. 新任务开始时先读取哪些事实，避免只凭对话记忆开发；
 2. Sol 在交出纯文字任务前必须完成哪些前置工作；
@@ -76,7 +76,7 @@ DeepSeek 在这里是 Codex 的纯文本编码模型，不是“织卷”App 内
 | 架构取舍、跨模块状态机、数据库原子性、安全边界 | 可提出方案 | 最终决策与验收 |
 | 图片、截图、录屏、视觉比较、像素级 UI 验收 | 不可执行 | 必须执行 |
 | 真实设备操作、交互式 UI 检查、无障碍视觉验证 | 不可执行 | 必须执行 |
-| DeepSeek 作为 app开发2 编码模型的调用 | 可执行 | 已获持续授权，负责调度和审查 |
+| DeepSeek 作为 app开发3 编码模型的调用 | 可执行 | 已获持续授权，负责调度和审查 |
 | 密钥录入、密钥查看、App 内真实生成 API 或其他付费请求 | 不可执行 | 仅在用户另行明确授权后执行 |
 | 宣布任务完成、更新正式完成状态 | 不可执行 | 依据证据确认 |
 
@@ -84,7 +84,7 @@ DeepSeek 在这里是 Codex 的纯文本编码模型，不是“织卷”App 内
 
 ## 6. DeepSeek 执行规则
 
-- 只在 `D:\gptuser\projects\ai-novel-reader-app2` 内工作；不得访问或同步原项目副本。
+- 只在 `D:\gptuser\projects\ai-novel-reader-app3` 内工作；不得访问或同步原项目副本。
 - 开始前查看 `git status --short`，保留所有无关和用户已有改动。
 - 先检查已有实现和测试，再决定修改范围；不得因状态文档较旧就删除现有 WIP。
 - 只完成任务包明确授权的改动；发现需要扩展范围时停止扩展，并在回交中说明。
@@ -95,7 +95,7 @@ DeepSeek 在这里是 Codex 的纯文本编码模型，不是“织卷”App 内
 - 只能通过 `scripts/start-deepseek-codex.ps1` 启动。不得直接执行未受限的 `codex exec`。
 - 原生 Windows 必须启用 `windows.sandbox=unelevated` restricted-token 沙箱，否则当前 Codex CLI 会把 `workspace-write` 自动降级为 `read-only`。
 - 默认沙箱为仓库 `workspace-write`，额外只允许写入 app2 的 Codex 会话目录、临时目录和 `D:\gptuser\cache\gradle`；不得把整个缓存根目录开放为可写，也不得使用 `danger-full-access` 或绕过审批与沙箱的参数。
-- 同一时间只允许一个 app开发2 DeepSeek 任务运行。启动器应拒绝第二个并发任务。
+- 同一时间只允许一个 app开发3 DeepSeek 任务运行。启动器应拒绝第二个并发任务。
 - 运行日志、最终回交、会话记录、临时提示和构建缓存必须位于 `D:\gptuser`；临时提示在运行结束或中断后删除。
 - 达到运行时限或累计 Token 上限时必须终止完整子进程树并保留汇总日志，不得让孤儿进程继续消耗 API。
 - 看到首次明确的只读、权限或构建阻塞后停止重复证明；回交准确的单次证据，由 Sol 修复环境。

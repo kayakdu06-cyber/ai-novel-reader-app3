@@ -3,7 +3,7 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
-$expectedRoot = 'D:/gptuser/projects/ai-novel-reader-app2'
+$expectedRoot = 'D:/gptuser/projects/ai-novel-reader-app3'
 $actualRoot = (& git -C $projectRoot rev-parse --show-toplevel).Trim()
 if ($actualRoot -ne $expectedRoot) {
     throw "Unexpected project root: $actualRoot"
