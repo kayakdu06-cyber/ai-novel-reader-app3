@@ -57,7 +57,7 @@
 | 3 | `:feature:connection` | 迁移连接网关/持久 Repository、连接列表、连接向导与首次说明，共 5 个生产文件；模块内保留网关安全和向导 UI 测试，跨功能导航测试留在 app | 仅 `core + data + provider`；Hilt 绑定在功能模块编译；共享数据库名下沉 data | `:feature:connection:test assembleDebug test` 成功，190 tasks；JVM 123/123 | 待提交 |
 | 4 | `:feature:creation` | 迁移创建网关、模型/标准化、极简创建与费用确认，共 5 个生产文件、2 个 JVM 测试、2 个 Android UI 测试 | 仅 `core + data`；创建入口改收最小 `CreationConnectionSelection`，由 app 映射连接快照，消除 creation→connection | `:feature:creation:test assembleDebug test` 成功，231 tasks；JVM 123/123 | 待提交 |
 | 5 | `:feature:generation` | 真实移动原 `engine`，并合入前台 Service、通知、控制网关、恢复/维护 Worker；40 个生产文件、2 个 JVM 测试、4 个 Android 测试 | 仅 `core + data + provider`；服务/权限/通知资源由模块自持；打开 App 的 PendingIntent 不引用壳实现 | `:feature:generation:test assembleDebug test` 成功，239 tasks；JVM 123/123 | 待提交 |
-| 6 | 跨模块契约 | 待执行 | 契约在 core，功能模块实现 | 待执行 | 待提交 |
+| 6 | 跨模块契约 | `core.contract` 新增连接选择、生成控制、书架三类稳定 DTO/interface；连接与生成模块用 Hilt `@Binds` 绑定真实实现；新增 2 个 core 契约测试 | core 契约无 Android/Room/Provider 类型；功能实现不进入 app；Hilt 聚合编译通过 | `:core:test :feature:connection:test :feature:generation:test assembleDebug test` 成功，238 tasks；JVM 125/125 | 待提交 |
 | 7 | reader/library/template | 待执行 | template→creation 为唯一例外 | 待执行 | 待提交 |
 | 8 | app 纯壳 | 待执行 | app 组装全部 feature | 待执行 | 待提交 |
 

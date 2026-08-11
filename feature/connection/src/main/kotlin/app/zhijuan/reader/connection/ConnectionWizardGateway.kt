@@ -2,6 +2,8 @@
 
 import android.content.Context
 import app.zhijuan.core.model.StandardErrorCode
+import app.zhijuan.core.contract.CurrentConnectionGateway
+import app.zhijuan.core.contract.CurrentConnectionSelection
 import app.zhijuan.core.security.AndroidSecretStore
 import app.zhijuan.core.security.SecretPurpose
 import app.zhijuan.provider.common.ConnectionModelList
@@ -135,7 +137,7 @@ interface ConnectionGatewayActions : ConnectionWizardActions, ConnectionManageme
 @Singleton
 class ConnectionWizardGateway @Inject constructor(
     @ApplicationContext context: Context,
-) : ConnectionGatewayActions {
+) : ConnectionGatewayActions, CurrentConnectionGateway {
     private val applicationContext = context.applicationContext
     private val secretStore = AndroidSecretStore(applicationContext)
     private val pendingPreferences = applicationContext.getSharedPreferences(
@@ -149,6 +151,11 @@ class ConnectionWizardGateway @Inject constructor(
     }
     private var pending: PendingConnection? = null
     private var stalePendingChecked = false
+
+    override suspend fun currentConnection(): CurrentConnectionSelection? =
+        listConnections().firstOrNull { it.isCurrent }?.let {
+            CurrentConnectionSelection(it.connectionId, it.selectedModelId)
+        }
 
     private fun createVerifier(): ProviderConnectionVerifier {
         val capabilityRegistry = ProviderCapabilityRegistry(

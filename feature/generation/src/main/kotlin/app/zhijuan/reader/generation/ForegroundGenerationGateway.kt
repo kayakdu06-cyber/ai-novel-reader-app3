@@ -6,6 +6,8 @@ import app.zhijuan.core.database.generation.GenerationControlRepository
 import app.zhijuan.core.database.generation.GenerationControlResult
 import app.zhijuan.core.database.generation.GenerationStateRepository
 import app.zhijuan.core.database.ZHIJUAN_DATABASE_NAME
+import app.zhijuan.core.contract.GenerationController
+import app.zhijuan.core.model.GenerationJobStatus
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -13,7 +15,7 @@ import javax.inject.Singleton
 @Singleton
 internal class ForegroundGenerationGateway @Inject constructor(
     @ApplicationContext context: Context,
-) : ForegroundGenerationControlPort {
+) : ForegroundGenerationControlPort, GenerationController {
     private val applicationContext = context.applicationContext
     private val databaseHandle by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         EncryptedZhijuanDatabaseFactory(applicationContext).open(ZHIJUAN_DATABASE_NAME)
@@ -53,6 +55,19 @@ internal class ForegroundGenerationGateway @Inject constructor(
         jobId = jobId,
         requestedAt = monotonicControlTime(jobId, requestedAt),
     )
+
+    override suspend fun findGenerationStatus(jobId: String): GenerationJobStatus? =
+        findJob(jobId)?.status
+
+    override suspend fun pauseGeneration(
+        jobId: String,
+        requestedAt: Long,
+    ): GenerationJobStatus = requestUserPause(jobId, requestedAt).jobStatus
+
+    override suspend fun stopGeneration(
+        jobId: String,
+        requestedAt: Long,
+    ): GenerationJobStatus = requestStop(jobId, requestedAt).jobStatus
 
     private suspend fun monotonicControlTime(jobId: String, requestedAt: Long): Long =
         maxOf(requestedAt, requireNotNull(stateRepository.findJob(jobId)).updatedAt)
