@@ -80,7 +80,7 @@ kotlin {
 
 dependencies {
     implementation(project(":core"))
-    implementation(project(":engine"))
+    implementation(project(":feature:generation"))
     implementation(project(":data"))
     implementation(project(":provider"))
     implementation(project(":feature:connection"))

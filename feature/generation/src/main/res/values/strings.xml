@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="generation_notification_channel">小说生成</string>
+    <string name="generation_notification_channel_description">显示正在进行的小说生成，并提供暂停和停止操作。</string>
+    <string name="generation_notification_title">织卷正在创作</string>
+    <string name="generation_notification_preparing">正在准备下一段内容</string>
+    <string name="generation_notification_running">正在生成，完成的章节可以先阅读</string>
+    <string name="generation_notification_pausing">正在保存进度并暂停</string>
+    <string name="generation_notification_stopping">正在保存进度并停止</string>
+    <string name="generation_notification_pause">暂停</string>
+    <string name="generation_notification_stop">停止</string>
+</resources>

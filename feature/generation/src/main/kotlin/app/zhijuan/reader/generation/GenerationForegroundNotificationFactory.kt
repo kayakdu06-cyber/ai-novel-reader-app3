@@ -7,8 +7,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import app.zhijuan.core.model.GenerationJobStatus
-import app.zhijuan.reader.MainActivity
-import app.zhijuan.reader.R
+import app.zhijuan.feature.generation.R
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -77,7 +76,8 @@ internal class GenerationForegroundNotificationFactory @Inject constructor(
     private fun openAppIntent(): PendingIntent = PendingIntent.getActivity(
         context,
         OPEN_APP_REQUEST_CODE,
-        Intent(context, MainActivity::class.java).apply {
+        (context.packageManager.getLaunchIntentForPackage(context.packageName)
+            ?: Intent(Intent.ACTION_MAIN).setPackage(context.packageName)).apply {
             flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
         },
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,

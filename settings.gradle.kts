@@ -17,9 +17,9 @@ dependencyResolutionManagement {
 rootProject.name = "Zhijuan"
 
 include(":app")
-include(":engine")
 include(":data")
 include(":core")
 include(":provider")
 include(":feature:connection")
 include(":feature:creation")
+include(":feature:generation")

@@ -59,7 +59,7 @@ internal class GenerationRecoveryMaintenanceWorker(
     }
 }
 
-internal object GenerationMaintenanceScheduler {
+object GenerationMaintenanceScheduler {
     internal const val STARTUP_WORK_NAME = "zhijuan-generation-recovery-startup-v1"
     internal const val PERIODIC_WORK_NAME = "zhijuan-generation-maintenance-periodic-v1"
     private const val WORK_TAG = "zhijuan-generation-maintenance"

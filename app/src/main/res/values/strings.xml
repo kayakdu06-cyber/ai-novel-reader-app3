@@ -13,13 +13,4 @@
     <string name="first_launch_secret_body">API 密钥由 Android 安全存储保管，不进入小说、模板、诊断日志或项目备份。系统自动备份已经关闭。</string>
     <string name="first_launch_continue">继续设置</string>
     <string name="first_launch_next_hint">下一步只需选择服务并粘贴密钥，织卷会自动测试。</string>
-    <string name="generation_notification_channel">小说生成</string>
-    <string name="generation_notification_channel_description">显示正在进行的小说生成，并提供暂停和停止操作。</string>
-    <string name="generation_notification_title">织卷正在创作</string>
-    <string name="generation_notification_preparing">正在准备下一段内容</string>
-    <string name="generation_notification_running">正在生成，完成的章节可以先阅读</string>
-    <string name="generation_notification_pausing">正在保存进度并暂停</string>
-    <string name="generation_notification_stopping">正在保存进度并停止</string>
-    <string name="generation_notification_pause">暂停</string>
-    <string name="generation_notification_stop">停止</string>
 </resources>

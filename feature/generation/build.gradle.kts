@@ -1,9 +1,11 @@
 ﻿plugins {
     alias(libs.plugins.android.library)
+    alias(libs.plugins.ksp)
+    alias(libs.plugins.hilt)
 }
 
 android {
-    namespace = "app.zhijuan.engine"
+    namespace = "app.zhijuan.feature.generation"
     compileSdk = 36
 
     defaultConfig {
@@ -26,9 +28,13 @@ dependencies {
     implementation(project(":core"))
     implementation(project(":data"))
     implementation(project(":provider"))
+    implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.work.runtime)
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.hilt.android)
+    ksp(libs.hilt.compiler)
 
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.junit.jupiter)
@@ -39,6 +45,7 @@ dependencies {
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.junit)
     androidTestImplementation(libs.kotlinx.coroutines.core)
+    androidTestImplementation(libs.androidx.work.testing)
 }
 
 tasks.withType<Test>().configureEach {
