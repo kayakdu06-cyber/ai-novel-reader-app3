@@ -19,3 +19,4 @@ rootProject.name = "Zhijuan"
 include(":app")
 include(":engine")
 include(":data")
+include(":core")

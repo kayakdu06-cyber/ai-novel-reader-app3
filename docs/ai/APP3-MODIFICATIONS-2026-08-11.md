@@ -52,7 +52,7 @@
 | Phase | 目标 | 迁移/实现 | 依赖边界 | 验证 | Git |
 |---|---|---|---|---|---|
 | 0 | 导入精简包和独立绑定 | 保留 app2 Git 历史，导入 ZIP；恢复 8 个被误删但仍被生产代码引用的 Repository/Codec；补 JVM HTTP 测试依赖；把已不存在的协议枚举用例改为模型错配/非流式拒绝 | app3 与 app2 隔离；仍为原始 `app/engine/data` 依赖 | `assembleDebug test` 成功，116 tasks；JVM 123/123 | 待提交 |
-| 1 | `:core` | 待执行 | 无 Android、无项目依赖 | 待执行 | 待提交 |
+| 1 | `:core` | 从 `data` 实体迁移 13 个 model 与 13 个 task/状态机文件；新增纯 Kotlin/JVM 17 模块 | 无 Android import、无项目依赖；app/data/engine 显式依赖 core | `:core:test assembleDebug test` 成功，118 tasks；JVM 123/123 | 待提交 |
 | 2 | `:provider` | 待执行 | 仅 `core + data` | 待执行 | 待提交 |
 | 3 | `:feature:connection` | 待执行 | `core + data + provider` | 待执行 | 待提交 |
 | 4 | `:feature:creation` | 待执行 | `core + data` | 待执行 | 待提交 |

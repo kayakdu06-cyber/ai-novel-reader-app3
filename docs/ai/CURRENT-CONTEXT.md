@@ -49,7 +49,9 @@ if ($actual -cne 'D:/gptuser/projects/ai-novel-reader-app3') { throw "WRONG_ROOT
 - app3 独立 Git 根目录已创建，app2 remote 已移除。
 - 精简包 CHANGELOG 已审查：Step 5 没有删除安全层；Step 6 声称删除七个未引用文件，后续以实际编译和引用审计为准。
 - app2 的旧上下文和交接已分别归档为 `CURRENT-CONTEXT-APP2-HISTORY.md`、`HANDOFF-APP2-2026-08-11.md`，只能作为历史，不是 app3 操作指令。
-- Phase 0 已完成：修复精简包遗漏后，三模块基线 `assembleDebug test` 成功，JVM 123/123。Phase 1–8 尚未完成；最终事实以 `APP3-MODIFICATIONS-2026-08-11.md` 更新为准。
+- Phase 0 已完成：修复精简包遗漏后，三模块基线 `assembleDebug test` 成功，JVM 123/123。
+- Phase 1 已完成：`:core` 是无 Android/无项目依赖的纯 Kotlin 模块，model 与 task/状态机不再编译在 `:data` 内。
+- Phase 2–8 尚未完成；最终事实以 `APP3-MODIFICATIONS-2026-08-11.md` 更新为准。
 
 ## Git 同步规则
 

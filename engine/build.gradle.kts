@@ -23,6 +23,7 @@ android {
 }
 
 dependencies {
+    implementation(project(":core"))
     implementation(project(":data"))
     implementation(libs.androidx.room.runtime)
     implementation(libs.kotlinx.coroutines.core)
