@@ -84,6 +84,7 @@ dependencies {
     implementation(project(":data"))
     implementation(project(":provider"))
     implementation(project(":feature:connection"))
+    implementation(project(":feature:creation"))
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)

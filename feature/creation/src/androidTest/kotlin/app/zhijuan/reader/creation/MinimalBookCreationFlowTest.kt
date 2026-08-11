@@ -28,6 +28,9 @@ import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.unit.dp
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.zhijuan.core.model.BookLengthMode
@@ -35,7 +38,6 @@ import app.zhijuan.core.model.BookPresentationPreset
 import app.zhijuan.core.model.ContentPresentationMappingV1
 import app.zhijuan.core.model.FadePolicy
 import app.zhijuan.reader.ui.creation.MinimalBookCreationScreen
-import app.zhijuan.reader.ui.theme.ZhijuanTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Rule
@@ -219,7 +221,7 @@ class MinimalBookCreationFlowTest {
     fun draftStateSurvivesActivityRecreation() {
         val restorationTester = StateRestorationTester(composeRule)
         restorationTester.setContent {
-            ZhijuanTheme(darkTheme = false) {
+            MaterialTheme(colorScheme = lightColorScheme()) {
                 MinimalBookCreationScreen(
                     connectionName = "DeepSeek 写作",
                     modelName = "deepseek-chat",
@@ -332,7 +334,7 @@ class MinimalBookCreationFlowTest {
         onStartBook: (MinimalBookDraft) -> Unit = {},
     ) {
         composeRule.setContent {
-            ZhijuanTheme(darkTheme = darkTheme) {
+            MaterialTheme(colorScheme = if (darkTheme) darkColorScheme() else lightColorScheme()) {
                 MinimalBookCreationScreen(
                     connectionName = "DeepSeek 写作",
                     modelName = "deepseek-chat",

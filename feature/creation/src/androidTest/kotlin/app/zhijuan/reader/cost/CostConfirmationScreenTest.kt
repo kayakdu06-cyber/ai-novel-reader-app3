@@ -24,6 +24,9 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.unit.dp
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.zhijuan.core.model.BookLengthMode
@@ -31,7 +34,6 @@ import app.zhijuan.reader.creation.BookCreationConfirmation
 import app.zhijuan.reader.ui.cost.CostConfirmationScreen
 import app.zhijuan.reader.ui.cost.CostEstimateState
 import app.zhijuan.reader.ui.cost.UsageConfirmationRequest
-import app.zhijuan.reader.ui.theme.ZhijuanTheme
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Rule
@@ -63,7 +65,7 @@ class CostConfirmationScreenTest {
         var captured: UsageConfirmationRequest? = null
         var message by mutableStateOf<String?>(null)
         composeRule.setContent {
-            ZhijuanTheme(darkTheme = false) {
+            MaterialTheme(colorScheme = lightColorScheme()) {
                 CostConfirmationScreen(
                     confirmation = confirmation(),
                     onBack = {},
@@ -108,7 +110,7 @@ class CostConfirmationScreenTest {
     @Test
     fun narrowViewportAndDarkThemeCanReachPrimaryAction() {
         composeRule.setContent {
-            ZhijuanTheme(darkTheme = true) {
+            MaterialTheme(colorScheme = darkColorScheme()) {
                 Box(Modifier.requiredSize(width = 375.dp, height = 480.dp)) {
                     CostConfirmationScreen(
                         confirmation = confirmation(),
@@ -127,7 +129,7 @@ class CostConfirmationScreenTest {
 
     private fun showScreen(onBack: () -> Unit = {}) {
         composeRule.setContent {
-            ZhijuanTheme(darkTheme = false) {
+            MaterialTheme(colorScheme = lightColorScheme()) {
                 CostConfirmationScreen(
                     confirmation = confirmation(),
                     onBack = onBack,

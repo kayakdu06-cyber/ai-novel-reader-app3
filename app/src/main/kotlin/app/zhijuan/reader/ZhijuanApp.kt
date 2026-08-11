@@ -17,6 +17,7 @@ import androidx.compose.ui.Modifier
 import app.zhijuan.reader.connection.SavedConnectionSnapshot
 import app.zhijuan.reader.creation.MinimalBookDraft
 import app.zhijuan.reader.creation.BookCreationActions
+import app.zhijuan.reader.creation.CreationConnectionSelection
 import app.zhijuan.reader.creation.BookCreationConfirmation
 import app.zhijuan.reader.creation.BookCreationResult
 import app.zhijuan.reader.connection.ConnectionGatewayActions
@@ -164,7 +165,13 @@ fun ZhijuanApp(
                         } else if (!creationInProgress) {
                             creationInProgress = true
                             coroutineScope.launch {
-                                val result = actions.create(draft, connection)
+                                val result = actions.create(
+                                    draft,
+                                    CreationConnectionSelection(
+                                        connectionId = connection.connectionId,
+                                        modelId = connection.selectedModelId,
+                                    ),
+                                )
                                 when (result) {
                                     is BookCreationResult.Created -> {
                                         pendingBookId = result.bookId

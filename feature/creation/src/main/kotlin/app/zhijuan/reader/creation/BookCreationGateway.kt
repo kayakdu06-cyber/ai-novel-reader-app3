@@ -7,7 +7,6 @@ import app.zhijuan.core.database.library.BookCreationSnapshotEntity
 import app.zhijuan.core.database.library.BookEntity
 import app.zhijuan.core.database.library.StoredBookCreationSummary
 import app.zhijuan.core.model.BookLengthMode
-import app.zhijuan.reader.connection.SavedConnectionSnapshot
 import app.zhijuan.core.database.ZHIJUAN_DATABASE_NAME
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.util.UUID
@@ -40,7 +39,7 @@ sealed interface BookCreationResult {
 interface BookCreationActions {
     suspend fun create(
         draft: MinimalBookDraft,
-        connection: SavedConnectionSnapshot,
+        connection: CreationConnectionSelection,
     ): BookCreationResult
 
     suspend fun loadConfirmation(bookId: String): BookCreationConfirmation?
@@ -60,15 +59,12 @@ class BookCreationGateway @Inject constructor(
 
     override suspend fun create(
         draft: MinimalBookDraft,
-        connection: SavedConnectionSnapshot,
+        connection: CreationConnectionSelection,
     ): BookCreationResult = try {
         val now = System.currentTimeMillis()
         val prepared = CreationStandardizerV1.prepare(
             draft = draft,
-            connection = CreationConnectionSelection(
-                connectionId = connection.connectionId,
-                modelId = connection.selectedModelId,
-            ),
+            connection = connection,
             snapshotId = UUID.randomUUID().toString(),
             bookId = UUID.randomUUID().toString(),
             createdAt = now,

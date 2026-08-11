@@ -162,7 +162,7 @@ class BookCreationAppFlowTest {
 
         override suspend fun create(
             draft: MinimalBookDraft,
-            connection: SavedConnectionSnapshot,
+            connection: CreationConnectionSelection,
         ): BookCreationResult {
             callCount += 1
             lastDraft = draft
