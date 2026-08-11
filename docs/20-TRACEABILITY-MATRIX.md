@@ -815,3 +815,18 @@
 - 工件边界：公开streaming负例证明被拒绝的新加密草稿已删除；正例证明成功Attempt唯一引用bound工件。
 - 证据：双API reservation各47/47、数据库各276/276、generation各48/48；801-task统一离线门禁、Release/R8、安全扫描和备份排除通过。
 - 未完成：request factory、权威expectation冻结、Fake streaming、严格响应提交、initial DRAFT与registry仍属后续Phase 2E5。
+
+## 58. 2026-08-11 开发路线重排追踪
+
+| 新需求/风险 | 设计与任务 | 验证 |
+|---|---|---|
+| 现有底层多但用户无法开始生成 | 27 号总规划；TASK-128 total runner；TASK-130 启动入口 | VS-TEST-001、003、004 |
+| 固定分类不能支持混合小说 | 28 号 BookCapabilityManifest、ChapterCapabilityActivation；TASK-122 | 组合能力本地矩阵、VS-B |
+| 不写系统类时仍携带系统负担 | 未激活能力零 Prompt/状态；TASK-121/122 | promptSelectivity=0、确定性编译测试 |
+| 关键剧情、关系、道具或升级丢失 | NarrativeObligation、StoryStateDelta；TASK-123/127 | VS-TEST-005、R4/R5 |
+| 每章多个分析调用导致十分钟一章 | chapter-post-analysis.v1；DEC-079；TASK-127 | remoteCallsPerChapter、R3/R5 时序 |
+| 全书骨架过大导致模型难产 | arc-window v2 只规划 1–8 章并滚动补窗；TASK-124 | 80/300/10,000 章目标不产生全书逐章请求 |
+| 第三方 skill 直接进入 App 的安全与维护风险 | WritingPolicyPack；DEC-077；TASK-121 | 来源/许可证、未知 pack 失败、无脚本执行 |
+| 真实 API 拖到最后才暴露问题 | 31 号分级 R0～R5；TASK-132/133 | DeepSeek V4 Flash 脱敏报告 |
+| 代码存在但书架/阅读/模板无生产调用 | TASK-131、134 | VS-TEST-008、模板三步重开验收 |
+| 旧计划与新顺序冲突 | 27/30 号文档权威；DEC-076 | CURRENT-CONTEXT、README、Git 提交 |

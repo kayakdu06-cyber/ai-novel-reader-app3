@@ -3,6 +3,21 @@
 > 更新时间：2026-08-11
 > 唯一项目根目录：`D:\gptuser\projects\ai-novel-reader-app3`
 
+## 2026-08-11 开发路线重排
+
+- 当前权威总规划：`docs/27-DEVELOPMENT-MASTER-PLAN-V3.md`。
+- 创作策略与组合能力：`docs/28-WRITING-POLICY-PACK-SPEC.md`。
+- 第一份可亲手验证 APK：`docs/29-HANDS-ON-VERTICAL-SLICE-SPEC.md`。
+- 当前权威任务顺序：`docs/30-IMPLEMENTATION-BACKLOG-V2.md`。
+- 真实 API 测试：`docs/31-REAL-API-QUALITY-PERFORMANCE-TEST-PLAN.md`。
+- `docs/25-*`、`docs/26-*` 和旧 TASK-064 任务包保留为历史输入，不再单独决定下一步。
+- TASK-064 已有 plan、预算、目的地、route 和 exact-token WIP 必须复用；剩余收口分配到 TASK-125～128，禁止从零重写。
+- 唯一下一任务是 TASK-121：WritingPolicyPack 领域合同、来源记录、片段目录和纯本地编译器骨架。
+- 外部小说写作 skill 只能经过提炼后成为不可执行、可版本化的内置创作策略包；App 首版不安装或执行任意第三方 skill。
+- 在 TASK-129 Fake 3–5 章、TASK-130 启动接线、TASK-131 最小书架/阅读器通过前，不调用 App 内真实 Provider。
+- TASK-132 起按 31 号文档使用 DeepSeek V4 Flash 进行真实合同、质量和速度测试。
+- 当前工作树还有用户/其他工具产生的 `AGENTS.md`、`.claude/`、`CLAUDE.md` 变化；后续提交不得误纳入或覆盖，除非用户另行明确要求。
+
 ## 当前任务
 
 - 以 app开发2 提交 `89ec64da146b27d6186ef71c32c5b1a565e2f52c` 为 Git 历史基线。

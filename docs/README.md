@@ -3,7 +3,7 @@
 > 产品名：织卷  
 > 产品形态：仅供本人使用的本地优先 Android AI 小说生成与阅读 App  
 > 文档基线：v1.0，2026-08-01  
-> 状态：实现中；TASK-064 Phase 2E5A 代码完成、Phase 2E5B 设计冻结，下一步先完成组合式能力合同
+> 状态：实现中；开发路线已重排，当前唯一下一任务为 TASK-121 创作策略包基础
 
 ## 1. 这套文档怎么用
 
@@ -45,8 +45,13 @@
 | `22-WORK-STATUS.md` | 当前里程碑和任务完成状态 | 全员 |
 | `23-CREATIVE-CONSTITUTION-REVIEW.md` | 创作宪法比较、取舍和后续提示体系基线 | 产品、AI、开发、测试 |
 | `24-AI-DEVELOPMENT-PROTOCOL.md` | Sol/DeepSeek 分工、启动读取顺序、交接与验收规则 | AI、开发、测试 |
-| `25-RELIABILITY-AND-GENERATION-PERFORMANCE-ROADMAP.md` | 可靠性优先、章节速度硬指标、总 runner 与后续开发顺序 | 产品、开发、测试 |
-| `26-COMPOSABLE-NOVEL-PRODUCT-AND-DELIVERY-PLAN.md` | 组合式小说能力、统一故事语义、亲手验证版本与最新工期评估 | 产品、开发、测试 |
+| `25-RELIABILITY-AND-GENERATION-PERFORMANCE-ROADMAP.md` | 可靠性与速度规划的历史输入；开发顺序已由 27 号文档接管 | 产品、开发、测试 |
+| `26-COMPOSABLE-NOVEL-PRODUCT-AND-DELIVERY-PLAN.md` | 组合式小说规划的历史输入；开发顺序已由 27/30 号文档接管 | 产品、开发、测试 |
+| `27-DEVELOPMENT-MASTER-PLAN-V3.md` | 当前权威产品范围、现状裁决、开发阶段、速度闸门和工期 | 全员 |
+| `28-WRITING-POLICY-PACK-SPEC.md` | 创作策略包、组合能力、叙事义务、状态变化和合并分析合同 | 产品、AI、开发、测试 |
+| `29-HANDS-ON-VERTICAL-SLICE-SPEC.md` | 第一份可亲手验证 APK 的用户流程、范围和 P0 验收 | 全员 |
+| `30-IMPLEMENTATION-BACKLOG-V2.md` | TASK-120 起的新权威任务顺序、边界、依赖和验收 | AI、开发、测试 |
+| `31-REAL-API-QUALITY-PERFORMANCE-TEST-PLAN.md` | DeepSeek V4 Flash 真实 API 的质量、速度、费用和安全测试 | AI、开发、测试 |
 | `ai/APP3-MODIFICATIONS-2026-08-11.md` | app3 精简导入、十模块整改、逐阶段验证与最终交付记录 | AI、开发、测试 |
 | `ai/CURRENT-CONTEXT.md` | 当前代码现场、下一任务和未验证风险 | AI、开发、测试 |
 | `ai/CURRENT-CONTEXT-APP2-HISTORY.md` | app2 迁移前历史上下文，仅供追溯 | AI、开发、测试 |
