@@ -3,12 +3,14 @@ package app.zhijuan.core.database.generation
 import androidx.room.withTransaction
 import app.zhijuan.core.database.ZhijuanDatabase
 import app.zhijuan.core.model.GenerationJobStatus
+import app.zhijuan.core.model.GenerationJobType
 import app.zhijuan.core.model.GenerationPhase
 import app.zhijuan.core.model.GenerationStageStatus
 import app.zhijuan.core.model.RequestAttemptStatus
 import app.zhijuan.core.security.AndroidProtectedArtifactStore
 import app.zhijuan.core.security.ProtectedArtifactType
 import app.zhijuan.core.task.BoundPromptBundle
+import app.zhijuan.core.task.PromptBundleCatalogV1
 import java.security.MessageDigest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -50,8 +52,10 @@ class InitialPlanningPromptSourcesRepository(
             val jobHeartbeat = requireNotNull(job.leaseHeartbeatAt) { "Initial planning Job heartbeat is missing." }
             val stageHeartbeat = requireNotNull(stage.leaseHeartbeatAt) { "Initial planning Stage heartbeat is missing." }
             if (
+                job.jobType != GenerationJobType.CREATE_BOOK || job.promptBundleVersion != PromptBundleCatalogV1.BUNDLE_VERSION ||
                 job.status != GenerationJobStatus.RUNNING || stage.status != GenerationStageStatus.PREPARING ||
-                job.currentStageId != stage.stageId || stage.jobId != job.jobId || job.pauseOrStopReason != null ||
+                job.currentStageId != stage.stageId || stage.jobId != job.jobId || stage.targetId != job.bookId ||
+                job.pauseOrStopReason != null ||
                 job.leaseTokenOrNull() != lease.jobLeaseToken || stage.leaseTokenOrNull() != lease.stageLeaseToken ||
                 jobHeartbeat < lease.jobHeartbeatAt || stageHeartbeat < lease.stageHeartbeatAt ||
                 stage.attemptCount != snapshot.attemptCount || stage.maxAttempts != snapshot.maxAttempts ||
@@ -66,15 +70,32 @@ class InitialPlanningPromptSourcesRepository(
             }
             val frozen = InitialPlanningJobFactory.parseAndVerify(stage)
             val bundle = PromptBundleBindingRepository(database).bindForBook(job.bookId)
-            require(bundle.bindingHash == frozen.promptBundleBindingHash) {
+            require(
+                bundle.bindingHash == frozen.promptBundleBindingHash &&
+                    bundle.sourceContentHash == frozen.creationSnapshotHash,
+            ) {
                 "Initial planning Prompt Bundle binding changed."
             }
             val stages = dao.stagesForJob(job.jobId)
+            val expectedDependencyPhase = when (stage.phase) {
+                GenerationPhase.BUILD_STORY_SEED -> null
+                GenerationPhase.BUILD_BIBLE -> GenerationPhase.BUILD_STORY_SEED
+                GenerationPhase.BUILD_MASTER_OUTLINE -> GenerationPhase.BUILD_BIBLE
+                else -> error("Initial planning phase is unsupported.")
+            }
+            require(
+                (expectedDependencyPhase == null && frozen.dependencyStageIds.isEmpty()) ||
+                    (expectedDependencyPhase != null && frozen.dependencyStageIds.size == 1),
+            ) { "Initial planning dependency shape changed." }
             val predecessor = frozen.dependencyStageIds.singleOrNull()?.let { dependencyId ->
                 val dependency = requireNotNull(stages.singleOrNull { it.stageId == dependencyId }) {
                     "Initial planning predecessor Stage is missing."
                 }
-                require(dependency.status == GenerationStageStatus.SUCCEEDED) {
+                require(
+                    dependency.phase == expectedDependencyPhase &&
+                        dependency.targetId == job.bookId &&
+                        dependency.status == GenerationStageStatus.SUCCEEDED,
+                ) {
                     "Initial planning predecessor has not succeeded."
                 }
                 val reference = parseOutputReference(requireNotNull(dependency.outputReferenceJson))

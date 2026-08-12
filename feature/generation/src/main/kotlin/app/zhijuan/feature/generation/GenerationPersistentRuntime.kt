@@ -17,9 +17,11 @@ import app.zhijuan.core.database.generation.GenerationRunnerStageRoute
 import app.zhijuan.core.database.generation.GenerationStateRepository
 import app.zhijuan.core.database.generation.GenerationStreamingDraftRepository
 import app.zhijuan.core.database.generation.InitialChapterDraftPromptSourcesRepository
+import app.zhijuan.core.database.generation.InitialPlanningCommitRepository
+import app.zhijuan.core.database.generation.InitialPlanningPromptSourcesRepository
 import app.zhijuan.core.security.AndroidProtectedArtifactStore
 
-/** The only assembled runtime allowed to execute the five TASK-128 routes. */
+/** The only assembled runtime allowed to execute the finite registered routes. */
 class GenerationPersistentRuntimeV1 internal constructor(
     val runner: GenerationTotalRunnerPort,
     val registeredRoutes: Set<GenerationRunnerStageRoute>,
@@ -105,6 +107,17 @@ object GenerationPersistentRuntimeFactoryV1 {
             finalCommitRepository = ChapterFinalCandidateCommitRepositoryV1(database, artifactStore),
         )
         val registry = GenerationRunnerExecutorRegistryV1(
+            initialPlanningExecutor = PersistentInitialPlanningBoundExecutorV1(
+                sources = InitialPlanningBoundSourceLoader.from(
+                    InitialPlanningPromptSourcesRepository(database, artifactStore),
+                ),
+                remote = remote,
+                requests = requests,
+                executor = audited,
+                validation = validation,
+                commits = InitialPlanningCommitRepository(database, artifactStore),
+                clock = clock,
+            ),
             finalCommitExecutor = ChapterFinalCandidateCommitStageExecutorV1(
                 generationStateRepository = states,
                 finalCommitCoordinator = finalCommitCoordinator,

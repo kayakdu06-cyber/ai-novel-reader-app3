@@ -10,6 +10,9 @@ class GenerationRunnerExecutorRegistryTest {
     fun `finite registration contains v2 plan and refuses every unfinished route`() {
         val policy = GenerationRunnerExecutorRegistryPolicyV1
         val expected = setOf(
+            GenerationRunnerStageRoute.INITIAL_STORY_SEED_V1,
+            GenerationRunnerStageRoute.INITIAL_STORY_BIBLE_V1,
+            GenerationRunnerStageRoute.INITIAL_MASTER_OUTLINE_V1,
             GenerationRunnerStageRoute.FINAL_CHAPTER_COMMIT_V3,
             GenerationRunnerStageRoute.CHAPTER_CONTEXT_ASSEMBLY_V1,
             GenerationRunnerStageRoute.CHAPTER_PLAN_V2,
