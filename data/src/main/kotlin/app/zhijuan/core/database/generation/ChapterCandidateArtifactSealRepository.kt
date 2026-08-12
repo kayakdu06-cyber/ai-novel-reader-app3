@@ -486,6 +486,7 @@ class ChapterCandidateArtifactSealRepositoryV1(
                 chapterId = draft.chapterId,
                 chapterIndex = draft.chapterIndex,
                 revisionIndex = draft.revisionIndex,
+                routeBindingHash = draft.routeBindingHash,
             )
 
             if (stage.status == GenerationStageStatus.SUCCEEDED) {
@@ -618,6 +619,7 @@ class ChapterCandidateArtifactSealRepositoryV1(
                 chapterId = draft.chapterId,
                 chapterIndex = draft.chapterIndex,
                 revisionIndex = draft.revisionIndex,
+                routeBindingHash = draft.routeBindingHash,
             )
 
             if (stage.status == GenerationStageStatus.NEEDS_ACTION) {
@@ -794,6 +796,7 @@ class ChapterCandidateArtifactSealRepositoryV1(
         chapterId: String,
         chapterIndex: Int,
         revisionIndex: Int,
+        routeBindingHash: String?,
     ) {
         if (role == ChapterCandidateArtifactRoleV1.BODY) {
             if (stage.phase == GenerationPhase.DRAFT_CHAPTER) {
@@ -817,7 +820,9 @@ class ChapterCandidateArtifactSealRepositoryV1(
                     source.candidateContentHash != candidateContentHash &&
                     source.chapterId == chapterId && source.chapterIndex == chapterIndex &&
                     source.revisionIndex + 1 == revisionIndex &&
-                    source.routeBindingHash != null && source.requestSourceBindingHash != null,
+                    source.routeBindingHash != null &&
+                    source.routeBindingHash == routeBindingHash &&
+                    source.requestSourceBindingHash != null,
             ) { "Revised body output does not form a new candidate from its frozen source." }
             return
         }
@@ -827,7 +832,7 @@ class ChapterCandidateArtifactSealRepositoryV1(
                 source.candidateChapterVersionId == candidateChapterVersionId &&
                 source.candidateContentHash == candidateContentHash &&
                 source.chapterId == chapterId && source.chapterIndex == chapterIndex &&
-                source.revisionIndex == revisionIndex,
+                source.revisionIndex == revisionIndex && source.routeBindingHash == routeBindingHash,
         ) { "Candidate output no longer matches the frozen current-Stage source." }
     }
 
