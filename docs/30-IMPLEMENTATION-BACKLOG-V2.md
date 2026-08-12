@@ -65,6 +65,8 @@ TASK-121～133 按精简后范围约 82–132 个有效工程小时。估算不�
 
 ### TASK-121 WritingPolicyPack 基础
 
+状态：完成（2026-08-12，`:core` 合同、规范哈希、PromptBundle v1 绑定和 4 项离线测试通过）。
+
 模块锁：只允许 `:core`。如果实现需要 `:data`、`:provider`、任何 feature 或 `:app`，说明任务边界设计错误，停止而不是扩展。
 
 只做：
@@ -410,7 +412,7 @@ TASK-138 默认不启动。只有以下任一证据存在才立项：
 
 ## 10. 下一任务唯一入口
 
-TASK-120 提交后，下一任务必须是 TASK-121。
+TASK-121 完成后，下一任务必须是 TASK-122。
 
 不得直接跳回：
 
@@ -420,4 +422,4 @@ TASK-120 提交后，下一任务必须是 TASK-121。
 - 80 章真实长跑；
 - 任意第三方 skill 安装。
 
-TASK-121 只允许修改 `:core`，完成其相关纯 Kotlin 测试和编译后才进入 TASK-122；不得借此启动 data、UI、Provider 或新模块开发。
+TASK-122 只允许修改 `:feature:generation`，消费 TASK-121 的 `:core` 合同且不得反向修改 `:core`；不得借此启动 data、UI、Provider 或新模块开发。
