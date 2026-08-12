@@ -1,5 +1,7 @@
 # TASK-128 任务包：单章 persistent total runner
 
+> 状态：已完成（2026-08-13）。实现与验证证据见 `WORK-REPORT-2026-08-13-TASK-128.md`。
+
 ## 任务身份
 
 - 任务 ID：TASK-128
@@ -24,7 +26,7 @@
 
 主模块：`:feature:generation`。
 
-允许的必要修复：`:data` 仅恢复被 slim 删除、但 DAO 和已确认架构仍引用的持久队列仓库；不得新增表、migration 或第二游标。
+允许的必要修复：`:data` 仅恢复被 slim 删除、但 DAO 和已确认架构仍引用的持久队列仓库，以及专项闭环发现的候选谱系/route 身份严重阻断；不得新增表、migration 或第二游标。
 
 禁止修改：`:core`、`:provider`、其他 feature、`:app`、UI、真实连接和 API 密钥。
 

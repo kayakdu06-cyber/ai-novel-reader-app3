@@ -261,6 +261,8 @@ TASK-121～133 按精简后范围约 82–132 个有效工程小时。估算不�
 
 ### TASK-128 单章 total runner
 
+状态：已完成。唯一 persistent runner、五条有限 route、FGS/WorkManager 共用入口和 Fake 单章闭环均已验证；详见 `ai/WORK-REPORT-2026-08-13-TASK-128.md`。
+
 交付：
 
 - 唯一生产 dispatcher；
@@ -424,7 +426,7 @@ TASK-138 默认不启动。只有以下任一证据存在才立项：
 
 ## 10. 下一任务唯一入口
 
-TASK-127 完成后，下一任务必须是 TASK-128。
+TASK-128 已完成，下一任务必须是 TASK-129。
 
 不得直接跳回：
 
@@ -434,4 +436,4 @@ TASK-127 完成后，下一任务必须是 TASK-128。
 - 80 章真实长跑；
 - 任意第三方 skill 安装。
 
-TASK-128 必须只在 `:feature:generation` 收口唯一 persistent total runner 和 Fake 单章闭环；不得创建第二个 runner、通用 fallback 或 UI 到 Stage repository 的旁路。
+TASK-129 必须只在 `:feature:generation` 接通 3～5 章 Fake 自动循环；不得提前接入 UI、真实 Provider、第二个 runner 或通用 fallback。

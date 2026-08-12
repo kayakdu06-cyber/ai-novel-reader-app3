@@ -20,7 +20,8 @@
 - TASK-125 已完成：`:data` 冻结 v2 来源并原子提交计划与唯一 initial DRAFT；`:feature:generation` 完成请求、Fake 严格执行、业务绑定解析和有限 registry。JVM 32/32、两台模拟器事务用例各 1/1、边界和安全扫描通过。
 - TASK-126 已完成：initial DRAFT 的冻结来源、bound exact-token prepare/open、受保护流式 artifact、只读投影、截断续接、post-analysis 交接和恢复来源校验已接通；JVM 38/38、API 35 UNKNOWN 恢复 1/1、边界和安全扫描通过，Provider 未修改且真实调用 0。
 - TASK-127 已完成：`chapter-post-analysis.v1` 单次响应、严格整体校验、状态映射、有限修订/重新分析、合并链恢复与既有最终 Room 原子事务已接通；相关 JVM 47/47、全量 JVM 165/165、构建/边界/安全门禁通过，真实 Provider 调用 0。
-- 唯一下一任务是 TASK-128：仅 `:feature:generation`，复用既有 dispatcher、有限 registry、队列/租约和各阶段 executor，形成一个 persistent total runner 与 Fake 单章闭环。
+- TASK-128 已完成：唯一 persistent runner、有限五 route、FGS/WorkManager 共用入口和 Fake 单章闭环已通过；API 35 验证 5 个 Stage 全成功、3 次 Fake 请求、1 个正式可读正文版本，真实 Provider 调用 0。
+- 唯一下一任务是 TASK-129：仅 `:feature:generation`，复用同一个 runner 完成 3～5 章 Fake 自动队列和一次暂停/恢复验收。
 - 后续每个任务必须锁定主模块和允许配套模块；VS-1 不新增第十一个模块，feature 不新增实现依赖，`:app` 不写业务逻辑。
 - 不主动实现候选功能、通用扩展点或“以后可能有用”的抽象；只有不修会直接造成不稳定、数据损坏、费用失控、安全问题或严重 bug 时才扩大范围。
 - 测试按具体风险最小化；全量、双 API、Release/R8 和 APK 扫描只在里程碑、发布或对应高风险变化时运行。
@@ -34,6 +35,12 @@
 - 当前工作树还有用户/其他工具产生的 `AGENTS.md`、`.claude/`、`CLAUDE.md` 变化；后续提交不得误纳入或覆盖，除非用户另行明确要求。
 
 ## 当前任务
+
+- TASK-129：前章正式提交后，确定性创建下一章的计划入口和有限队列；连续生成 3～5 章。
+- 验收只覆盖章节序号、义务/状态证据重放、一次暂停/恢复、前章可读和无重复 Provider-open。
+- 不接 UI，不调用真实 Provider，不创建第二个 runner；普通 App 启动入口仍留给 TASK-130。
+
+## 项目基线与迁移来源
 
 - 以 app开发2 提交 `89ec64da146b27d6186ef71c32c5b1a565e2f52c` 为 Git 历史基线。
 - 已把只读输入 `C:\Users\du\Downloads\ai-novel-reader-slim (2).zip` 的 `ai-novel-reader-slim` 项目内容同步为 app3 工作树。

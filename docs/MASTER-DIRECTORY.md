@@ -14,7 +14,7 @@
 | 全部功能 | [功能清单](02-FEATURE-INVENTORY.md) | 106 个唯一 FEAT 编号 |
 | 全部历史任务 | [历史任务清单](19-IMPLEMENTATION-BACKLOG.md) | 105 个唯一任务定义，含 TASK-008A/008B |
 | 当前任务队列 | [实施任务清单 V2](30-IMPLEMENTATION-BACKLOG-V2.md) | TASK-120～138，共 19 项 |
-| 当前现场 | [AI 当前上下文](ai/CURRENT-CONTEXT.md) | 唯一下一任务 TASK-128 |
+| 当前现场 | [AI 当前上下文](ai/CURRENT-CONTEXT.md) | 唯一下一任务 TASK-129 |
 | 需求追踪 | [追踪矩阵](20-TRACEABILITY-MATRIX.md) | 需求、功能、任务、风险和验证关系 |
 | 验收 | [验收标准](17-ACCEPTANCE-CRITERIA.md) | 产品完成门槛 |
 | 测试 | [测试计划](15-TEST-PLAN.md) | 风险最小化测试 |
@@ -91,8 +91,8 @@
 | 6 | TASK-125 | 已完成 | `:data` + `:feature:generation` | 普通 chapter-plan 收口 |
 | 7 | TASK-126 | 已完成 | `:feature:generation` + `:data` | initial draft |
 | 8 | TASK-127 | 已完成 | `:feature:generation` + `:data` | 合并章后分析与原子提交 |
-| 9 | TASK-128 | 下一任务 | `:feature:generation` | 单章 total runner |
-| 10 | TASK-129 | 待办 | `:feature:generation` | 3–5 章 Fake 自动循环 |
+| 9 | TASK-128 | 已完成 | `:feature:generation`；稳定性修复限 `:data` | 单章 total runner |
+| 10 | TASK-129 | 下一任务 | `:feature:generation` | 3–5 章 Fake 自动循环 |
 | 11 | TASK-130 | 待办 | `:core`、generation、creation、app 分批 | 生成启动入口 |
 | 12 | TASK-131 | 待办 | library、reader、app 分批 | 最小书架和阅读器 |
 | 13 | TASK-132 | 待办 | 默认只测试 | DeepSeek 真实结构和最高敏感度单章 |
@@ -108,7 +108,7 @@
 | 模块 | 职责 | 当前相关任务 |
 |---|---|---|
 | `:core` | 纯 Kotlin 公共模型和合同 | TASK-121；TASK-123/130 的独立合同批次 |
-| `:data` | 存储、安全、诊断和原子事务 | TASK-123、125～127、137 |
+| `:data` | 存储、安全、诊断和原子事务 | TASK-123、125～127、TASK-128 稳定性修复、137 |
 | `:provider` | 协议、transport、模型能力和 Fake | 仅 TASK-132 发现真实协议缺陷时修改 |
 | `:feature:connection` | 连接流程 | 当前纵切直接复用 |
 | `:feature:creation` | 创建、确认和模板重开准备 | TASK-130、134 |
@@ -125,7 +125,7 @@ VS-1 不新增模块；feature 不新增实现依赖，唯一既有例外是 `:f
 | 里程碑 | 包含任务 | 完成结果 |
 |---|---|---|
 | M1 创作语义 | TASK-121～124 | 开放题材、最小策略、义务和规划合同 |
-| M2 单章闭环 | TASK-125～128 | Fake 单章从计划到原子提交 |
+| M2 单章闭环 | TASK-125～128 | 已完成：Fake 单章从计划到原子提交 |
 | M3 连续生成 | TASK-129～131 | 3–5 章自动生成并边生成边阅读 |
 | M4 真实验收 | TASK-132～133 | DeepSeek 最高敏感度逻辑测试、手机 APK |
 | M5 个人可靠版 | TASK-134～137 | 模板、阅读、20 章和手动备份 |
@@ -151,4 +151,4 @@ VS-1 不新增模块；feature 不新增实现依赖，唯一既有例外是 `:f
 
 - `02-FEATURE-INVENTORY.md`：106 行、106 个唯一 FEAT ID；全部文档 FEAT 引用均有登记。
 - `19-IMPLEMENTATION-BACKLOG.md` + `30-IMPLEMENTATION-BACKLOG-V2.md`：124 个唯一任务定义；全部文档 TASK 引用均有登记。
-- TASK-121～127 已完成；当前执行任务为 TASK-128。
+- TASK-121～128 已完成；当前执行任务为 TASK-129。
