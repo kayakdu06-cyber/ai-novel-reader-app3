@@ -216,6 +216,7 @@ internal class InitialChapterDraftSourceGuard(private val database: app.zhijuan.
 data class InitialChapterDraftPromptSources(
     val stageId: String,
     val stageInputVersionHash: String,
+    val stageIdempotencyKey: String,
     val chapterId: String,
     val chapterIndex: Int,
     val canonicalPlanJson: String,
@@ -265,6 +266,7 @@ class InitialChapterDraftPromptSourcesRepository(
         return InitialChapterDraftPromptSources(
             stageId = stage.stageId,
             stageInputVersionHash = stage.inputVersionHash,
+            stageIdempotencyKey = stage.idempotencyKey,
             chapterId = stage.targetId,
             chapterIndex = (plan["chapterIndex"] as? JsonPrimitive)
                 ?.takeUnless(JsonPrimitive::isString)?.intOrNull

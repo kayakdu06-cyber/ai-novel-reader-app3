@@ -55,6 +55,7 @@ class InitialChapterDraftRequestTest {
 
     private fun sources() = InitialChapterDraftPromptSources(
         stageId = "draft-stage", stageInputVersionHash = "a".repeat(64),
+        stageIdempotencyKey = "draft-stage-idempotency",
         chapterId = "chapter-2", chapterIndex = 2,
         canonicalPlanJson = """{"chapterId":"chapter-2","chapterIndex":2}""",
         contextPayloadJson = """{"facts":[]}""",
