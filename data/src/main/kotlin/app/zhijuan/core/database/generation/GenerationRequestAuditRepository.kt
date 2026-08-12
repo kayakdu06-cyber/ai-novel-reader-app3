@@ -566,7 +566,7 @@ class GenerationRequestAuditRepository(
     ) {
         val lease = snapshot.executionLease
         if (
-            snapshot.route != GenerationRunnerStageRoute.CHAPTER_PLAN_V1 ||
+            snapshot.route !in CHAPTER_PLAN_ROUTES ||
             draft.stageId != lease.stageId ||
             lease.jobStatus != GenerationJobStatus.RUNNING ||
             lease.stageStatus != app.zhijuan.core.model.GenerationStageStatus.PREPARING ||
@@ -600,7 +600,7 @@ class GenerationRequestAuditRepository(
             stage.attemptCount != snapshot.attemptCount ||
             stage.maxAttempts != snapshot.maxAttempts ||
             stage.attemptCount !in 0 until stage.maxAttempts ||
-            GenerationRunnerStageRouteResolver.resolve(stage) != GenerationRunnerStageRoute.CHAPTER_PLAN_V1
+            GenerationRunnerStageRouteResolver.resolve(stage) != snapshot.route
         ) {
             throw StaleGenerationStateException("Bound chapter-plan execution evidence changed.")
         }

@@ -152,7 +152,7 @@ class GenerationStreamingDraftRepository(
         draft: RequestIntentDraft,
         budget: RequestBudgetReservationDraft,
     ): PersistedStreamingRequest = LIFECYCLE_LOCK.withLock {
-        require(snapshot.route == GenerationRunnerStageRoute.CHAPTER_PLAN_V1) {
+        require(snapshot.route in CHAPTER_PLAN_ROUTES) {
             "Bound request preparation route is not chapter-plan."
         }
         require(draft.stageId == snapshot.executionLease.stageId) {
@@ -203,7 +203,7 @@ class GenerationStreamingDraftRepository(
         budget: RequestBudgetReservationDraft,
         snapshot: GenerationRunnerCurrentStageRouteSnapshot,
     ): PersistedStreamingRequest {
-        require(snapshot.route == GenerationRunnerStageRoute.CHAPTER_PLAN_V1) {
+        require(snapshot.route in CHAPTER_PLAN_ROUTES) {
             "Bound rollover route is not chapter-plan."
         }
         require(draft.stageId == snapshot.executionLease.stageId) {

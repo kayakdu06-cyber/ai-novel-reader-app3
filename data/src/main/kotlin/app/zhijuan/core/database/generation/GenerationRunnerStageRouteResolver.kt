@@ -21,8 +21,14 @@ enum class GenerationRunnerStageRoute {
     CANDIDATE_CHAPTER_REVISION_V1,
     CHAPTER_CONTEXT_ASSEMBLY_V1,
     CHAPTER_PLAN_V1,
+    CHAPTER_PLAN_V2,
     FINAL_CHAPTER_COMMIT_V3,
 }
+
+internal val CHAPTER_PLAN_ROUTES = setOf(
+    GenerationRunnerStageRoute.CHAPTER_PLAN_V1,
+    GenerationRunnerStageRoute.CHAPTER_PLAN_V2,
+)
 
 /**
  * Resolves the route identity of a frozen derived-chain Stage without any
@@ -86,6 +92,10 @@ internal object GenerationRunnerStageRouteResolver {
             ChapterContextAssemblyJobFactory.CHAPTER_PLAN_SOURCE_POLICY_VERSION -> {
                 ChapterContextAssemblyJobFactory.parseAndVerifyChapterPlan(stage)
                 GenerationRunnerStageRoute.CHAPTER_PLAN_V1
+            }
+            ChapterPlanV2StageBinding.SOURCE_POLICY_VERSION -> {
+                ChapterPlanV2StageBinding.parseAndVerify(stage)
+                GenerationRunnerStageRoute.CHAPTER_PLAN_V2
             }
             else -> throw IllegalArgumentException(
                 "Generation Stage source policy is not a supported route.",
