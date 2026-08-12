@@ -143,6 +143,7 @@ class ChapterFinalCandidateRecoveryRepository(
         val stage: GenerationStageEntity,
         val evidence: ChapterCandidateSealedStageEvidenceV1,
         val inputSource: ChapterCandidateStageSourceV1?,
+        val initialDraftSource: InitialChapterDraftSourceV1?,
     )
 
     private fun requireFinalState(
@@ -186,15 +187,20 @@ class ChapterFinalCandidateRecoveryRepository(
                 evidence.chapterId == source.chapterId && evidence.chapterIndex == source.chapterIndex &&
                 evidence.revisionIndex == source.revisionIndex,
         ) { "Final candidate recovery failed: sealed candidate evidence is stale." }
-        val inputSource = if (
+        val initialDraftSource = if (
             expectedRole == ChapterCandidateArtifactRoleV1.BODY &&
             stage.phase == GenerationPhase.DRAFT_CHAPTER
         ) {
-            null
+            InitialChapterDraftStageBinding.parseAndVerify(stage)
         } else {
-            ChapterCandidateStageBindingV1.parseAndVerify(stage)
+            null
         }
-        return RecoveredSealedStage(stage, evidence, inputSource)
+        val inputSource = if (initialDraftSource == null) {
+            ChapterCandidateStageBindingV1.parseAndVerify(stage)
+        } else {
+            null
+        }
+        return RecoveredSealedStage(stage, evidence, inputSource, initialDraftSource)
     }
 
     private fun requireDerivedSource(
@@ -245,7 +251,10 @@ class ChapterFinalCandidateRecoveryRepository(
         source: ChapterFinalCommitStageSourceV1,
     ) {
         if (source.revisionIndex == 0) {
-            require(body.stage.phase == GenerationPhase.DRAFT_CHAPTER && body.inputSource == null) {
+            require(
+                body.stage.phase == GenerationPhase.DRAFT_CHAPTER &&
+                    body.inputSource == null && body.initialDraftSource != null,
+            ) {
                 "Final candidate recovery failed: initial body source is invalid."
             }
             return

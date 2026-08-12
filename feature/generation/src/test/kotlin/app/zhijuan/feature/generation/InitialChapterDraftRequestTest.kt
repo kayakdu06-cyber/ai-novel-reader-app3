@@ -6,6 +6,7 @@ import app.zhijuan.provider.common.ProviderTimeoutPolicy
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -29,6 +30,27 @@ class InitialChapterDraftRequestTest {
             val payload = parts.last().content.withValue { Json.parseToJsonElement(it) as JsonObject }
             assertEquals(setOf("schemaVersion", "schemaId", "chapterPlan", "chapterContext", "expectation", "activationManifest", "policyManifest"), payload.keys)
         }
+    }
+
+    @Test
+    fun `post analysis result never claims a formal chapter`() {
+        val seal = app.zhijuan.core.database.generation.ChapterCandidateArtifactSealResultV1(
+            stageId = "draft-stage", nextStageId = "memory-stage",
+            role = app.zhijuan.core.database.generation.ChapterCandidateArtifactRoleV1.BODY,
+            replayed = false,
+            evidence = app.zhijuan.core.database.generation.ChapterFinalCandidateArtifactEvidenceV1(
+                role = app.zhijuan.core.database.generation.ChapterCandidateArtifactRoleV1.BODY,
+                stageId = "draft-stage", attemptId = "attempt-1",
+                artifactRefId = "11111111-1111-1111-1111-111111111111", artifactRevision = 1,
+                rawOutputHash = "a".repeat(64), canonicalOutputHash = "a".repeat(64),
+                sourceBindingHash = "b".repeat(64),
+            ),
+        )
+        val result = InitialChapterDraftExecutionResult.EnteredPostAnalysis(
+            seal, "candidate-1", "a".repeat(64),
+        )
+        assertFalse(result.formal)
+        assertEquals("memory-stage", result.seal.nextStageId)
     }
 
     private fun sources() = InitialChapterDraftPromptSources(
