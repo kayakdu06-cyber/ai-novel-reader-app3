@@ -156,7 +156,12 @@ class GenerationPersistentChapterSequenceAndroidTest {
             GenerationNextChapterPreparationResult.Prepared(prepareChapter(expected, routing))
         }
 
-        val completed = restartedSequence.run(paused.currentChapter, 3, "runner.task129.restarted")
+        val completed = restartedSequence.run(
+            initialChapter = paused.currentChapter,
+            requestedChapterCount = 4,
+            runnerOwnerPrefix = "runner.task129.restarted",
+            alreadyCompletedChapterCount = 1,
+        )
 
         assertEquals(GenerationChapterSequenceDisposition.TARGET_COMPLETED, completed.disposition)
         assertEquals(listOf(2, 3, 4), completed.completedChapters.map { it.chapterOrdinal })
@@ -347,7 +352,7 @@ class GenerationPersistentChapterSequenceAndroidTest {
         freezePlanStage(jobId, planStage, base, authority)
         GenerationControlRepository(database).requestPause(jobId, base + 5L)
         GenerationControlRepository(database).resume(jobId, base + 6L)
-        return GenerationChapterRun(jobId, chapterIndex)
+        return GenerationChapterRun(BOOK_ID, jobId, chapterIndex)
     }
 
     private suspend fun freezePlanStage(

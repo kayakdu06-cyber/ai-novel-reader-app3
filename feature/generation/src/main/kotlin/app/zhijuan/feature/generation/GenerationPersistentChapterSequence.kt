@@ -1,10 +1,12 @@
 package app.zhijuan.feature.generation
 
 data class GenerationChapterRun(
+    val bookId: String,
     val jobId: String,
     val chapterOrdinal: Int,
 ) {
     init {
+        require(bookId.isNotBlank())
         require(jobId.isNotBlank())
         require(chapterOrdinal >= 1)
     }
@@ -59,8 +61,10 @@ class GenerationPersistentChapterSequenceV1(
         initialChapter: GenerationChapterRun,
         requestedChapterCount: Int,
         runnerOwnerPrefix: String,
+        alreadyCompletedChapterCount: Int = 0,
     ): GenerationChapterSequenceResult {
         require(requestedChapterCount in MIN_CHAPTERS_PER_SEQUENCE..MAX_CHAPTERS_PER_SEQUENCE)
+        require(alreadyCompletedChapterCount in 0 until requestedChapterCount)
         require(runnerOwnerPrefix.isNotBlank())
 
         val completed = mutableListOf<GenerationChapterRun>()
@@ -68,7 +72,7 @@ class GenerationPersistentChapterSequenceV1(
         var current = initialChapter
         var executedStages = 0
 
-        repeat(requestedChapterCount) {
+        repeat(requestedChapterCount - alreadyCompletedChapterCount) {
             if (!observedJobIds.add(current.jobId)) {
                 return result(
                     GenerationChapterSequenceDisposition.INVALID_NEXT_CHAPTER,
@@ -94,7 +98,7 @@ class GenerationPersistentChapterSequenceV1(
             }
 
             completed += current
-            if (completed.size == requestedChapterCount) {
+            if (completed.size + alreadyCompletedChapterCount == requestedChapterCount) {
                 return result(
                     GenerationChapterSequenceDisposition.TARGET_COMPLETED,
                     completed,
@@ -126,7 +130,10 @@ class GenerationPersistentChapterSequenceV1(
                 }
 
                 is GenerationNextChapterPreparationResult.Prepared -> {
-                    if (preparation.chapter.chapterOrdinal != expectedOrdinal) {
+                    if (
+                        preparation.chapter.bookId != current.bookId ||
+                        preparation.chapter.chapterOrdinal != expectedOrdinal
+                    ) {
                         return result(
                             GenerationChapterSequenceDisposition.INVALID_NEXT_CHAPTER,
                             completed,

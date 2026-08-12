@@ -49,6 +49,21 @@ class GenerationPersistentChapterSequenceTest {
     }
 
     @Test
+    fun `preparer cannot switch the sequence to another book`() = runBlocking {
+        val runner = GenerationTotalRunnerPort { _, _ -> completed() }
+        val sequence = GenerationPersistentChapterSequenceV1(runner) { _, expected ->
+            GenerationNextChapterPreparationResult.Prepared(
+                GenerationChapterRun("other-book", "job.other.$expected", expected),
+            )
+        }
+
+        val result = sequence.run(chapter(1), 3, "sequence-owner")
+
+        assertEquals(GenerationChapterSequenceDisposition.INVALID_NEXT_CHAPTER, result.disposition)
+        assertEquals(listOf(1), result.completedChapters.map { it.chapterOrdinal })
+    }
+
+    @Test
     fun `preparation not ready stops after the committed chapter`() = runBlocking {
         val runner = GenerationTotalRunnerPort { _, _ -> completed() }
         val sequence = GenerationPersistentChapterSequenceV1(runner) { _, _ ->
@@ -59,6 +74,22 @@ class GenerationPersistentChapterSequenceTest {
 
         assertEquals(GenerationChapterSequenceDisposition.NEXT_CHAPTER_NOT_READY, result.disposition)
         assertEquals(listOf(1), result.completedChapters.map { it.chapterOrdinal })
+    }
+
+    @Test
+    fun `restart can finish the last chapter of an originally bounded window`() = runBlocking {
+        val fixture = SequenceFixture()
+
+        val result = fixture.sequence().run(
+            initialChapter = chapter(5),
+            requestedChapterCount = 5,
+            runnerOwnerPrefix = "restarted-owner",
+            alreadyCompletedChapterCount = 4,
+        )
+
+        assertEquals(GenerationChapterSequenceDisposition.TARGET_COMPLETED, result.disposition)
+        assertEquals(listOf(5), result.completedChapters.map { it.chapterOrdinal })
+        assertEquals(emptyList<Int>(), fixture.preparedOrdinals)
     }
 
     @Test
@@ -94,7 +125,7 @@ class GenerationPersistentChapterSequenceTest {
     }
 
     private companion object {
-        fun chapter(ordinal: Int) = GenerationChapterRun("job.chapter.$ordinal", ordinal)
+        fun chapter(ordinal: Int) = GenerationChapterRun("book.sequence", "job.chapter.$ordinal", ordinal)
 
         fun completed() = GenerationPersistentRunResult(
             GenerationPersistentRunDisposition.COMPLETED,
