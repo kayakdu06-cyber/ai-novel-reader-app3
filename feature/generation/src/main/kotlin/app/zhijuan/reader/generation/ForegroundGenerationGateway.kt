@@ -21,7 +21,6 @@ import app.zhijuan.feature.generation.GenerationPersistentRunResult
 import app.zhijuan.feature.generation.GenerationPersistentRuntimeFactoryV1
 import app.zhijuan.feature.generation.GenerationTotalRunnerPort
 import dagger.hilt.android.qualifiers.ApplicationContext
-import java.util.Optional
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
@@ -29,7 +28,6 @@ import kotlinx.coroutines.CancellationException
 @Singleton
 internal class ForegroundGenerationGateway @Inject constructor(
     @ApplicationContext context: Context,
-    private val remote: Optional<GenerationBoundRemoteExecutionProvider>,
 ) : ForegroundGenerationControlPort, GenerationController, GenerationTotalRunnerPort, GenerationStarter {
     private val applicationContext = context.applicationContext
     private val databaseHandle by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
@@ -45,13 +43,13 @@ internal class ForegroundGenerationGateway @Inject constructor(
         GenerationStartPersistenceRepository(databaseHandle.database)
     }
     private val runtime by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
-        val provider = remote.orElseThrow {
-            GenerationRuntimeUnavailableException()
-        }
         GenerationPersistentRuntimeFactoryV1.create(
             database = databaseHandle.database,
             artifactStore = AndroidProtectedArtifactStore(applicationContext),
-            remote = provider,
+            remote = ProductionGenerationBoundRemoteExecutionProvider(
+                applicationContext,
+                databaseHandle.database,
+            ),
         )
     }
 
@@ -139,6 +137,3 @@ internal class ForegroundGenerationGateway @Inject constructor(
     private suspend fun monotonicControlTime(jobId: String, requestedAt: Long): Long =
         maxOf(requestedAt, requireNotNull(stateRepository.findJob(jobId)).updatedAt)
 }
-
-internal class GenerationRuntimeUnavailableException :
-    IllegalStateException("Generation remote execution is not installed yet.")

@@ -41,8 +41,6 @@ internal class GenerationExecutionWorker(
             }
         } catch (cancelled: CancellationException) {
             throw cancelled
-        } catch (_: GenerationRuntimeUnavailableException) {
-            Result.failure()
         } catch (_: Exception) {
             if (runAttemptCount < MAX_TRANSIENT_RETRIES) Result.retry() else Result.failure()
         }
