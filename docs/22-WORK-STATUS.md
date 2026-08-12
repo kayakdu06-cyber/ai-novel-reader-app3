@@ -14,6 +14,7 @@
 
 | 任务 | 状态 | 证据 |
 |---|---|---|
+| TASK-130 生成启动入口 | 完成 | 冻结快照、连接/模型、目的地、三层预算确认到唯一入口 Job 已接通；唯一 runner 可连续执行初始规划、首窗并准备第一章，成功进入生成中页，失败留页且可重试。JVM 197/197、API 35 Room 2/2、App 创建链路 4/4、确认页 4/4，`assembleDebug test`、十模块边界和安全扫描通过，真实 Provider 0 |
 | TASK-129 3～5 章自动队列 | 完成 | 新增有界同书章节循环且不修改既有 runner；只有前章 Job=`COMPLETED` 才准备连续下一章。API 35 的 4 章 Room + Fake 场景含一次暂停和 runtime 重建，12 次请求、4 个正式可读版本、逐章义务与 system state 可回放；Generation JVM 54/54、边界和安全扫描通过，真实 Provider 0 |
 | TASK-128 单章 persistent total runner | 完成 | 唯一 Room 游标 runner、有限五 route、FGS/WorkManager 共用入口已接通；API 35 Fake 单章覆盖 pause/resume、plan→body→post-analysis→final，5 Stage 全成功、3 次 Fake 请求、1 个正式可读版本；JVM 182/182、`assembleDebug test`、十模块边界和安全扫描通过，真实 Provider 调用 0 |
 | TASK-127 合并章后分析与提交 | 完成 | `chapter-post-analysis.v1` 把摘要、记忆、追踪、伏笔、义务、状态和一致性收敛为一次分析；整体失败不映射，严重重复进入有限修订并重新分析，成功结果复用既有 Room 最终原子事务；相关 JVM 47/47、全量 JVM 165/165、`assembleDebug test`、边界和安全扫描通过，真实 Provider 调用 0 |
@@ -83,7 +84,7 @@
 
 ## 下一步
 
-- 唯一下一任务是 TASK-130：分模块接通冻结创建快照、唯一首章 Job、确认事件和导航；不接真实 Provider。
+- 唯一下一任务是 TASK-131：分模块接通最小书架、目录、正式正文、生成中只读投影和后台生成状态；不接真实 Provider。
 
 - 2026-08-09 TASK-064 Phase 2E3 已完成48KiB `chapter-plan.v1`严格输出schema/parser、稳定canonical hash、人物/成年人虚构/场景策略业务交叉校验与严格过程节点/余波门禁；generation JVM 140/140、双API各42/42、801-task门禁通过。registry仍只有final+context；下一步Phase 2E4处理目的地/三层预算和请求绑定，在exact-token执行与DEC-068提交完成前不注册、不启用App内真实付费生成。
 - 2026-08-09 TASK-064 Phase 2E4A 已完成发送前缺口审计：现有disclosure字段尚无生产确认/校验，`normalizedDestination`未形成规范origin，`BudgetEngine`无生产调用且`budgetSnapshotJson`不是持久余额。DEC-071冻结顺序为目的地确认→TASK-083原子三层reservation+RequestIntent→plan exact-token执行；审计阶段保持Provider 0和plan未注册。
@@ -164,4 +165,4 @@
 
 ## 尚未具备
 
-当前 APK 已有可操作的首次启动说明、连接向导、持久连接列表、带可选高级区和正式篇幅规则的创建页，以及从不可变快照回读的开始前确认占位页。Prompt Bundle v1、故事种子/圣经/总纲、分卷/8 章窗口、首章最小包、第二章硬闸门、章前上下文预算、章节正文/有限续接、章节记忆、时间线/伏笔投影、一致性检查、有限修订、候选最终提交和编辑后跨章顺序重建底层原语已经通过本地规则/假 Provider 验证，但确认页尚未把用户动作接到真实预算、目的地和 Provider 门禁。total runner、自动补窗调度、编辑后自动续跑、边生成边阅读和模板界面尚未接通，不应当作可用产品分发。
+当前 APK 已有首次启动说明、连接向导、持久连接列表、极简创建、冻结确认和普通生成启动入口。确认动作已接到目的地、三层预算、唯一 Job、前台服务和同一持久 runner；初始规划、首窗及第一章准备不再需要开发者介入。书架、目录、生成中正文投影、沉浸阅读、模板重开和真实 DeepSeek 验收仍未接通，因此还不是可亲手完整验收的纵切产品。
