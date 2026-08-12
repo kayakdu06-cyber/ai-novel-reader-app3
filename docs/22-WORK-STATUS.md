@@ -1,6 +1,6 @@
 # 织卷开发状态
 
-> 更新时间：2026-08-11
+> 更新时间：2026-08-13
 
 > 路线重排说明：当前代码事实、开发阶段和唯一下一任务以 `27-DEVELOPMENT-MASTER-PLAN-V3.md` 与 `30-IMPLEMENTATION-BACKLOG-V2.md` 为准。本文件继续保存历史完成证据；TASK-064 的既有 WIP 不删除，剩余工作拆入 TASK-125～128，不再沿一个无限扩大的 Phase 继续开发。
 
@@ -14,6 +14,7 @@
 
 | 任务 | 状态 | 证据 |
 |---|---|---|
+| TASK-127 合并章后分析与提交 | 完成 | `chapter-post-analysis.v1` 把摘要、记忆、追踪、伏笔、义务、状态和一致性收敛为一次分析；整体失败不映射，严重重复进入有限修订并重新分析，成功结果复用既有 Room 最终原子事务；相关 JVM 47/47、全量 JVM 165/165、`assembleDebug test`、边界和安全扫描通过，真实 Provider 调用 0 |
 | TASK-001 Android 工程和构建基线 | 完成 | Gradle Wrapper 9.4.1；Debug APK 构建成功 |
 | TASK-002 模块/package 边界 | 完成 | `app`、`core:model`、`core:task`、`core:database`、`core:security`、`core:backup`、`core:network`、`core:diagnostics`、`provider:common`、`provider:stream` 可独立编译 |
 | TASK-008 ADR-001~005 收束 | 完成 | ADR-001~005 全部 Accepted；每项剩余物理设备/发布跟进已明确，不伪装成已验证 |

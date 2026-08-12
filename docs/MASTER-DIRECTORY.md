@@ -14,7 +14,7 @@
 | 全部功能 | [功能清单](02-FEATURE-INVENTORY.md) | 106 个唯一 FEAT 编号 |
 | 全部历史任务 | [历史任务清单](19-IMPLEMENTATION-BACKLOG.md) | 105 个唯一任务定义，含 TASK-008A/008B |
 | 当前任务队列 | [实施任务清单 V2](30-IMPLEMENTATION-BACKLOG-V2.md) | TASK-120～138，共 19 项 |
-| 当前现场 | [AI 当前上下文](ai/CURRENT-CONTEXT.md) | 唯一下一任务 TASK-127 |
+| 当前现场 | [AI 当前上下文](ai/CURRENT-CONTEXT.md) | 唯一下一任务 TASK-128 |
 | 需求追踪 | [追踪矩阵](20-TRACEABILITY-MATRIX.md) | 需求、功能、任务、风险和验证关系 |
 | 验收 | [验收标准](17-ACCEPTANCE-CRITERIA.md) | 产品完成门槛 |
 | 测试 | [测试计划](15-TEST-PLAN.md) | 风险最小化测试 |
@@ -90,8 +90,8 @@
 | 5 | TASK-124 | 已完成 | `:feature:generation` | 规划合同 V2 |
 | 6 | TASK-125 | 已完成 | `:data` + `:feature:generation` | 普通 chapter-plan 收口 |
 | 7 | TASK-126 | 已完成 | `:feature:generation` + `:data` | initial draft |
-| 8 | TASK-127 | 下一任务 | `:feature:generation` + `:data` | 合并章后分析与原子提交 |
-| 9 | TASK-128 | 待办 | `:feature:generation` | 单章 total runner |
+| 8 | TASK-127 | 已完成 | `:feature:generation` + `:data` | 合并章后分析与原子提交 |
+| 9 | TASK-128 | 下一任务 | `:feature:generation` | 单章 total runner |
 | 10 | TASK-129 | 待办 | `:feature:generation` | 3–5 章 Fake 自动循环 |
 | 11 | TASK-130 | 待办 | `:core`、generation、creation、app 分批 | 生成启动入口 |
 | 12 | TASK-131 | 待办 | library、reader、app 分批 | 最小书架和阅读器 |
@@ -151,4 +151,4 @@ VS-1 不新增模块；feature 不新增实现依赖，唯一既有例外是 `:f
 
 - `02-FEATURE-INVENTORY.md`：106 行、106 个唯一 FEAT ID；全部文档 FEAT 引用均有登记。
 - `19-IMPLEMENTATION-BACKLOG.md` + `30-IMPLEMENTATION-BACKLOG-V2.md`：124 个唯一任务定义；全部文档 TASK 引用均有登记。
-- TASK-121～126 已完成；当前执行任务为 TASK-127。
+- TASK-121～127 已完成；当前执行任务为 TASK-128。
