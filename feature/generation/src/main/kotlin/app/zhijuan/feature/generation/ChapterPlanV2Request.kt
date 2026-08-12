@@ -1,5 +1,10 @@
 package app.zhijuan.feature.generation
 
+import app.zhijuan.core.database.generation.ChapterPlanV2FrozenSources
+import app.zhijuan.core.database.generation.ReadyChapterContext
+import app.zhijuan.core.model.FadePolicy
+import app.zhijuan.core.task.PromptInstruction
+import app.zhijuan.core.task.SceneExecutionContract
 import app.zhijuan.core.task.PolicyInstructionV1
 import app.zhijuan.provider.common.GenerationParameters
 import app.zhijuan.provider.common.GenerationRequest
@@ -12,9 +17,13 @@ import app.zhijuan.provider.common.SensitiveProviderText
 import java.security.MessageDigest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
 
 data class ChapterPlanV2RequestSpec(
     val requestId: String,
@@ -52,6 +61,25 @@ data class ChapterPlanV2RequestSpec(
         "ChapterPlanV2RequestSpec(chapterIndex=${expectation.base.chapterIndex}, content=redacted)"
 }
 
+data class FrozenChapterPlanV2RequestSpec(
+    val requestId: String,
+    val generationId: String,
+    val stageId: String,
+    val attemptId: String,
+    val modelId: ProviderModelId,
+    val context: ReadyChapterContext,
+    val frozen: ChapterPlanV2FrozenSources,
+    val maximumOutputTokens: Int,
+    val timeouts: ProviderTimeoutPolicy,
+    val idempotencyKey: String? = null,
+) {
+    init {
+        require(listOf(requestId, generationId, stageId, attemptId).all(IDENTIFIER::matches))
+        require(maximumOutputTokens in 512..16_384)
+        require(context.chapterPlanStageId == stageId)
+    }
+}
+
 class BoundChapterPlanV2Request internal constructor(
     val request: GenerationRequest,
     val expectation: ChapterPlanExpectationV2,
@@ -82,13 +110,54 @@ object ChapterPlanV2RequestFactory {
             createBound(spec, creativeIntent, instructions)
         }
 
+    /** Rebuilds an exact request after process death only from frozen Stage/context evidence. */
+    fun restore(spec: FrozenChapterPlanV2RequestSpec): BoundChapterPlanV2Request {
+        val expectationRoot = strictObject(spec.frozen.expectationJson, "expectation")
+        val policyRoot = strictObject(spec.frozen.policyManifestJson, "policy manifest")
+        val expectation = restoredExpectation(expectationRoot)
+        val creativeIntent = expectationRoot.requiredString("creativeIntent")
+        val instructions = policyRoot.requiredObjects("instructions").map { item ->
+            PolicyInstructionV1(
+                id = item.requiredString("id"),
+                text = item.requiredString("text"),
+            )
+        }
+        require(instructions.isNotEmpty()) { "Frozen chapter-plan policy has no instructions." }
+        require(expectation.base.contextContentHash == spec.context.contentHash)
+        require(expectation.base.contextSourceManifestHash == spec.context.sourceManifestHash)
+        require(expectation.contextEvidenceHash == spec.frozen.contextEvidenceHash)
+        return createBoundFromFrozen(
+            requestId = spec.requestId,
+            generationId = spec.generationId,
+            stageId = spec.stageId,
+            attemptId = spec.attemptId,
+            modelId = spec.modelId,
+            contextPayloadJson = spec.context.providerPayloadJson,
+            expectation = expectation,
+            expectationJson = spec.frozen.expectationJson,
+            expectationHash = spec.frozen.expectationHash,
+            activationManifestJson = spec.frozen.activationManifestJson,
+            activationManifestHash = spec.frozen.activationManifestHash,
+            activationHash = spec.frozen.activationHash,
+            policyManifestJson = spec.frozen.policyManifestJson,
+            policyManifestHash = spec.frozen.policyManifestHash,
+            policyCompilationHash = spec.frozen.policyCompilationHash,
+            contextEvidenceHash = spec.frozen.contextEvidenceHash,
+            creativeIntent = creativeIntent,
+            instructions = instructions,
+            maximumOutputTokens = spec.maximumOutputTokens,
+            timeouts = spec.timeouts,
+            idempotencyKey = spec.idempotencyKey,
+        )
+    }
+
     private fun createBound(
         spec: ChapterPlanV2RequestSpec,
         creativeIntent: String,
         instructions: List<PolicyInstructionV1>,
     ): BoundChapterPlanV2Request {
         require(creativeIntent.isNotBlank())
-        val expectation = expectationJson(spec.expectation)
+        val expectation = expectationJson(spec.expectation, creativeIntent)
         val activation = activationManifestJson(spec.policySelection.activation)
         val policyCompilationHash = sha256(policyCompilationPayloadJson(spec.policySelection, instructions))
         require(spec.expectation.policyCompilationHash == policyCompilationHash) {
@@ -96,15 +165,63 @@ object ChapterPlanV2RequestFactory {
         }
         val policy = policyManifestJson(spec.policySelection, instructions, policyCompilationHash)
         val policyManifestHash = sha256(policy)
+        return createBoundFromFrozen(
+            requestId = spec.requestId,
+            generationId = spec.generationId,
+            stageId = spec.stageId,
+            attemptId = spec.attemptId,
+            modelId = spec.modelId,
+            contextPayloadJson = spec.contextPayloadJson,
+            expectation = spec.expectation,
+            expectationJson = expectation,
+            expectationHash = sha256(expectation),
+            activationManifestJson = activation,
+            activationManifestHash = sha256(activation),
+            activationHash = spec.expectation.activationHash,
+            policyManifestJson = policy,
+            policyManifestHash = policyManifestHash,
+            policyCompilationHash = policyCompilationHash,
+            contextEvidenceHash = spec.contextEvidenceHash,
+            creativeIntent = creativeIntent,
+            instructions = instructions,
+            maximumOutputTokens = spec.maximumOutputTokens,
+            timeouts = spec.timeouts,
+            idempotencyKey = spec.idempotencyKey,
+        )
+    }
+
+    private fun createBoundFromFrozen(
+        requestId: String,
+        generationId: String,
+        stageId: String,
+        attemptId: String,
+        modelId: ProviderModelId,
+        contextPayloadJson: String,
+        expectation: ChapterPlanExpectationV2,
+        expectationJson: String,
+        expectationHash: String,
+        activationManifestJson: String,
+        activationManifestHash: String,
+        activationHash: String,
+        policyManifestJson: String,
+        policyManifestHash: String,
+        policyCompilationHash: String,
+        contextEvidenceHash: String,
+        creativeIntent: String,
+        instructions: List<PolicyInstructionV1>,
+        maximumOutputTokens: Int,
+        timeouts: ProviderTimeoutPolicy,
+        idempotencyKey: String?,
+    ): BoundChapterPlanV2Request {
         val source = JsonObject(linkedMapOf(
             "schemaVersion" to JsonPrimitive(2),
             "schemaId" to JsonPrimitive("zhijuan.chapter-plan-request.v2"),
-            "contextPayload" to Json.parseToJsonElement(spec.contextPayloadJson),
-            "expectation" to Json.parseToJsonElement(expectation),
-            "expectationHash" to JsonPrimitive(sha256(expectation)),
-            "activationManifest" to Json.parseToJsonElement(activation),
-            "activationManifestHash" to JsonPrimitive(sha256(activation)),
-            "policyManifest" to Json.parseToJsonElement(policy),
+            "contextPayload" to Json.parseToJsonElement(contextPayloadJson),
+            "expectation" to Json.parseToJsonElement(expectationJson),
+            "expectationHash" to JsonPrimitive(expectationHash),
+            "activationManifest" to Json.parseToJsonElement(activationManifestJson),
+            "activationManifestHash" to JsonPrimitive(activationManifestHash),
+            "policyManifest" to Json.parseToJsonElement(policyManifestJson),
             "policyManifestHash" to JsonPrimitive(policyManifestHash),
             "creativeIntent" to JsonPrimitive(creativeIntent),
         )).toString()
@@ -117,41 +234,44 @@ object ChapterPlanV2RequestFactory {
         """.trimIndent()
         val policyPrompt = instructions.joinToString("\n") { "${it.id}: ${it.text}" }
         val request = GenerationRequest(
-            requestId = spec.requestId,
-            generationId = spec.generationId,
-            stageId = spec.stageId,
-            attemptId = spec.attemptId,
-            modelId = spec.modelId,
+            requestId = requestId,
+            generationId = generationId,
+            stageId = stageId,
+            attemptId = attemptId,
+            modelId = modelId,
             prompt = ProviderPrompt(listOf(
                 PromptPart(PromptLayer.STAGE_CONTRACT, SensitiveProviderText.from(stageContract)),
                 PromptPart(PromptLayer.WRITING_STYLE, SensitiveProviderText.from(policyPrompt)),
                 PromptPart(PromptLayer.USER_REQUEST, SensitiveProviderText.from(source)),
             )),
-            parameters = GenerationParameters(temperature = 0.4, maxOutputTokens = spec.maximumOutputTokens),
+            parameters = GenerationParameters(temperature = 0.4, maxOutputTokens = maximumOutputTokens),
             structuredOutputSchema = ChapterPlanOutputContractV2.providerSchema,
             stream = true,
-            timeouts = spec.timeouts,
-            idempotencyKey = spec.idempotencyKey,
+            timeouts = timeouts,
+            idempotencyKey = idempotencyKey,
         )
         return BoundChapterPlanV2Request(
             request = request,
-            expectation = spec.expectation,
+            expectation = expectation,
             requestBindingHash = sha256(source),
-            expectationJson = expectation,
-            expectationHash = sha256(expectation),
-            activationManifestJson = activation,
-            activationManifestHash = sha256(activation),
-            activationHash = spec.expectation.activationHash,
-            policyManifestJson = policy,
+            expectationJson = expectationJson,
+            expectationHash = expectationHash,
+            activationManifestJson = activationManifestJson,
+            activationManifestHash = activationManifestHash,
+            activationHash = activationHash,
+            policyManifestJson = policyManifestJson,
             policyManifestHash = policyManifestHash,
             policyCompilationHash = policyCompilationHash,
-            contextEvidenceHash = spec.contextEvidenceHash,
-            outputContract = BoundChapterPlanV2OutputContract(spec.expectation),
+            contextEvidenceHash = contextEvidenceHash,
+            outputContract = BoundChapterPlanV2OutputContract(expectation),
         )
     }
 }
 
-private fun expectationJson(value: ChapterPlanExpectationV2): String = canonical(JsonObject(linkedMapOf(
+private fun expectationJson(
+    value: ChapterPlanExpectationV2,
+    creativeIntent: String,
+): String = canonical(JsonObject(linkedMapOf(
     "schemaVersion" to JsonPrimitive(2),
     "chapterId" to JsonPrimitive(value.base.chapterId),
     "chapterIndex" to JsonPrimitive(value.base.chapterIndex),
@@ -167,7 +287,109 @@ private fun expectationJson(value: ChapterPlanExpectationV2): String = canonical
     "confirmedAdultFictionalCharacterIds" to JsonArray(
         value.base.confirmedAdultFictionalCharacterIds.sorted().map(::JsonPrimitive),
     ),
+    "sceneExecutionContract" to sceneExecutionContractJson(value.base.sceneExecutionContract),
+    "creativeIntent" to JsonPrimitive(creativeIntent),
 ))).toString()
+
+private fun sceneExecutionContractJson(value: SceneExecutionContract): JsonObject = when (value) {
+    SceneExecutionContract.NotApplicable -> JsonObject(mapOf("kind" to JsonPrimitive("NOT_APPLICABLE")))
+    is SceneExecutionContract.Blocked -> error("A blocked scene contract cannot be frozen for generation.")
+    is SceneExecutionContract.Allowed -> JsonObject(linkedMapOf(
+        "kind" to JsonPrimitive("ALLOWED"),
+        "automatic" to JsonPrimitive(value.automatic),
+        "intimacyDetailLevel" to JsonPrimitive(value.intimacyDetailLevel),
+        "fadePolicy" to JsonPrimitive(value.fadePolicy.name),
+        "strictBodyAndSensoryContinuity" to JsonPrimitive(value.strictBodyAndSensoryContinuity),
+        "requiredKeyProcessCoveragePercent" to (
+            value.requiredKeyProcessCoveragePercent?.let(::JsonPrimitive) ?: JsonNull
+        ),
+        "fadeSubstitutionAllowed" to JsonPrimitive(value.fadeSubstitutionAllowed),
+        "requiresStateContinuity" to JsonPrimitive(value.requiresStateContinuity),
+        "requiresRelevantAftermath" to JsonPrimitive(value.requiresRelevantAftermath),
+        "instructions" to JsonArray(value.instructions.map { instruction ->
+            JsonObject(linkedMapOf(
+                "id" to JsonPrimitive(instruction.id),
+                "text" to JsonPrimitive(instruction.text),
+            ))
+        }),
+    ))
+}
+
+private fun restoredExpectation(root: JsonObject): ChapterPlanExpectationV2 = ChapterPlanExpectationV2(
+    base = ChapterPlanExpectationV1(
+        chapterId = root.requiredString("chapterId"),
+        chapterIndex = root.requiredInt("chapterIndex"),
+        contextContentHash = root.requiredString("contextContentHash"),
+        contextSourceManifestHash = root.requiredString("contextSourceManifestHash"),
+        knownCharacterIds = root.requiredStrings("knownCharacterIds").toSet(),
+        confirmedAdultFictionalCharacterIds = root.requiredStrings(
+            "confirmedAdultFictionalCharacterIds",
+        ).toSet(),
+        sceneExecutionContract = restoredSceneContract(root.requiredObject("sceneExecutionContract")),
+    ),
+    activationHash = root.requiredString("activationHash"),
+    policyCompilationHash = root.requiredString("policyCompilationHash"),
+    contextEvidenceHash = root.requiredString("contextEvidenceHash"),
+    activeCapabilityIds = root.requiredStrings("activeCapabilityIds").toSet(),
+    activeStateNamespaces = root.requiredStrings("activeStateNamespaces").toSet(),
+    priorObligationIds = root.requiredStrings("priorObligationIds").toSet(),
+)
+
+private fun restoredSceneContract(root: JsonObject): SceneExecutionContract = when (root.requiredString("kind")) {
+    "NOT_APPLICABLE" -> SceneExecutionContract.NotApplicable
+    "ALLOWED" -> SceneExecutionContract.Allowed(
+        automatic = root.requiredBoolean("automatic"),
+        intimacyDetailLevel = root.requiredInt("intimacyDetailLevel"),
+        fadePolicy = FadePolicy.valueOf(root.requiredString("fadePolicy")),
+        strictBodyAndSensoryContinuity = root.requiredBoolean("strictBodyAndSensoryContinuity"),
+        requiredKeyProcessCoveragePercent = root.optionalInt("requiredKeyProcessCoveragePercent"),
+        fadeSubstitutionAllowed = root.requiredBoolean("fadeSubstitutionAllowed"),
+        requiresStateContinuity = root.requiredBoolean("requiresStateContinuity"),
+        requiresRelevantAftermath = root.requiredBoolean("requiresRelevantAftermath"),
+        instructions = root.requiredObjects("instructions").map { item ->
+            PromptInstruction(item.requiredString("id"), item.requiredString("text"))
+        },
+    )
+    else -> throw IllegalArgumentException("Frozen scene execution contract is unsupported.")
+}
+
+private fun strictObject(value: String, label: String): JsonObject =
+    runCatching { Json.parseToJsonElement(value) as JsonObject }
+        .getOrElse { throw IllegalArgumentException("Frozen chapter-plan $label is invalid.") }
+
+private fun JsonObject.requiredString(key: String): String =
+    (this[key] as? JsonPrimitive)?.takeIf(JsonPrimitive::isString)?.contentOrNull
+        ?: throw IllegalArgumentException("Frozen chapter-plan string is invalid: $key")
+
+private fun JsonObject.requiredInt(key: String): Int =
+    (this[key] as? JsonPrimitive)?.takeUnless(JsonPrimitive::isString)?.intOrNull
+        ?: throw IllegalArgumentException("Frozen chapter-plan integer is invalid: $key")
+
+private fun JsonObject.optionalInt(key: String): Int? = when (val value = this[key]) {
+    JsonNull -> null
+    is JsonPrimitive -> value.takeUnless(JsonPrimitive::isString)?.intOrNull
+        ?: throw IllegalArgumentException("Frozen chapter-plan integer is invalid: $key")
+    else -> throw IllegalArgumentException("Frozen chapter-plan integer is invalid: $key")
+}
+
+private fun JsonObject.requiredBoolean(key: String): Boolean =
+    (this[key] as? JsonPrimitive)?.takeUnless(JsonPrimitive::isString)?.booleanOrNull
+        ?: throw IllegalArgumentException("Frozen chapter-plan boolean is invalid: $key")
+
+private fun JsonObject.requiredObject(key: String): JsonObject = this[key] as? JsonObject
+    ?: throw IllegalArgumentException("Frozen chapter-plan object is invalid: $key")
+
+private fun JsonObject.requiredObjects(key: String): List<JsonObject> =
+    (this[key] as? JsonArray)?.map { item ->
+        item as? JsonObject
+            ?: throw IllegalArgumentException("Frozen chapter-plan object list is invalid: $key")
+    } ?: throw IllegalArgumentException("Frozen chapter-plan object list is invalid: $key")
+
+private fun JsonObject.requiredStrings(key: String): List<String> =
+    (this[key] as? JsonArray)?.map { item ->
+        (item as? JsonPrimitive)?.takeIf(JsonPrimitive::isString)?.contentOrNull
+            ?: throw IllegalArgumentException("Frozen chapter-plan string list is invalid: $key")
+    } ?: throw IllegalArgumentException("Frozen chapter-plan string list is invalid: $key")
 
 private fun activationManifestJson(value: ChapterCapabilityActivationV1): String = canonical(JsonObject(linkedMapOf(
     "schemaVersion" to JsonPrimitive(1),
