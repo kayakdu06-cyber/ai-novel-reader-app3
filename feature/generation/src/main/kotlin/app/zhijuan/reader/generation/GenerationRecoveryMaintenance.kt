@@ -3,6 +3,8 @@ package app.zhijuan.reader.generation
 import android.content.Context
 import app.zhijuan.core.database.EncryptedZhijuanDatabaseFactory
 import app.zhijuan.core.database.generation.GenerationControlRepository
+import app.zhijuan.core.database.generation.GenerationIdleJobLeaseCandidate
+import app.zhijuan.core.database.generation.GenerationIdleJobLeaseScan
 import app.zhijuan.core.database.generation.GenerationMaintenanceCandidate
 import app.zhijuan.core.database.generation.GenerationMaintenanceRepository
 import app.zhijuan.core.database.generation.GenerationMaintenanceScan
@@ -18,6 +20,7 @@ import kotlinx.coroutines.CancellationException
 
 internal data class GenerationMaintenanceReport(
     val scanned: Int,
+    val requeuedIdleJobs: Int,
     val requeuedBeforeRequest: Int,
     val auditedWithoutProvider: Int,
     val settledControls: Int,
@@ -32,6 +35,7 @@ internal data class GenerationMaintenanceReport(
         require(
             listOf(
                 scanned,
+                requeuedIdleJobs,
                 requeuedBeforeRequest,
                 auditedWithoutProvider,
                 settledControls,
@@ -45,12 +49,17 @@ internal data class GenerationMaintenanceReport(
     }
 
     override fun toString(): String =
-        "GenerationMaintenanceReport(scanned=$scanned, requeued=$requeuedBeforeRequest, " +
+        "GenerationMaintenanceReport(scanned=$scanned, idleRequeued=$requeuedIdleJobs, " +
+            "requeued=$requeuedBeforeRequest, " +
             "audited=$auditedWithoutProvider, controls=$settledControls, deferred=$deferred, " +
             "stale=$stale, failed=$failed, cleanup=$deletedDrafts, hasMore=$hasMore)"
 }
 
 internal interface GenerationMaintenanceOperations {
+    suspend fun scanIdleJobs(observedAt: Long, limit: Int): GenerationIdleJobLeaseScan
+
+    suspend fun requeueIdleJob(candidate: GenerationIdleJobLeaseCandidate, observedAt: Long)
+
     suspend fun scan(observedAt: Long, limit: Int): GenerationMaintenanceScan
 
     suspend fun requeueBeforeRequest(candidate: GenerationMaintenanceCandidate, observedAt: Long)
@@ -70,13 +79,28 @@ internal class GenerationRecoveryMaintenanceCoordinator(
         limit: Int = GenerationMaintenanceRepository.DEFAULT_BATCH_LIMIT,
     ): GenerationMaintenanceReport {
         require(observedAt >= 0L) { "Maintenance time is invalid." }
+        val idleScan = operations.scanIdleJobs(observedAt, limit)
         val scan = operations.scan(observedAt, limit)
+        var idleRequeued = 0
         var requeued = 0
         var audited = 0
         var controls = 0
         var deferred = 0
         var stale = 0
         var failed = 0
+
+        idleScan.candidates.forEach { candidate ->
+            try {
+                operations.requeueIdleJob(candidate, observedAt)
+                idleRequeued += 1
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: StaleGenerationStateException) {
+                stale += 1
+            } catch (_: Exception) {
+                failed += 1
+            }
+        }
 
         scan.candidates.forEach { candidate ->
             val action = GenerationMaintenancePolicy.decide(
@@ -120,7 +144,8 @@ internal class GenerationRecoveryMaintenanceCoordinator(
             0 to 0
         }
         return GenerationMaintenanceReport(
-            scanned = scan.candidates.size,
+            scanned = idleScan.candidates.size + scan.candidates.size,
+            requeuedIdleJobs = idleRequeued,
             requeuedBeforeRequest = requeued,
             auditedWithoutProvider = audited,
             settledControls = controls,
@@ -129,7 +154,7 @@ internal class GenerationRecoveryMaintenanceCoordinator(
             failed = failed,
             deletedDrafts = cleanup.first,
             skippedDraftCleanup = cleanup.second,
-            hasMore = scan.hasMore,
+            hasMore = idleScan.hasMore || scan.hasMore,
         )
     }
 }
@@ -147,6 +172,19 @@ internal class ProductionGenerationMaintenanceRunner(
             val drafts = GenerationStreamingDraftRepository(handle.database, artifacts)
             GenerationRecoveryMaintenanceCoordinator(
                 object : GenerationMaintenanceOperations {
+                    override suspend fun scanIdleJobs(
+                        observedAt: Long,
+                        limit: Int,
+                    ): GenerationIdleJobLeaseScan =
+                        maintenance.scanExpiredIdleJobLeases(observedAt, limit)
+
+                    override suspend fun requeueIdleJob(
+                        candidate: GenerationIdleJobLeaseCandidate,
+                        observedAt: Long,
+                    ) {
+                        maintenance.requeueExpiredIdleJobLease(candidate, observedAt)
+                    }
+
                     override suspend fun scan(
                         observedAt: Long,
                         limit: Int,

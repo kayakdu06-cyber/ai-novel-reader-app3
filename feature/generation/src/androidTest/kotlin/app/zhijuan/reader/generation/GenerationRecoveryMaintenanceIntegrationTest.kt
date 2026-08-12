@@ -38,6 +38,22 @@ class GenerationRecoveryMaintenanceIntegrationTest {
     private val context = ApplicationProvider.getApplicationContext<Context>()
 
     @Test
+    fun productionRunnerRequeuesExpiredJobClaimedBeforeStageAcquisition() = runBlocking {
+        val fixture = seedRunningFixture(acquireStage = false)
+
+        val report = ProductionGenerationMaintenanceRunner(context)
+            .runBatch(fixture.leaseAt + 60_000L)
+
+        EncryptedZhijuanDatabaseFactory(context).open(ZHIJUAN_DATABASE_NAME).use { handle ->
+            val states = GenerationStateRepository(handle.database)
+            assertEquals(1, report.requeuedIdleJobs)
+            assertEquals(GenerationJobStatus.READY, states.findJob(fixture.jobId)?.status)
+            assertEquals(GenerationStageStatus.READY, states.findStage(fixture.stageId)?.status)
+            assertEquals(null, states.findJob(fixture.jobId)?.leaseToken)
+        }
+    }
+
+    @Test
     fun productionRunnerAtomicallyRequeuesExpiredPreRequestExecutionWithoutAnAttempt() = runBlocking {
         val fixture = seedRunningFixture()
 
@@ -116,7 +132,7 @@ class GenerationRecoveryMaintenanceIntegrationTest {
         }
     }
 
-    private suspend fun seedRunningFixture(): Fixture {
+    private suspend fun seedRunningFixture(acquireStage: Boolean = true): Fixture {
         val suffix = UUID.randomUUID().toString()
         val createdAt = System.currentTimeMillis().coerceAtLeast(1L)
         val leaseAt = createdAt + 2L
@@ -231,7 +247,9 @@ class GenerationRecoveryMaintenanceIntegrationTest {
                 StageEvent.DEPENDENCIES_SATISFIED,
                 createdAt + 1L,
             )
-            states.acquireStageLease(stageId, "maint-stage-worker-$suffix", leaseAt)
+            if (acquireStage) {
+                states.acquireStageLease(stageId, "maint-stage-worker-$suffix", leaseAt)
+            }
         }
         return Fixture(suffix, jobId, stageId, connectionId, leaseAt)
     }

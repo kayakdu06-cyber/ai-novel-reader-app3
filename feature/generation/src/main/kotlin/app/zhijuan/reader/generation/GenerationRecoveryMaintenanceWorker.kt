@@ -23,6 +23,7 @@ internal class GenerationRecoveryMaintenanceWorker(
             .runBatch(System.currentTimeMillis().coerceAtLeast(1L))
         val output = Data.Builder()
             .putInt(KEY_SCANNED, report.scanned)
+            .putInt(KEY_IDLE_REQUEUED, report.requeuedIdleJobs)
             .putInt(KEY_REQUEUED, report.requeuedBeforeRequest)
             .putInt(KEY_AUDITED, report.auditedWithoutProvider)
             .putInt(KEY_CONTROLS, report.settledControls)
@@ -47,6 +48,7 @@ internal class GenerationRecoveryMaintenanceWorker(
 
     companion object {
         internal const val KEY_SCANNED = "scanned"
+        internal const val KEY_IDLE_REQUEUED = "idle_requeued"
         internal const val KEY_REQUEUED = "requeued"
         internal const val KEY_AUDITED = "audited"
         internal const val KEY_CONTROLS = "controls"

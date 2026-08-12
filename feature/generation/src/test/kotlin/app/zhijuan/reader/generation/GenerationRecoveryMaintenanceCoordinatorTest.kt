@@ -1,6 +1,8 @@
 package app.zhijuan.reader.generation
 
 import app.zhijuan.core.database.generation.GenerationLeaseToken
+import app.zhijuan.core.database.generation.GenerationIdleJobLeaseCandidate
+import app.zhijuan.core.database.generation.GenerationIdleJobLeaseScan
 import app.zhijuan.core.database.generation.GenerationMaintenanceCandidate
 import app.zhijuan.core.database.generation.GenerationMaintenanceScan
 import app.zhijuan.core.database.generation.StaleGenerationStateException
@@ -11,6 +13,25 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 
 class GenerationRecoveryMaintenanceCoordinatorTest {
+    @Test
+    fun `expired idle job lease is requeued without opening a stage`() = runBlocking {
+        val idle = GenerationIdleJobLeaseCandidate(
+            jobId = "job-idle",
+            jobStatus = GenerationJobStatus.RUNNING,
+            currentStageId = "stage-idle",
+            currentStageStatus = GenerationStageStatus.READY,
+            observedJobLease = GenerationLeaseToken("runner-idle", 1L),
+            jobLeaseHeartbeatAt = 1L,
+        )
+        val operations = RecordingOperations(emptyList(), idleCandidates = listOf(idle))
+
+        val report = GenerationRecoveryMaintenanceCoordinator(operations).runBatch(70_000L)
+
+        assertEquals(listOf("stage-idle"), operations.idleRequeued)
+        assertEquals(1, report.requeuedIdleJobs)
+        assertEquals(1, report.scanned)
+    }
+
     @Test
     fun `one bounded batch routes safe recovery without any provider operation`() = runBlocking {
         val operations = RecordingOperations(
@@ -108,15 +129,27 @@ class GenerationRecoveryMaintenanceCoordinatorTest {
 
     private class RecordingOperations(
         private val candidates: List<GenerationMaintenanceCandidate>,
+        private val idleCandidates: List<GenerationIdleJobLeaseCandidate> = emptyList(),
         private val cleanup: Pair<Int, Int> = 0 to 0,
         private val staleStageId: String? = null,
         private val failedStageId: String? = null,
         private val cleanupFailure: Boolean = false,
     ) : GenerationMaintenanceOperations {
         val requeued = mutableListOf<String>()
+        val idleRequeued = mutableListOf<String>()
         val audited = mutableListOf<String>()
         val controls = mutableListOf<String>()
         var requeueCalls = 0
+
+        override suspend fun scanIdleJobs(observedAt: Long, limit: Int) =
+            GenerationIdleJobLeaseScan(idleCandidates.take(limit), idleCandidates.size > limit)
+
+        override suspend fun requeueIdleJob(
+            candidate: GenerationIdleJobLeaseCandidate,
+            observedAt: Long,
+        ) {
+            idleRequeued += candidate.currentStageId
+        }
 
         override suspend fun scan(observedAt: Long, limit: Int) =
             GenerationMaintenanceScan(candidates.take(limit), candidates.size > limit)
