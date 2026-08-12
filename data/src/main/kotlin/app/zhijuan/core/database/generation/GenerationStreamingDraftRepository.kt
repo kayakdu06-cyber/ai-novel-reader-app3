@@ -143,7 +143,7 @@ class GenerationStreamingDraftRepository(
             leaseToken = leaseToken,
             initialDraft = null,
             rolloverSource = null,
-            boundChapterPlan = null,
+            boundRouteSnapshot = null,
         )
     }
 
@@ -164,7 +164,42 @@ class GenerationStreamingDraftRepository(
             leaseToken = snapshot.executionLease.stageLeaseToken,
             initialDraft = null,
             rolloverSource = null,
-            boundChapterPlan = snapshot,
+            boundRouteSnapshot = snapshot,
+        )
+    }
+
+    suspend fun prepareBoundInitialChapterDraftBeforeSend(
+        snapshot: GenerationRunnerCurrentStageRouteSnapshot,
+        draft: RequestIntentDraft,
+        budget: RequestBudgetReservationDraft,
+    ): PersistedStreamingRequest = LIFECYCLE_LOCK.withLock {
+        require(snapshot.route in INITIAL_CHAPTER_DRAFT_ROUTES)
+        require(draft.stageId == snapshot.executionLease.stageId)
+        prepareBeforeSendLocked(
+            draft = draft,
+            budget = budget,
+            leaseToken = snapshot.executionLease.stageLeaseToken,
+            initialDraft = null,
+            rolloverSource = null,
+            boundRouteSnapshot = snapshot,
+        )
+    }
+
+    internal suspend fun prepareBoundInitialChapterDraftContinuationBeforeSend(
+        snapshot: GenerationRunnerCurrentStageRouteSnapshot,
+        draft: RequestIntentDraft,
+        budget: RequestBudgetReservationDraft,
+        initialDraft: ByteArray,
+    ): PersistedStreamingRequest = LIFECYCLE_LOCK.withLock {
+        require(snapshot.route in INITIAL_CHAPTER_DRAFT_ROUTES)
+        require(draft.stageId == snapshot.executionLease.stageId)
+        prepareBeforeSendLocked(
+            draft = draft,
+            budget = budget,
+            leaseToken = snapshot.executionLease.stageLeaseToken,
+            initialDraft = initialDraft,
+            rolloverSource = null,
+            boundRouteSnapshot = snapshot,
         )
     }
 
@@ -180,7 +215,7 @@ class GenerationStreamingDraftRepository(
             leaseToken = leaseToken,
             initialDraft = initialDraft,
             rolloverSource = null,
-            boundChapterPlan = null,
+            boundRouteSnapshot = null,
         )
     }
 
@@ -194,7 +229,7 @@ class GenerationStreamingDraftRepository(
         draft = draft,
         budget = budget,
         executionLease = executionLease,
-        boundChapterPlan = null,
+        boundRouteSnapshot = null,
     )
 
     suspend fun prepareBoundChapterPlanDailyRolloverReplacementBeforeSend(
@@ -214,7 +249,24 @@ class GenerationStreamingDraftRepository(
             draft = draft,
             budget = budget,
             executionLease = snapshot.executionLease,
-            boundChapterPlan = snapshot,
+            boundRouteSnapshot = snapshot,
+        )
+    }
+
+    suspend fun prepareBoundInitialChapterDraftDailyRolloverReplacementBeforeSend(
+        parentAttemptId: String,
+        draft: RequestIntentDraft,
+        budget: RequestBudgetReservationDraft,
+        snapshot: GenerationRunnerCurrentStageRouteSnapshot,
+    ): PersistedStreamingRequest {
+        require(snapshot.route in INITIAL_CHAPTER_DRAFT_ROUTES)
+        require(draft.stageId == snapshot.executionLease.stageId)
+        return prepareDailyRolloverReplacementBeforeSendInternal(
+            parentAttemptId = parentAttemptId,
+            draft = draft,
+            budget = budget,
+            executionLease = snapshot.executionLease,
+            boundRouteSnapshot = snapshot,
         )
     }
 
@@ -223,7 +275,7 @@ class GenerationStreamingDraftRepository(
         draft: RequestIntentDraft,
         budget: RequestBudgetReservationDraft,
         executionLease: GenerationRunnerExecutionLeaseSnapshot,
-        boundChapterPlan: GenerationRunnerCurrentStageRouteSnapshot?,
+        boundRouteSnapshot: GenerationRunnerCurrentStageRouteSnapshot?,
     ): PersistedStreamingRequest = LIFECYCLE_LOCK.withLock {
         require(draft.retryParentAttemptId == parentAttemptId) {
             "Daily rollover replacement must name its released parent."
@@ -265,7 +317,7 @@ class GenerationStreamingDraftRepository(
                     descriptor = sourceDescriptor,
                     executionLease = executionLease,
                 ),
-                boundChapterPlan = boundChapterPlan,
+                boundRouteSnapshot = boundRouteSnapshot,
             )
         } finally {
             seed.fill(0)
@@ -278,7 +330,7 @@ class GenerationStreamingDraftRepository(
         leaseToken: GenerationLeaseToken,
         initialDraft: ByteArray?,
         rolloverSource: DailyRolloverArtifactSource?,
-        boundChapterPlan: GenerationRunnerCurrentStageRouteSnapshot?,
+        boundRouteSnapshot: GenerationRunnerCurrentStageRouteSnapshot?,
     ): PersistedStreamingRequest = try {
         require(draft.streamDraftRef == null) {
             "The protected stream draft reference is allocated by the repository."
@@ -309,19 +361,25 @@ class GenerationStreamingDraftRepository(
             }
             val draftWithArtifact = draft.withStreamDraftRef(descriptor.artifactRefId)
             val audit = when {
-                rolloverSource == null && boundChapterPlan == null ->
+                rolloverSource == null && boundRouteSnapshot == null ->
                     auditRepository.persistBeforeSend(
                         draft = draftWithArtifact,
                         budget = budget,
                         leaseToken = leaseToken,
                     )
-                rolloverSource == null ->
+                rolloverSource == null && boundRouteSnapshot?.route in CHAPTER_PLAN_ROUTES ->
                     auditRepository.persistBoundChapterPlanBeforeSend(
                         draft = draftWithArtifact,
                         budget = budget,
-                        snapshot = requireNotNull(boundChapterPlan),
+                        snapshot = requireNotNull(boundRouteSnapshot),
                     )
-                boundChapterPlan == null ->
+                rolloverSource == null ->
+                    auditRepository.persistBoundInitialChapterDraftBeforeSend(
+                        draft = draftWithArtifact,
+                        budget = budget,
+                        snapshot = requireNotNull(boundRouteSnapshot),
+                    )
+                boundRouteSnapshot == null ->
                     auditRepository.persistDailyRolloverReplacementBeforeSend(
                         draft = draftWithArtifact,
                         budget = budget,
@@ -329,11 +387,19 @@ class GenerationStreamingDraftRepository(
                         parentAttemptId = rolloverSource.parentAttemptId,
                         sourceArtifactRefId = rolloverSource.artifactRefId,
                     )
-                else ->
+                boundRouteSnapshot.route in CHAPTER_PLAN_ROUTES ->
                     auditRepository.persistBoundChapterPlanDailyRolloverReplacementBeforeSend(
                         draft = draftWithArtifact,
                         budget = budget,
-                        snapshot = boundChapterPlan,
+                        snapshot = boundRouteSnapshot,
+                        parentAttemptId = requireNotNull(rolloverSource).parentAttemptId,
+                        sourceArtifactRefId = rolloverSource.artifactRefId,
+                    )
+                else ->
+                    auditRepository.persistBoundInitialChapterDraftDailyRolloverReplacementBeforeSend(
+                        draft = draftWithArtifact,
+                        budget = budget,
+                        snapshot = boundRouteSnapshot,
                         parentAttemptId = requireNotNull(rolloverSource).parentAttemptId,
                         sourceArtifactRefId = rolloverSource.artifactRefId,
                     )

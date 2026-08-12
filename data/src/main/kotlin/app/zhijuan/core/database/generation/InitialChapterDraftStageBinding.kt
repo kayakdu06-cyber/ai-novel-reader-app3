@@ -145,7 +145,6 @@ internal class InitialChapterDraftSourceGuard(private val database: app.zhijuan.
     suspend fun requireProviderOpenAllowedIfBound(
         stage: GenerationStageEntity,
         job: GenerationJobEntity,
-        attemptInputHash: String,
     ): Boolean {
         if (stage.phase != GenerationPhase.DRAFT_CHAPTER) return false
         val source = runCatching { InitialChapterDraftStageBinding.parseAndVerify(stage) }.getOrElse {
@@ -156,7 +155,6 @@ internal class InitialChapterDraftSourceGuard(private val database: app.zhijuan.
             if (policy == InitialChapterDraftStageBinding.SOURCE_POLICY_VERSION) throw it
             return false
         }
-        require(HASH.matches(attemptInputHash)) { "Initial chapter draft request binding is invalid." }
         val dao = database.generationDao()
         val planStage = requireNotNull(dao.findStage(source.planStageId)) { "Frozen chapter plan Stage is missing." }
         val planAttempt = requireNotNull(dao.findAttempt(source.planAttemptId)) { "Frozen chapter plan Attempt is missing." }
@@ -207,7 +205,6 @@ internal class InitialChapterDraftSourceGuard(private val database: app.zhijuan.
             ?: throw IllegalArgumentException("Initial chapter draft output field is invalid: $key")
 
     private companion object {
-        val HASH = Regex("[0-9a-f]{64}")
         val PLAN_OUTPUT_KEYS = setOf(
             "schemaVersion", "outputSchemaId", "attemptId", "artifactRefId", "artifactRevision",
             "rawOutputHash", "canonicalPlanHash", "requestBindingHash", "nextStageId",

@@ -17,6 +17,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
 
 class RequestIntentDraft(
     val attemptId: String,
@@ -172,7 +173,23 @@ class GenerationRequestAuditRepository(
         budget: RequestBudgetReservationDraft,
         snapshot: GenerationRunnerCurrentStageRouteSnapshot,
     ): PersistedRequestAudit = database.withTransaction {
-        requireBoundChapterPlanExecution(draft, snapshot)
+        requireBoundRemoteExecution(draft, snapshot, CHAPTER_PLAN_ROUTES, "chapter-plan")
+        persistBeforeSendInternal(
+            draft = draft,
+            budget = budget,
+            leaseToken = snapshot.executionLease.stageLeaseToken,
+            rolloverParentAttemptId = null,
+            rolloverSourceArtifactRefId = null,
+            executionLease = null,
+        )
+    }
+
+    internal suspend fun persistBoundInitialChapterDraftBeforeSend(
+        draft: RequestIntentDraft,
+        budget: RequestBudgetReservationDraft,
+        snapshot: GenerationRunnerCurrentStageRouteSnapshot,
+    ): PersistedRequestAudit = database.withTransaction {
+        requireBoundRemoteExecution(draft, snapshot, INITIAL_CHAPTER_DRAFT_ROUTES, "initial chapter draft")
         persistBeforeSendInternal(
             draft = draft,
             budget = budget,
@@ -208,7 +225,25 @@ class GenerationRequestAuditRepository(
         parentAttemptId: String,
         sourceArtifactRefId: String,
     ): PersistedRequestAudit = database.withTransaction {
-        requireBoundChapterPlanExecution(draft, snapshot)
+        requireBoundRemoteExecution(draft, snapshot, CHAPTER_PLAN_ROUTES, "chapter-plan")
+        persistBeforeSendInternal(
+            draft = draft,
+            budget = budget,
+            leaseToken = snapshot.executionLease.stageLeaseToken,
+            rolloverParentAttemptId = parentAttemptId,
+            rolloverSourceArtifactRefId = sourceArtifactRefId,
+            executionLease = snapshot.executionLease,
+        )
+    }
+
+    internal suspend fun persistBoundInitialChapterDraftDailyRolloverReplacementBeforeSend(
+        draft: RequestIntentDraft,
+        budget: RequestBudgetReservationDraft,
+        snapshot: GenerationRunnerCurrentStageRouteSnapshot,
+        parentAttemptId: String,
+        sourceArtifactRefId: String,
+    ): PersistedRequestAudit = database.withTransaction {
+        requireBoundRemoteExecution(draft, snapshot, INITIAL_CHAPTER_DRAFT_ROUTES, "initial chapter draft")
         persistBeforeSendInternal(
             draft = draft,
             budget = budget,
@@ -538,6 +573,7 @@ class GenerationRequestAuditRepository(
                 attempt.inputHash,
             )
         ) return
+        if (InitialChapterDraftSourceGuard(database).requireProviderOpenAllowedIfBound(stage, job)) return
         ChapterEditRebuildStageRepository(database).requireProviderOpenAllowedIfBound(
             stage = stage,
             job = job,
@@ -553,38 +589,40 @@ class GenerationRequestAuditRepository(
         val stage = requireNotNull(database.generationDao().findStage(stageId)) {
             "Request-intent Stage is missing."
         }
-        if (requiresBoundChapterPlanExecution(stage)) {
+        if (requiresBoundRunnerExecution(stage)) {
             throw StaleGenerationStateException(
-                "A normal chapter-plan request requires the bound runner preparation path.",
+                "This generation request requires the bound runner preparation path.",
             )
         }
     }
 
-    private suspend fun requireBoundChapterPlanExecution(
+    private suspend fun requireBoundRemoteExecution(
         draft: RequestIntentDraft,
         snapshot: GenerationRunnerCurrentStageRouteSnapshot,
+        allowedRoutes: Set<GenerationRunnerStageRoute>,
+        label: String,
     ) {
         val lease = snapshot.executionLease
         if (
-            snapshot.route !in CHAPTER_PLAN_ROUTES ||
+            snapshot.route !in allowedRoutes ||
             draft.stageId != lease.stageId ||
             lease.jobStatus != GenerationJobStatus.RUNNING ||
             lease.stageStatus != app.zhijuan.core.model.GenerationStageStatus.PREPARING ||
             lease.jobLeaseToken.ownerId != lease.stageLeaseToken.ownerId
         ) {
-            throw StaleGenerationStateException("Bound chapter-plan execution snapshot is invalid.")
+            throw StaleGenerationStateException("Bound $label execution snapshot is invalid.")
         }
         val dao = database.generationDao()
         val stage = requireNotNull(dao.findStage(lease.stageId)) {
-            "Bound chapter-plan Stage is missing."
+            "Bound $label Stage is missing."
         }
         val job = requireNotNull(dao.findJob(lease.jobId)) {
-            "Bound chapter-plan Job is missing."
+            "Bound $label Job is missing."
         }
         val jobHeartbeatAt = job.leaseHeartbeatAt
-            ?: throw StaleGenerationStateException("Bound chapter-plan Job heartbeat is missing.")
+            ?: throw StaleGenerationStateException("Bound $label Job heartbeat is missing.")
         val stageHeartbeatAt = stage.leaseHeartbeatAt
-            ?: throw StaleGenerationStateException("Bound chapter-plan Stage heartbeat is missing.")
+            ?: throw StaleGenerationStateException("Bound $label Stage heartbeat is missing.")
         if (
             job.jobId != lease.jobId ||
             stage.stageId != lease.stageId ||
@@ -602,30 +640,37 @@ class GenerationRequestAuditRepository(
             stage.attemptCount !in 0 until stage.maxAttempts ||
             GenerationRunnerStageRouteResolver.resolve(stage) != snapshot.route
         ) {
-            throw StaleGenerationStateException("Bound chapter-plan execution evidence changed.")
+            throw StaleGenerationStateException("Bound $label execution evidence changed.")
         }
         require(
             draft.createdAt >= job.updatedAt &&
                 draft.createdAt >= stage.updatedAt &&
                 draft.createdAt >= jobHeartbeatAt &&
                 draft.createdAt >= stageHeartbeatAt,
-        ) { "Bound chapter-plan request time cannot move backwards." }
+        ) { "Bound $label request time cannot move backwards." }
         if (
             leasePolicy.isExpired(jobHeartbeatAt, draft.createdAt) ||
             leasePolicy.isExpired(stageHeartbeatAt, draft.createdAt)
         ) {
-            throw StaleGenerationStateException("Bound chapter-plan execution lease expired.")
+            throw StaleGenerationStateException("Bound $label execution lease expired.")
         }
     }
 
-    private fun requiresBoundChapterPlanExecution(stage: GenerationStageEntity): Boolean {
-        if (stage.phase != GenerationPhase.BUILD_CHAPTER_PLAN) return false
+    private fun requiresBoundRunnerExecution(stage: GenerationStageEntity): Boolean {
         val root = runCatching {
             BOUND_ROUTE_JSON.parseToJsonElement(stage.inputSourcesJson) as? JsonObject
-        }.getOrNull() ?: return true
-        return "firstChapterBootstrap" !in root
+        }.getOrNull()
+        if (stage.phase == GenerationPhase.BUILD_CHAPTER_PLAN) {
+            return root == null || "firstChapterBootstrap" !in root
+        }
+        return stage.phase == GenerationPhase.DRAFT_CHAPTER &&
+            root?.stringOrNull("sourcePolicyVersion") == InitialChapterDraftStageBinding.SOURCE_POLICY_VERSION
     }
 }
+
+private fun JsonObject.stringOrNull(key: String): String? =
+    (this[key] as? kotlinx.serialization.json.JsonPrimitive)
+        ?.takeIf(kotlinx.serialization.json.JsonPrimitive::isString)?.contentOrNull
 
 private val BOUND_ROUTE_JSON = Json { isLenient = false }
 
