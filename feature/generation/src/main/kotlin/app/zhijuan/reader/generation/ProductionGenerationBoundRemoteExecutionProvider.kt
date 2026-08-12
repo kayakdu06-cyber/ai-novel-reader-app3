@@ -54,6 +54,9 @@ internal class ProductionGenerationBoundRemoteExecutionProvider(
         require(requestedAt >= 0L)
         val config = configs.load(snapshot, requestedAt)
         require(config.protocolId == ProviderProtocol.OPENAI_CHAT_COMPAT.name)
+        require(config.requestMaximumTokens >= MINIMUM_OUTPUT_TOKENS) {
+            "Confirmed request token limit is too small for generation."
+        }
         val profile = ProviderConnectionProfile.create(
             connectionId = config.connectionId,
             protocol = ProviderProtocol.OPENAI_CHAT_COMPAT,

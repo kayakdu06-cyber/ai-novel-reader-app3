@@ -3,6 +3,10 @@ package app.zhijuan.feature.generation
 import app.zhijuan.core.task.ArcPlanningWindowSelection
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.Test
 
 class ArcWindowPlanV2ContractTest {
@@ -25,6 +29,43 @@ class ArcWindowPlanV2ContractTest {
         val result = ArcWindowPlanV2BusinessValidator.validate(plan, expectation()) as ArcWindowV2BusinessResult.Invalid
         assertTrue(result.issues.any { it.code == ArcWindowV2IssueCode.CHAPTER_CONTRACT_SEQUENCE_MISMATCH })
         assertTrue(ArcWindowPlanningOutputParser().parse(validV1().toByteArray()) is PlanningOutputValidationResult.Valid)
+    }
+
+    @Test
+    fun `v2 chapter contracts remain in persisted chapter authority`() {
+        val plan = (ArcWindowPlanV2Parser().parse(validV2().toByteArray())
+            as PlanningOutputValidationResult.Valid).value
+        val draft = ArcWindowPlanningPersistenceMapper.map(
+            plan = plan.basePlan,
+            chapterContracts = plan.chapterContracts,
+            expected = expectation().base,
+            ids = ArcWindowPlanningPersistenceIds(
+                bookId = "book-1",
+                masterOutlineRevisionId = "master-1",
+                parentOutlineRevisionId = "parent-1",
+                parentRevisionNo = 1,
+                outlineRevisionId = "window-revision-1",
+                generationStageId = "stage-1",
+            ),
+            committedAt = 1L,
+            schemaId = ArcWindowPlanOutputContractV2.schemaId,
+            policyVersion = "zhijuan.arc-window-policy.v2",
+            canonicalPlanJson = plan.canonicalJson,
+            canonicalPlanHash = plan.contentHash,
+        )
+        assertEquals(plan.canonicalJson, draft.revision.summaryJson)
+        assertEquals(plan.contentHash, draft.revision.contentHash)
+        val chapter = draft.nodes.single { it.plannedChapterIndex == 1 }
+        val root = Json.parseToJsonElement(chapter.planJson).jsonObject
+        assertEquals("完成第一次选择", root.getValue("objective").jsonPrimitive.content)
+        assertEquals(
+            listOf("core-narrative"),
+            root.getValue("capabilityHints").jsonArray.map { it.jsonPrimitive.content },
+        )
+        assertEquals(
+            listOf("promise-1"),
+            root.getValue("obligationIds").jsonArray.map { it.jsonPrimitive.content },
+        )
     }
 
     private fun expectation() = ArcWindowExpectationV2(

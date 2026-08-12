@@ -4,6 +4,8 @@ import android.content.Context
 import app.zhijuan.core.database.EncryptedZhijuanDatabaseFactory
 import app.zhijuan.core.database.generation.GenerationControlRepository
 import app.zhijuan.core.database.generation.GenerationControlResult
+import app.zhijuan.core.database.generation.GenerationContinuationPreparationRepository
+import app.zhijuan.core.database.generation.GenerationContinuationPreparationResult
 import app.zhijuan.core.database.generation.GenerationStartPersistenceFailure
 import app.zhijuan.core.database.generation.GenerationStartPersistenceRepository
 import app.zhijuan.core.database.generation.GenerationStartPersistenceResult
@@ -42,6 +44,9 @@ internal class ForegroundGenerationGateway @Inject constructor(
     private val startRepository by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         GenerationStartPersistenceRepository(databaseHandle.database)
     }
+    private val continuations by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        GenerationContinuationPreparationRepository(databaseHandle.database)
+    }
     private val runtime by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         GenerationPersistentRuntimeFactoryV1.create(
             database = databaseHandle.database,
@@ -56,7 +61,31 @@ internal class ForegroundGenerationGateway @Inject constructor(
     override suspend fun runJob(
         jobId: String,
         runnerOwnerId: String,
-    ): GenerationPersistentRunResult = runtime.runner.runJob(jobId, runnerOwnerId)
+    ): GenerationPersistentRunResult {
+        var currentJobId = jobId
+        var executedStages = 0
+        repeat(MAX_BOOTSTRAP_JOBS) { ordinal ->
+            val result = runtime.runner.runJob(currentJobId, "$runnerOwnerId:$ordinal")
+            executedStages += result.executedStageCount
+            if (result.disposition != app.zhijuan.feature.generation.GenerationPersistentRunDisposition.COMPLETED) {
+                return result.copy(executedStageCount = executedStages)
+            }
+            when (
+                val continuation = continuations.prepareAfterCompleted(
+                    currentJobId,
+                    System.currentTimeMillis().coerceAtLeast(0L),
+                )
+            ) {
+                is GenerationContinuationPreparationResult.Prepared -> currentJobId = continuation.jobId
+                GenerationContinuationPreparationResult.NotReady ->
+                    return result.copy(executedStageCount = executedStages)
+            }
+        }
+        return GenerationPersistentRunResult(
+            app.zhijuan.feature.generation.GenerationPersistentRunDisposition.STAGE_LIMIT_REACHED,
+            executedStages,
+        )
+    }
 
     override suspend fun start(request: GenerationStartRequest): GenerationStartResult = try {
         when (val persisted = startRepository.start(request)) {
@@ -92,34 +121,57 @@ internal class ForegroundGenerationGateway @Inject constructor(
         GenerationStartResult.Failed(GenerationStartFailure.START_TEMPORARILY_UNAVAILABLE)
     }
 
-    override suspend fun findJob(jobId: String): ForegroundGenerationSnapshot? =
-        stateRepository.findJob(jobId)?.let { job ->
-            ForegroundGenerationSnapshot(job.status, job.updatedAt)
+    override suspend fun findJob(jobId: String): ForegroundGenerationSnapshot? {
+        var current = stateRepository.findJob(jobId) ?: return null
+        repeat(MAX_BOOTSTRAP_JOBS - 1) {
+            if (current.status != GenerationJobStatus.COMPLETED) return ForegroundGenerationSnapshot(
+                current.status,
+                current.updatedAt,
+            )
+            val next = continuations.prepareAfterCompleted(
+                current.jobId,
+                maxOf(System.currentTimeMillis().coerceAtLeast(0L), current.updatedAt),
+            ) as? GenerationContinuationPreparationResult.Prepared ?: return ForegroundGenerationSnapshot(
+                current.status,
+                current.updatedAt,
+            )
+            current = requireNotNull(stateRepository.findJob(next.jobId))
         }
+        return ForegroundGenerationSnapshot(current.status, current.updatedAt)
+    }
 
     override suspend fun requestUserPause(
         jobId: String,
         requestedAt: Long,
-    ): GenerationControlResult = controlRepository.requestPause(
-        jobId = jobId,
-        requestedAt = monotonicControlTime(jobId, requestedAt),
-    )
+    ): GenerationControlResult {
+        val leafJobId = activeLeafJobId(jobId)
+        return controlRepository.requestPause(
+            jobId = leafJobId,
+            requestedAt = monotonicControlTime(leafJobId, requestedAt),
+        )
+    }
 
     override suspend fun requestStop(
         jobId: String,
         requestedAt: Long,
-    ): GenerationControlResult = controlRepository.requestStop(
-        jobId = jobId,
-        requestedAt = monotonicControlTime(jobId, requestedAt),
-    )
+    ): GenerationControlResult {
+        val leafJobId = activeLeafJobId(jobId)
+        return controlRepository.requestStop(
+            jobId = leafJobId,
+            requestedAt = monotonicControlTime(leafJobId, requestedAt),
+        )
+    }
 
     override suspend fun requestSystemTimeoutPause(
         jobId: String,
         requestedAt: Long,
-    ): GenerationControlResult = controlRepository.requestSystemForegroundTimeoutPause(
-        jobId = jobId,
-        requestedAt = monotonicControlTime(jobId, requestedAt),
-    )
+    ): GenerationControlResult {
+        val leafJobId = activeLeafJobId(jobId)
+        return controlRepository.requestSystemForegroundTimeoutPause(
+            jobId = leafJobId,
+            requestedAt = monotonicControlTime(leafJobId, requestedAt),
+        )
+    }
 
     override suspend fun findGenerationStatus(jobId: String): GenerationJobStatus? =
         findJob(jobId)?.status
@@ -136,4 +188,21 @@ internal class ForegroundGenerationGateway @Inject constructor(
 
     private suspend fun monotonicControlTime(jobId: String, requestedAt: Long): Long =
         maxOf(requestedAt, requireNotNull(stateRepository.findJob(jobId)).updatedAt)
+
+    private suspend fun activeLeafJobId(rootJobId: String): String {
+        var current = requireNotNull(stateRepository.findJob(rootJobId))
+        repeat(MAX_BOOTSTRAP_JOBS - 1) {
+            if (current.status != GenerationJobStatus.COMPLETED) return current.jobId
+            val continuation = continuations.prepareAfterCompleted(
+                current.jobId,
+                maxOf(System.currentTimeMillis().coerceAtLeast(0L), current.updatedAt),
+            ) as? GenerationContinuationPreparationResult.Prepared ?: return current.jobId
+            current = requireNotNull(stateRepository.findJob(continuation.jobId))
+        }
+        return current.jobId
+    }
+
+    private companion object {
+        const val MAX_BOOTSTRAP_JOBS = 3
+    }
 }

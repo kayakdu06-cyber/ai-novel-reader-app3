@@ -58,7 +58,7 @@ class ArcWindowPlanV2Parser(private val validator: StructuredOutputValidator = S
             is StructuredOutputValidationResult.Valid -> PlanningOutputValidationResult.Valid(result.output.withDocument(::toPlan))
         }
 
-    private fun toPlan(document: JsonObject): ArcWindowPlanV2 {
+    internal fun toPlan(document: JsonObject): ArcWindowPlanV2 {
         val v1Document = JsonObject(ARC_V1_KEYS.associateWith(document::getValue).toMutableMap().apply {
             this["schemaVersion"] = JsonPrimitive(1)
             this["policyVersion"] = JsonPrimitive(app.zhijuan.core.task.ArcPlanningWindowPolicyV1.POLICY_VERSION)
@@ -82,6 +82,27 @@ class ArcWindowPlanV2Parser(private val validator: StructuredOutputValidator = S
             canonicalJson = canonical,
             contentHash = hashArc(canonical),
         )
+    }
+}
+
+internal class BoundArcWindowPlanV2OutputContract(
+    private val expectation: ArcWindowExpectationV2,
+    private val parser: ArcWindowPlanV2Parser = ArcWindowPlanV2Parser(),
+) : StructuredOutputContract {
+    override val schemaId = ArcWindowPlanOutputContractV2.schemaId
+    override val currentSchemaVersion = ArcWindowPlanOutputContractV2.currentSchemaVersion
+    override val providerSchema = ArcWindowPlanOutputContractV2.providerSchema
+    override val limits = ArcWindowPlanOutputContractV2.limits
+
+    override fun validate(document: JsonObject): List<StructuredOutputIssue> {
+        val structural = ArcWindowPlanOutputContractV2.validate(document)
+        if (structural.isNotEmpty()) return structural
+        return when (val result = ArcWindowPlanV2BusinessValidator.validate(parser.toPlan(document), expectation)) {
+            is ArcWindowV2BusinessResult.Valid -> emptyList()
+            is ArcWindowV2BusinessResult.Invalid -> result.issues.map { issue ->
+                StructuredOutputIssue(StructuredOutputIssueCode.VALUE_INVALID, "$.${issue.reference}")
+            }
+        }
     }
 }
 
@@ -130,7 +151,8 @@ object ArcWindowPlanOutputContractV2 : StructuredOutputContract {
                 if (item.stringArcOrNull("objective").isNullOrBlank()) add(StructuredOutputIssue(StructuredOutputIssueCode.VALUE_INVALID, "$path.objective"))
                 listOf("capabilityHints", "obligationIds", "prohibitedRepetitions").forEach { key ->
                     val values = item[key] as? JsonArray
-                    if (values == null || values.size > 24 || values.any { (it as? JsonPrimitive)?.contentOrNull.isNullOrBlank() }) {
+                    val maximum = if (key == "capabilityHints") 16 else 24
+                    if (values == null || values.size > maximum || values.any { (it as? JsonPrimitive)?.contentOrNull.isNullOrBlank() }) {
                         add(StructuredOutputIssue(StructuredOutputIssueCode.VALUE_INVALID, "$path.$key"))
                     }
                 }

@@ -105,6 +105,25 @@ object ChapterPlanV2RequestFactory {
             sha256(policyCompilationPayloadJson(selection, instructions))
         }
 
+    /** Freezes local authority before Provider-open without fabricating a model or request. */
+    fun freezeAuthority(
+        expectation: ChapterPlanExpectationV2,
+        selection: ChapterPromptPolicySelectionV1,
+    ): ChapterPlanV2FrozenSources = selection.withPromptContent { creativeIntent, instructions ->
+        val expectationJson = expectationJson(expectation, creativeIntent)
+        val activationJson = activationManifestJson(selection.activation)
+        val compilationHash = sha256(policyCompilationPayloadJson(selection, instructions))
+        require(expectation.policyCompilationHash == compilationHash)
+        ChapterPlanV2FrozenSources.freeze(
+            expectationJson = expectationJson,
+            activationManifestJson = activationJson,
+            activationHash = expectation.activationHash,
+            policyManifestJson = policyManifestJson(selection, instructions, compilationHash),
+            policyCompilationHash = compilationHash,
+            contextEvidenceHash = expectation.contextEvidenceHash,
+        )
+    }
+
     fun create(spec: ChapterPlanV2RequestSpec): BoundChapterPlanV2Request =
         spec.policySelection.withPromptContent { creativeIntent, instructions ->
             createBound(spec, creativeIntent, instructions)

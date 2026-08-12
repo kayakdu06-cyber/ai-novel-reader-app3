@@ -35,6 +35,10 @@ sealed interface GenerationRunnerRegisteredExecutionResultV1 {
         val result: InitialPlanningExecutionResult,
     ) : GenerationRunnerRegisteredExecutionResultV1
 
+    data class ArcWindow(
+        val result: ArcWindowExecutionResult,
+    ) : GenerationRunnerRegisteredExecutionResultV1
+
     data class FinalChapterCommit(
         val result: ChapterFinalCandidateCommitStageExecutionResultV1,
     ) : GenerationRunnerRegisteredExecutionResultV1
@@ -65,6 +69,7 @@ internal object GenerationRunnerExecutorRegistryPolicyV1 {
         GenerationRunnerStageRoute.INITIAL_STORY_SEED_V1,
         GenerationRunnerStageRoute.INITIAL_STORY_BIBLE_V1,
         GenerationRunnerStageRoute.INITIAL_MASTER_OUTLINE_V1,
+        GenerationRunnerStageRoute.ARC_WINDOW_V1,
         GenerationRunnerStageRoute.FINAL_CHAPTER_COMMIT_V3,
         GenerationRunnerStageRoute.CHAPTER_CONTEXT_ASSEMBLY_V1,
         GenerationRunnerStageRoute.CHAPTER_PLAN_V2,
@@ -80,6 +85,7 @@ internal object GenerationRunnerExecutorRegistryPolicyV1 {
 /** Finite registry: no phase-based dispatch and no fallback executor. */
 class GenerationRunnerExecutorRegistryV1(
     private val initialPlanningExecutor: InitialPlanningBoundExecutor,
+    private val arcWindowExecutor: ArcWindowBoundExecutor,
     private val finalCommitExecutor: ChapterFinalCandidateCommitStageExecutorV1,
     private val contextAssemblyExecutor: ChapterContextAssemblyBoundExecutorV1,
     private val chapterPlanV2Executor: ChapterPlanV2BoundExecutor,
@@ -115,6 +121,10 @@ class GenerationRunnerExecutorRegistryV1(
             -> GenerationRunnerRegisteredExecutionResultV1.InitialPlanning(
                 initialPlanningExecutor.executeBound(snapshot, requestedAt),
             )
+            GenerationRunnerStageRoute.ARC_WINDOW_V1 ->
+                GenerationRunnerRegisteredExecutionResultV1.ArcWindow(
+                    arcWindowExecutor.executeBound(snapshot, requestedAt),
+                )
             GenerationRunnerStageRoute.FINAL_CHAPTER_COMMIT_V3 ->
                 GenerationRunnerRegisteredExecutionResultV1.FinalChapterCommit(
                     finalCommitExecutor.executeBound(

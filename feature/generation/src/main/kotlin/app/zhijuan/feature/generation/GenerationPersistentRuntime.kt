@@ -2,8 +2,12 @@ package app.zhijuan.feature.generation
 
 import app.zhijuan.core.database.ZhijuanDatabase
 import app.zhijuan.core.database.generation.ChapterCandidateArtifactSealRepositoryV1
+import app.zhijuan.core.database.generation.ArcWindowPlanningCommitRepository
+import app.zhijuan.core.database.generation.ArcWindowPromptSourcesRepository
 import app.zhijuan.core.database.generation.ChapterConsistencyOutcomeRepositoryV1
 import app.zhijuan.core.database.generation.ChapterContextAssemblyRepository
+import app.zhijuan.core.database.generation.ChapterPlanAuthoritySourceRepository
+import app.zhijuan.core.database.generation.ChapterPlanV2StageUpgradeRepository
 import app.zhijuan.core.database.generation.ChapterDraftContinuationRepository
 import app.zhijuan.core.database.generation.ChapterFinalCandidateCommitRepositoryV1
 import app.zhijuan.core.database.generation.ChapterFinalCandidateRecoveryRepository
@@ -118,11 +122,24 @@ object GenerationPersistentRuntimeFactoryV1 {
                 commits = InitialPlanningCommitRepository(database, artifactStore),
                 clock = clock,
             ),
+            arcWindowExecutor = PersistentArcWindowBoundExecutorV1(
+                sources = ArcWindowBoundSourceLoader.from(ArcWindowPromptSourcesRepository(database)),
+                remote = remote,
+                requests = requests,
+                executor = audited,
+                validation = validation,
+                commits = ArcWindowPlanningCommitRepository(database, artifactStore),
+                clock = clock,
+            ),
             finalCommitExecutor = ChapterFinalCandidateCommitStageExecutorV1(
                 generationStateRepository = states,
                 finalCommitCoordinator = finalCommitCoordinator,
             ),
-            contextAssemblyExecutor = ChapterContextAssemblyRepository(database),
+            contextAssemblyExecutor = PersistentChapterContextAndPlanBindingExecutorV1(
+                contextExecutor = ChapterContextAssemblyRepository(database),
+                authoritySources = ChapterPlanAuthoritySourceRepository(database),
+                upgrades = ChapterPlanV2StageUpgradeRepository(database),
+            ),
             chapterPlanV2Executor = planExecutor,
             initialChapterDraftExecutor = initialDraftExecutor,
             chapterPostAnalysisExecutor = postAnalysisExecutor,
