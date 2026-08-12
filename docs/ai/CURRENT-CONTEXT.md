@@ -5,6 +5,7 @@
 
 ## 2026-08-11 开发路线重排
 
+- 唯一产品与开发总导航：`docs/MASTER-DIRECTORY.md`；完整登记 106 个功能和 124 个任务定义，当前执行队列仍以 30 号文档为准。
 - 当前权威总规划：`docs/27-DEVELOPMENT-MASTER-PLAN-V3.md`。
 - 创作策略与组合能力：`docs/28-WRITING-POLICY-PACK-SPEC.md`。
 - 第一份可亲手验证 APK：`docs/29-HANDS-ON-VERTICAL-SLICE-SPEC.md`。
