@@ -1,6 +1,6 @@
 # TASK-125 任务包：普通章节规划闭环
 
-> 状态：执行中；日期：2026-08-12
+> 状态：完成；日期：2026-08-12
 
 ## 任务身份
 
@@ -19,16 +19,16 @@
 
 ## 批次
 
-- [ ] A / `:data`：v2 冻结来源、route 扩展、原子提交和重放。
-- [ ] B / `:feature:generation`：request factory、Fake 执行、严格解析和有限 registry。
-- [ ] C / 验收：定向测试、模块边界、安全扫描、报告、提交并推送。
+- [x] A / `:data`：v2 冻结来源、route 扩展、原子提交和重放。
+- [x] B / `:feature:generation`：request factory、Fake 执行、严格解析和有限 registry。
+- [x] C / 验收：定向测试、模块边界、安全扫描、报告和提交；远端同步见工作报告。
 
 ## 最小验收
 
-- [ ] Provider-open 复用并重验 destination、budget、当前双租约和来源哈希。
-- [ ] 一个参数化负例覆盖 schema、人物、activation、义务和 plan hash 错配时零提交。
-- [ ] 成功与 replay 后都只有一个 initial DRAFT。
-- [ ] registry 拒绝所有尚未实现的 route。
+- [x] Provider-open 复用并重验 destination、budget、当前双租约和来源哈希。
+- [x] 一个参数化负例覆盖 schema、人物、activation、义务和 plan hash 错配时零提交。
+- [x] 成功与 replay 后都只有一个 initial DRAFT。
+- [x] registry 拒绝所有尚未实现的 route。
 
 ## 明确排除
 

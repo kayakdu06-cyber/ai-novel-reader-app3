@@ -175,6 +175,8 @@ TASK-121～133 按精简后范围约 82–132 个有效工程小时。估算不�
 
 ### TASK-125 普通 chapter-plan 收口
 
+状态：已完成（2026-08-12）。`chapter-plan.v2` 已复用原有 exact-token、目的地、预算和双租约门禁；冻结来源、Fake 严格执行、原子计划提交、唯一 initial DRAFT 与有限 registry 已接通。相关 JVM 32/32、两台模拟器事务用例各 1/1、模块边界和安全扫描通过。
+
 模块批次：
 
 1. `:data`：只补当前 route/事务确实缺少的冻结和提交能力；
@@ -205,6 +207,8 @@ TASK-121～133 按精简后范围约 82–132 个有效工程小时。估算不�
 - registry 仍拒绝所有未完成 route。
 
 ### TASK-126 initial draft
+
+状态：下一任务。
 
 模块批次：先 `:data` 的 exact-token/持久边界，再 `:feature:generation` 的流式执行；现有 ProviderAdapter 能满足合同就禁止修改 `:provider`。
 
