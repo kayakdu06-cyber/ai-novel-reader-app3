@@ -3,6 +3,9 @@ package app.zhijuan.reader
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -14,6 +17,12 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import app.zhijuan.core.contract.GenerationBudgetConfirmation
+import app.zhijuan.core.contract.GenerationStartFailure
+import app.zhijuan.core.contract.GenerationStartRequest
+import app.zhijuan.core.contract.GenerationStartResult
+import app.zhijuan.core.contract.GenerationStarter
+import app.zhijuan.core.model.ExternalDataDestinationBindingV1
 import app.zhijuan.reader.connection.SavedConnectionSnapshot
 import app.zhijuan.reader.creation.MinimalBookDraft
 import app.zhijuan.reader.creation.BookCreationActions
@@ -38,12 +47,14 @@ enum class FirstLaunchDestination {
     CONNECTION_LIST,
     CREATE_BOOK,
     COST_CONFIRMATION,
+    GENERATING,
 }
 
 @Composable
 fun ZhijuanApp(
     connectionGateway: ConnectionGatewayActions,
     bookCreationActions: BookCreationActions? = null,
+    generationStarter: GenerationStarter? = null,
     initialDestination: FirstLaunchDestination? = null,
 ) {
     var destination by rememberSaveable {
@@ -59,6 +70,7 @@ fun ZhijuanApp(
     var loadedConfirmation by remember { mutableStateOf<BookCreationConfirmation?>(null) }
     var confirmationLoadFailed by remember { mutableStateOf(false) }
     var usageConfirmationMessage by rememberSaveable { mutableStateOf<String?>(null) }
+    var generationStartInProgress by remember { mutableStateOf(false) }
     val saveableStateHolder = rememberSaveableStateHolder()
     val coroutineScope = rememberCoroutineScope()
 
@@ -208,27 +220,103 @@ fun ZhijuanApp(
                 loadedConfirmation == null -> CostConfirmationLoadingScreen()
                 else -> CostConfirmationScreen(
                     confirmation = requireNotNull(loadedConfirmation),
+                    connectionName = currentConnection?.displayName,
+                    normalizedDestination = currentConnection?.let { connection ->
+                        runCatching {
+                            ExternalDataDestinationBindingV1.create(
+                                baseUrl = connection.baseUrl,
+                                protocolId = connection.protocolId,
+                            ).normalizedDestination
+                        }.getOrNull()
+                    },
                     onBack = {
                         creationMessage = "创建内容已经保存在本机，尚未开始生成。"
                         destination = FirstLaunchDestination.CREATE_BOOK
                     },
                     onConfirm = { request ->
                         val loaded = loadedConfirmation
-                        usageConfirmationMessage = if (
-                            loaded != null &&
-                            request.bookId == loaded.bookId &&
-                            request.snapshotId == loaded.snapshotId &&
-                            request.snapshotContentHash == loaded.contentHash
+                        val connection = currentConnection
+                        val starter = generationStarter
+                        if (loaded == null || connection == null || starter == null ||
+                            request.bookId != loaded.bookId ||
+                            request.snapshotId != loaded.snapshotId ||
+                            request.snapshotContentHash != loaded.contentHash ||
+                            connection.connectionId != loaded.connectionId ||
+                            connection.selectedModelId != loaded.modelId
                         ) {
-                            "信息已确认。生成执行器尚未接入，当前没有调用模型。"
-                        } else {
-                            "确认信息已经变化，请返回创建页后再试。没有调用模型。"
+                            usageConfirmationMessage = "确认信息已经变化，请返回创建页后再试。没有调用模型。"
+                        } else if (!generationStartInProgress) {
+                            generationStartInProgress = true
+                            usageConfirmationMessage = null
+                            coroutineScope.launch {
+                                val result = runCatching {
+                                    val destination = ExternalDataDestinationBindingV1.create(
+                                        baseUrl = connection.baseUrl,
+                                        protocolId = connection.protocolId,
+                                    )
+                                    starter.start(
+                                        GenerationStartRequest(
+                                            bookId = loaded.bookId,
+                                            creationSnapshotId = loaded.snapshotId,
+                                            creationSnapshotContentHash = loaded.contentHash,
+                                            connectionId = loaded.connectionId,
+                                            modelId = loaded.modelId,
+                                            normalizedDestination = destination.normalizedDestination,
+                                            destinationProtocolId = destination.protocolId,
+                                            destinationDisclosureVersion = destination.disclosureVersion,
+                                            destinationBindingHash = destination.bindingHash,
+                                            budget = GenerationBudgetConfirmation(
+                                                requestTokenHardLimit = request.requestTokenHardLimit,
+                                                bookTokenHardLimit = request.bookTokenHardLimit,
+                                                dailyTokenHardLimit = request.dailyTokenHardLimit,
+                                                dailyZoneId = request.dailyZoneId,
+                                                priceUnknownAccepted = true,
+                                            ),
+                                            confirmedAt = System.currentTimeMillis().coerceAtLeast(0L),
+                                        ),
+                                    )
+                                }.getOrElse {
+                                    GenerationStartResult.Failed(
+                                        GenerationStartFailure.START_TEMPORARILY_UNAVAILABLE,
+                                    )
+                                }
+                                when (result) {
+                                    is GenerationStartResult.Started ->
+                                        destination = FirstLaunchDestination.GENERATING
+                                    is GenerationStartResult.Failed ->
+                                        usageConfirmationMessage = result.reason.userMessage()
+                                }
+                                generationStartInProgress = false
+                            }
                         }
                     },
+                    isConfirming = generationStartInProgress,
                     confirmationMessage = usageConfirmationMessage,
                 )
             }
+            FirstLaunchDestination.GENERATING -> GeneratingBookScreen()
             }
         }
     }
+}
+
+@Composable
+private fun GeneratingBookScreen() {
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.background,
+    ) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text("正在生成，完成的章节稍后会出现在书架中")
+        }
+    }
+}
+
+private fun GenerationStartFailure.userMessage(): String = when (this) {
+    GenerationStartFailure.BOOK_NOT_FOUND,
+    GenerationStartFailure.CONFIRMATION_CHANGED -> "创建信息已经变化，请返回创建页后再试。"
+    GenerationStartFailure.CONNECTION_CHANGED,
+    GenerationStartFailure.DESTINATION_CONFIRMATION_REQUIRED -> "连接信息已经变化，请重新确认连接。"
+    GenerationStartFailure.BUDGET_CONFIRMATION_INVALID -> "用量上限无效，请返回后重新确认。"
+    GenerationStartFailure.START_TEMPORARILY_UNAVAILABLE -> "暂时无法开始，请稍后再试。"
 }

@@ -16,6 +16,9 @@ import androidx.compose.ui.test.performTextInput
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.zhijuan.provider.common.ProviderProtocol
 import app.zhijuan.core.model.BookLengthMode
+import app.zhijuan.core.contract.GenerationStartRequest
+import app.zhijuan.core.contract.GenerationStartResult
+import app.zhijuan.core.contract.GenerationStarter
 import app.zhijuan.reader.FirstLaunchDestination
 import app.zhijuan.reader.ZhijuanApp
 import app.zhijuan.reader.connection.ConnectionCommitResult
@@ -41,10 +44,12 @@ class BookCreationAppFlowTest {
     @Test
     fun startPersistsOnceThenLoadsFrozenConfirmationWithoutFakePrice() {
         val actions = RecordingCreationActions()
+        val starter = RecordingGenerationStarter()
         composeRule.setContent {
             ZhijuanApp(
                 connectionGateway = SingleConnectionGateway,
                 bookCreationActions = actions,
+                generationStarter = starter,
                 initialDestination = FirstLaunchDestination.CREATE_BOOK,
             )
         }
@@ -64,16 +69,18 @@ class BookCreationAppFlowTest {
         composeRule.onNodeWithText("雨夜重逢", substring = true).assertIsDisplayed()
         composeRule.onNodeWithText("300 章", substring = true).assertIsDisplayed()
         composeRule.onNodeWithText("deepseek-chat").assertIsDisplayed()
+        composeRule.onNodeWithText("DeepSeek 写作").assertIsDisplayed()
+        composeRule.onNodeWithText("https://api.deepseek.com:443").assertIsDisplayed()
         composeRule.onNodeWithTag("cost-estimate-unavailable").assertIsDisplayed()
         composeRule.onAllNodesWithText("0 元").assertCountEquals(0)
         composeRule.onNodeWithTag("confirm-usage").performClick()
-        composeRule.onNodeWithText("当前没有调用模型", substring = true).assertIsDisplayed()
-        composeRule.onNodeWithTag("confirm-usage").assertIsNotEnabled()
+        composeRule.onNodeWithText("正在生成", substring = true).assertIsDisplayed()
         composeRule.runOnIdle {
             assertEquals(1, actions.callCount)
             assertEquals(1, actions.loadCallCount)
             assertEquals(300, actions.lastDraft?.minimumChapterCount)
             assertEquals(300, actions.lastDraft?.targetChapterCount)
+            assertEquals(1, starter.callCount)
         }
     }
 
@@ -110,6 +117,37 @@ class BookCreationAppFlowTest {
             assertEquals(1, actions.callCount)
             assertEquals(1, actions.loadCallCount)
         }
+    }
+
+    @Test
+    fun startFailureStaysOnConfirmationAndShowsRecoverableChineseMessage() {
+        val actions = RecordingCreationActions()
+        val starter = RecordingGenerationStarter(
+            GenerationStartResult.Failed(
+                app.zhijuan.core.contract.GenerationStartFailure.CONNECTION_CHANGED,
+            ),
+        )
+        composeRule.setContent {
+            ZhijuanApp(
+                connectionGateway = SingleConnectionGateway,
+                bookCreationActions = actions,
+                generationStarter = starter,
+                initialDestination = FirstLaunchDestination.CREATE_BOOK,
+            )
+        }
+        composeRule.waitUntil(5_000) {
+            composeRule.onAllNodesWithTag("story-idea").fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithTag("story-idea").performTextInput("失败时不能跳过确认。")
+        composeRule.onNodeWithTag("create-book-list").performScrollToNode(hasTestTag("start-book"))
+        composeRule.onNodeWithTag("start-book").performClick()
+        composeRule.waitUntil(5_000) {
+            composeRule.onAllNodesWithTag("confirm-usage").fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithTag("confirm-usage").performClick()
+        composeRule.onNodeWithText("连接信息已经变化", substring = true).assertIsDisplayed()
+        composeRule.onAllNodesWithText("正在生成", substring = true).assertCountEquals(0)
+        composeRule.runOnIdle { assertEquals(1, starter.callCount) }
     }
 
     @Test
@@ -180,8 +218,21 @@ class BookCreationAppFlowTest {
                 minimumChapterCount = 300,
                 targetChapterCount = 300,
                 modelId = "deepseek-chat",
+                connectionId = "connection-1",
                 contentHash = "a".repeat(64),
             )
+        }
+    }
+
+    private class RecordingGenerationStarter(
+        private val result: GenerationStartResult? = null,
+    ) : GenerationStarter {
+        @Volatile
+        var callCount = 0
+
+        override suspend fun start(request: GenerationStartRequest): GenerationStartResult {
+            callCount += 1
+            return result ?: GenerationStartResult.Started(request.bookId, "job-1", replayed = false)
         }
     }
 
