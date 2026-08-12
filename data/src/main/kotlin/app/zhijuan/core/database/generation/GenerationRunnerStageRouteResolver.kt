@@ -22,6 +22,7 @@ enum class GenerationRunnerStageRoute {
     CHAPTER_CONTEXT_ASSEMBLY_V1,
     CHAPTER_PLAN_V1,
     CHAPTER_PLAN_V2,
+    INITIAL_CHAPTER_DRAFT_V1,
     FINAL_CHAPTER_COMMIT_V3,
 }
 
@@ -96,6 +97,10 @@ internal object GenerationRunnerStageRouteResolver {
             ChapterPlanV2StageBinding.SOURCE_POLICY_VERSION -> {
                 ChapterPlanV2StageBinding.parseAndVerify(stage)
                 GenerationRunnerStageRoute.CHAPTER_PLAN_V2
+            }
+            InitialChapterDraftStageBinding.SOURCE_POLICY_VERSION -> {
+                InitialChapterDraftStageBinding.parseAndVerify(stage)
+                GenerationRunnerStageRoute.INITIAL_CHAPTER_DRAFT_V1
             }
             else -> throw IllegalArgumentException(
                 "Generation Stage source policy is not a supported route.",
