@@ -146,7 +146,7 @@ object ChapterPlanV2RequestFactory {
             policyManifestHash = policyManifestHash,
             policyCompilationHash = policyCompilationHash,
             contextEvidenceHash = spec.contextEvidenceHash,
-            outputContract = ChapterPlanOutputContractV2,
+            outputContract = BoundChapterPlanV2OutputContract(spec.expectation),
         )
     }
 }

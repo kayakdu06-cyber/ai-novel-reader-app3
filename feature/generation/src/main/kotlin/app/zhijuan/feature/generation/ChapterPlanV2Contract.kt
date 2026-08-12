@@ -111,7 +111,13 @@ class ChapterPlanV2Parser(
             )
         }
 
-    private fun toPlan(document: JsonObject): ChapterPlanV2 {
+    internal fun fromValidated(output: ValidatedStructuredOutput): ChapterPlanV2 {
+        require(output.schemaId == ChapterPlanOutputContractV2.schemaId)
+        require(output.schemaVersion == ChapterPlanOutputContractV2.currentSchemaVersion)
+        return output.withDocument(::toPlan)
+    }
+
+    internal fun toPlan(document: JsonObject): ChapterPlanV2 {
         val baseDocument = JsonObject(V1_ROOT_KEYS.associateWith(document::getValue).toMutableMap().apply {
             this["schemaVersion"] = JsonPrimitive(1)
             this["policyVersion"] = JsonPrimitive(ChapterPlanOutputContractV1.POLICY_VERSION)
@@ -158,6 +164,27 @@ class ChapterPlanV2Parser(
             canonicalJson = canonical,
             contentHash = sha256V2(canonical),
         )
+    }
+}
+
+internal class BoundChapterPlanV2OutputContract(
+    private val expectation: ChapterPlanExpectationV2,
+    private val parser: ChapterPlanV2Parser = ChapterPlanV2Parser(),
+) : StructuredOutputContract {
+    override val schemaId = ChapterPlanOutputContractV2.schemaId
+    override val currentSchemaVersion = ChapterPlanOutputContractV2.currentSchemaVersion
+    override val providerSchema = ChapterPlanOutputContractV2.providerSchema
+    override val limits = ChapterPlanOutputContractV2.limits
+
+    override fun validate(document: JsonObject): List<StructuredOutputIssue> {
+        val structural = ChapterPlanOutputContractV2.validate(document)
+        if (structural.isNotEmpty()) return structural
+        return when (val result = ChapterPlanV2BusinessValidator.validate(parser.toPlan(document), expectation)) {
+            is ChapterPlanV2BusinessResult.Valid -> emptyList()
+            is ChapterPlanV2BusinessResult.Invalid -> result.issues.map { issue ->
+                StructuredOutputIssue(StructuredOutputIssueCode.VALUE_INVALID, "$.${issue.reference}")
+            }
+        }
     }
 }
 

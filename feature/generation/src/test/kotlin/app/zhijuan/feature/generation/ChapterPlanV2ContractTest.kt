@@ -3,7 +3,11 @@ package app.zhijuan.feature.generation
 import app.zhijuan.core.task.SceneExecutionContract
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Named
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.Arguments
+import org.junit.jupiter.params.provider.MethodSource
 
 class ChapterPlanV2ContractTest {
     @Test
@@ -26,6 +30,19 @@ class ChapterPlanV2ContractTest {
         assertTrue(result.issues.any { it.code == ChapterPlanV2IssueCode.INACTIVE_STATE_NAMESPACE })
 
         assertTrue(ChapterPlanOutputParser().parse(validV1().toByteArray()) is PlanningOutputValidationResult.Valid)
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("invalidPlans")
+    fun `bound contract rejects every unsafe mismatch before commit`(
+        @Suppress("UNUSED_PARAMETER") label: String,
+        source: String,
+    ) {
+        val result = StructuredOutputValidator().validate(
+            source.toByteArray(),
+            BoundChapterPlanV2OutputContract(expectation()),
+        )
+        assertTrue(result is StructuredOutputValidationResult.Invalid)
     }
 
     private fun expectation() = ChapterPlanExpectationV2(
@@ -80,5 +97,20 @@ class ChapterPlanV2ContractTest {
         private const val HASH_C = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
         private const val HASH_D = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
         private const val HASH_E = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+
+        @JvmStatic
+        fun invalidPlans(): List<Arguments> {
+            val valid = ChapterPlanV2ContractTest().validV2()
+            return listOf(
+                Arguments.of(Named.of("schema", "schema"), valid.replace("\"schemaVersion\":2", "\"schemaVersion\":3")),
+                Arguments.of(Named.of("person", "person"), valid.replace("\"character-1\"", "\"unknown-person\"")),
+                Arguments.of(Named.of("activation", "activation"), valid.replace(HASH_C, "f".repeat(64))),
+                Arguments.of(Named.of("obligation", "obligation"), valid.replace(
+                    "\"obligationActions\":[{\"obligationId\":\"promise-1\",\"action\":\"PROGRESS\",\"plannedEvidence\":\"完成系统任务\",\"nextDueChapterIndex\":null}]",
+                    "\"obligationActions\":[]",
+                )),
+                Arguments.of(Named.of("plan hash evidence", "plan-hash"), valid.replace(HASH_E, "0".repeat(64))),
+            )
+        }
     }
 }
