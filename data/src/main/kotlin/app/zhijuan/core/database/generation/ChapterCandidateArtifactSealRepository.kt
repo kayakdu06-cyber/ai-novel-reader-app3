@@ -777,7 +777,16 @@ class ChapterCandidateArtifactSealRepositoryV1(
     ) {
         if (role == ChapterCandidateArtifactRoleV1.BODY) {
             if (stage.phase == GenerationPhase.DRAFT_CHAPTER) {
-                require(revisionIndex == 0)
+                val source = InitialChapterDraftStageBinding.parseAndVerify(stage)
+                val plan = STRICT_JSON.parseToJsonElement(source.canonicalPlanJson) as JsonObject
+                val plannedChapterId = (plan["chapterId"] as? JsonPrimitive)
+                    ?.takeIf(JsonPrimitive::isString)?.content
+                val plannedChapterIndex = (plan["chapterIndex"] as? JsonPrimitive)
+                    ?.takeUnless(JsonPrimitive::isString)?.content?.toIntOrNull()
+                require(
+                    revisionIndex == 0 && source.canonicalPlanHash.isNotBlank() &&
+                        plannedChapterId == chapterId && plannedChapterIndex == chapterIndex,
+                ) { "Initial BODY output does not match its frozen plan source." }
                 return
             }
             val source = ChapterCandidateStageBindingV1.parseAndVerify(stage)
