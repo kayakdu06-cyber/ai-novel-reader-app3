@@ -15,7 +15,8 @@
 - TASK-064 已有 plan、预算、目的地、route 和 exact-token WIP 必须复用；剩余收口分配到 TASK-125～128，禁止从零重写。
 - TASK-121 已完成：只在 `:core` 新增 WritingPolicyPack/fragment、优先级冲突、规范哈希和 PromptBundle v1 最小绑定合同；4/4 新测试通过。
 - TASK-122 已完成：只在 `:feature:generation` 新增开放创作意图、有限状态适配器、书级 Manifest、章级激活与最小 Prompt 选择；13 项模块测试通过。
-- 唯一下一任务是 TASK-123：主模块只允许 `:data`；先证明现有快照和状态证据是否足够，再决定是否需要最小持久化改动。
+- TASK-123 已完成：只在 `:data` 新增义务/状态校验和现有 EntityEvent/CanonFact 映射；复用原子提交，无新表、无 migration，3 项测试通过。
+- 唯一下一任务是 TASK-124：只允许修改 `:feature:generation`，在现有规划输出上做最小 v2。
 - 后续每个任务必须锁定主模块和允许配套模块；VS-1 不新增第十一个模块，feature 不新增实现依赖，`:app` 不写业务逻辑。
 - 不主动实现候选功能、通用扩展点或“以后可能有用”的抽象；只有不修会直接造成不稳定、数据损坏、费用失控、安全问题或严重 bug 时才扩大范围。
 - 测试按具体风险最小化；全量、双 API、Release/R8 和 APK 扫描只在里程碑、发布或对应高风险变化时运行。

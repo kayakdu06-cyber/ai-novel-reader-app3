@@ -120,6 +120,8 @@ TASK-121～133 按精简后范围约 82–132 个有效工程小时。估算不�
 
 ### TASK-123 义务和状态变化
 
+状态：完成（2026-08-12，仅 `:data`；复用 EntityEvent/CanonFact 与现有原子提交，不新增表或 migration，3 项最小测试通过）。
+
 模块锁：主模块 `:data`。只有缺少公共纯 Kotlin 类型时才允许一个独立 `:core` 合同批次；不得同时修改 generation 或 UI。
 
 先证明现有 OutlineRevision、ContextSnapshot、Stage input/output 和记忆表能否保存义务与状态证据：
@@ -414,7 +416,7 @@ TASK-138 默认不启动。只有以下任一证据存在才立项：
 
 ## 10. 下一任务唯一入口
 
-TASK-122 完成后，下一任务必须是 TASK-123。
+TASK-123 完成后，下一任务必须是 TASK-124。
 
 不得直接跳回：
 
@@ -424,4 +426,4 @@ TASK-122 完成后，下一任务必须是 TASK-123。
 - 80 章真实长跑；
 - 任意第三方 skill 安装。
 
-TASK-123 主模块只允许 `:data`；先审计现有快照与状态证据，只有发现会造成崩溃恢复或数据完整性问题的明确缺口，才允许独立的 `:core` 合同批次。
+TASK-124 只允许修改 `:feature:generation`，在现有规划输出上做最小 v2；不得借此修改数据库、UI、Provider 或 `:app`。
