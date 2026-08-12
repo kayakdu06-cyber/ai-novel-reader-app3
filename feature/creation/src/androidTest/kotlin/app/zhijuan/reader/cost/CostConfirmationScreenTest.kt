@@ -13,7 +13,7 @@ import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -61,7 +61,7 @@ class CostConfirmationScreenTest {
     }
 
     @Test
-    fun confirmationEmitsOnlyFrozenReferencesThenLocks() {
+    fun confirmationEmitsOnlyFrozenReferencesAndAllowsRetryAfterFailure() {
         var captured: UsageConfirmationRequest? = null
         var message by mutableStateOf<String?>(null)
         composeRule.setContent {
@@ -82,7 +82,7 @@ class CostConfirmationScreenTest {
             .performScrollToNode(hasTestTag("confirm-usage"))
         composeRule.onNodeWithTag("confirm-usage").performClick()
         composeRule.onNodeWithText("信息已确认", substring = true).assertIsDisplayed()
-        composeRule.onNodeWithTag("confirm-usage").assertIsNotEnabled()
+        composeRule.onNodeWithTag("confirm-usage").assertIsEnabled()
         composeRule.runOnIdle {
             val request = captured
             assertNotNull(request)
@@ -124,7 +124,7 @@ class CostConfirmationScreenTest {
         composeRule.onNodeWithTag("cost-confirmation-list")
             .performScrollToNode(hasTestTag("confirm-usage"))
         composeRule.onNodeWithTag("confirm-usage").assertIsDisplayed()
-        composeRule.onNodeWithText("本阶段的确认不会调用模型", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("确认后开始生成", substring = true).assertIsDisplayed()
     }
 
     private fun showScreen(onBack: () -> Unit = {}) {
@@ -147,6 +147,7 @@ class CostConfirmationScreenTest {
         minimumChapterCount = 300,
         targetChapterCount = 300,
         modelId = "deepseek-chat",
+        connectionId = "connection-1",
         contentHash = "a".repeat(64),
     )
 

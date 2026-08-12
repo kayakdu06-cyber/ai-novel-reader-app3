@@ -25,6 +25,7 @@ data class BookCreationConfirmation(
     val minimumChapterCount: Int,
     val targetChapterCount: Int,
     val modelId: String,
+    val connectionId: String,
     val contentHash: String,
 )
 
@@ -123,12 +124,11 @@ class BookCreationGateway @Inject constructor(
 }
 
 internal fun StoredBookCreationSummary.toBookCreationConfirmation(): BookCreationConfirmation? {
-    val modelId = runCatching {
-        Json.parseToJsonElement(modelPreferenceJson)
-            .jsonObject["modelId"]
-            ?.jsonPrimitive
-            ?.content
-    }.getOrNull()?.takeIf { it.isNotBlank() } ?: return null
+    val model = runCatching { Json.parseToJsonElement(modelPreferenceJson).jsonObject }.getOrNull()
+        ?: return null
+    val modelId = model["modelId"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() } ?: return null
+    val connectionId = model["connectionId"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
+        ?: return null
     return BookCreationConfirmation(
         bookId = bookId,
         snapshotId = snapshotId,
@@ -137,6 +137,7 @@ internal fun StoredBookCreationSummary.toBookCreationConfirmation(): BookCreatio
         minimumChapterCount = minimumChapterCount,
         targetChapterCount = targetChapterCount,
         modelId = modelId,
+        connectionId = connectionId,
         contentHash = contentHash,
     )
 }

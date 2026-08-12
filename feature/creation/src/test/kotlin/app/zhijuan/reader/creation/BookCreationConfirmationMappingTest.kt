@@ -20,6 +20,7 @@ class BookCreationConfirmationMappingTest {
         assertEquals(300, confirmation?.minimumChapterCount)
         assertEquals(300, confirmation?.targetChapterCount)
         assertEquals("deepseek-chat", confirmation?.modelId)
+        assertEquals("connection-1", confirmation?.connectionId)
         assertEquals("a".repeat(64), confirmation?.contentHash)
     }
 

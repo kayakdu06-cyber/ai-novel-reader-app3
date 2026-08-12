@@ -44,11 +44,17 @@ data class UsageConfirmationRequest(
     val snapshotId: String,
     val snapshotContentHash: String,
     val priceState: CostEstimateState,
+    val requestTokenHardLimit: Long,
+    val bookTokenHardLimit: Long,
+    val dailyTokenHardLimit: Long,
+    val dailyZoneId: String,
 )
 
 @Composable
 fun CostConfirmationScreen(
     confirmation: BookCreationConfirmation,
+    connectionName: String? = null,
+    normalizedDestination: String? = null,
     onBack: () -> Unit,
     onConfirm: (UsageConfirmationRequest) -> Unit,
     modifier: Modifier = Modifier,
@@ -118,6 +124,8 @@ fun CostConfirmationScreen(
                                 "${confirmation.targetChapterCount} 章（最低 ${confirmation.minimumChapterCount} 章）",
                             )
                             SummaryRow("当前模型", confirmation.modelId)
+                            connectionName?.let { SummaryRow("当前连接", it) }
+                            normalizedDestination?.let { SummaryRow("数据发送到", it) }
                         }
                     }
                 }
@@ -176,10 +184,14 @@ fun CostConfirmationScreen(
                                     snapshotId = confirmation.snapshotId,
                                     snapshotContentHash = confirmation.contentHash,
                                     priceState = CostEstimateState.PRICE_CATALOG_UNAVAILABLE,
+                                    requestTokenHardLimit = DEFAULT_REQUEST_TOKEN_LIMIT,
+                                    bookTokenHardLimit = DEFAULT_BOOK_TOKEN_LIMIT,
+                                    dailyTokenHardLimit = DEFAULT_DAILY_TOKEN_LIMIT,
+                                    dailyZoneId = "Asia/Shanghai",
                                 ),
                             )
                         },
-                        enabled = !isConfirming && confirmationMessage == null,
+                        enabled = !isConfirming,
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(min = 56.dp)
@@ -191,12 +203,12 @@ fun CostConfirmationScreen(
                                 color = MaterialTheme.colorScheme.onPrimary,
                             )
                         } else {
-                            Text(if (confirmationMessage == null) "确认以上信息" else "已确认")
+                            Text("确认以上信息")
                         }
                     }
                     Spacer(Modifier.height(10.dp))
                     Text(
-                        text = "本阶段的确认不会调用模型。生成执行器和 token 硬上限接入前，小说不会开始生成。",
+                        text = "确认后开始生成。单次请求最多 16000 token；全书和当日各最多 2000000 token。价格未知，达到上限会停止。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -234,6 +246,10 @@ private fun BookLengthMode.displayName(): String = when (this) {
     BookLengthMode.MEDIUM -> "中篇"
     BookLengthMode.LONG -> "长篇"
 }
+
+private const val DEFAULT_REQUEST_TOKEN_LIMIT = 16_000L
+private const val DEFAULT_BOOK_TOKEN_LIMIT = 2_000_000L
+private const val DEFAULT_DAILY_TOKEN_LIMIT = 2_000_000L
 
 @Composable
 fun CostConfirmationLoadingScreen(modifier: Modifier = Modifier) {
