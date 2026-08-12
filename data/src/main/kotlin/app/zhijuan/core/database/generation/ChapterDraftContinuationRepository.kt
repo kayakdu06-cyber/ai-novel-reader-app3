@@ -405,8 +405,36 @@ class ChapterDraftContinuationRepository(
             "Continuation request input hash does not bind its parent draft and exact anchor."
         }
         val seed = inspected.text.toByteArray(Charsets.UTF_8)
-        val request = GenerationStreamingDraftRepository(database, artifactStore, leasePolicy)
-            .prepareContinuationBeforeSend(draft, budget, leaseToken, seed)
+        val route = GenerationRunnerStageRouteResolver.resolve(stage)
+        val request = if (route == GenerationRunnerStageRoute.INITIAL_CHAPTER_DRAFT_V1) {
+            val jobToken = job.leaseTokenOrNull()
+                ?: throw StaleGenerationStateException("Continuation Job lease is missing.")
+            val jobHeartbeat = job.leaseHeartbeatAt
+                ?: throw StaleGenerationStateException("Continuation Job heartbeat is missing.")
+            val stageHeartbeat = stage.leaseHeartbeatAt
+                ?: throw StaleGenerationStateException("Continuation Stage heartbeat is missing.")
+            require(jobToken.ownerId == leaseToken.ownerId)
+            val snapshot = GenerationRunnerCurrentStageRouteSnapshot(
+                route = route,
+                executionLease = GenerationRunnerExecutionLeaseSnapshot(
+                    jobId = job.jobId,
+                    jobStatus = job.status,
+                    jobLeaseToken = jobToken,
+                    jobHeartbeatAt = jobHeartbeat,
+                    stageId = stage.stageId,
+                    stageStatus = stage.status,
+                    stageLeaseToken = leaseToken,
+                    stageHeartbeatAt = stageHeartbeat,
+                ),
+                attemptCount = stage.attemptCount,
+                maxAttempts = stage.maxAttempts,
+            )
+            GenerationStreamingDraftRepository(database, artifactStore, leasePolicy)
+                .prepareBoundInitialChapterDraftContinuationBeforeSend(snapshot, draft, budget, seed)
+        } else {
+            GenerationStreamingDraftRepository(database, artifactStore, leasePolicy)
+                .prepareContinuationBeforeSend(draft, budget, leaseToken, seed)
+        }
         return PreparedChapterDraftContinuation(
             request = request,
             continuationIndex = decision.continuationIndex,

@@ -13,7 +13,8 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 
-internal data class InitialChapterDraftSourceV1(
+@ConsistentCopyVisibility
+data class InitialChapterDraftSourceV1 internal constructor(
     val planStageId: String,
     val planAttemptId: String,
     val planArtifactRefId: String,
@@ -208,6 +209,71 @@ internal class InitialChapterDraftSourceGuard(private val database: app.zhijuan.
         val PLAN_OUTPUT_KEYS = setOf(
             "schemaVersion", "outputSchemaId", "attemptId", "artifactRefId", "artifactRevision",
             "rawOutputHash", "canonicalPlanHash", "requestBindingHash", "nextStageId",
+        )
+    }
+}
+
+data class InitialChapterDraftPromptSources(
+    val stageId: String,
+    val stageInputVersionHash: String,
+    val chapterId: String,
+    val chapterIndex: Int,
+    val canonicalPlanJson: String,
+    val contextPayloadJson: String,
+    val expectationJson: String,
+    val activationManifestJson: String,
+    val policyManifestJson: String,
+) {
+    override fun toString(): String =
+        "InitialChapterDraftPromptSources(chapterIndex=$chapterIndex, content=redacted)"
+}
+
+/** Loads the exact frozen plan, context and policy material for a bound initial BODY request. */
+class InitialChapterDraftPromptSourcesRepository(
+    private val database: app.zhijuan.core.database.ZhijuanDatabase,
+    private val leasePolicy: GenerationLeasePolicy = GenerationLeasePolicy(),
+) {
+    suspend fun loadBound(
+        snapshot: GenerationRunnerCurrentStageRouteSnapshot,
+        loadedAt: Long,
+    ): InitialChapterDraftPromptSources {
+        require(snapshot.route == GenerationRunnerStageRoute.INITIAL_CHAPTER_DRAFT_V1)
+        val lease = snapshot.executionLease
+        val dao = database.generationDao()
+        val stage = requireNotNull(dao.findStage(lease.stageId)) { "Initial draft Stage is missing." }
+        val job = requireNotNull(dao.findJob(lease.jobId)) { "Initial draft Job is missing." }
+        val jobHeartbeat = requireNotNull(job.leaseHeartbeatAt)
+        val stageHeartbeat = requireNotNull(stage.leaseHeartbeatAt)
+        require(
+            job.jobId == lease.jobId && stage.jobId == job.jobId && stage.stageId == lease.stageId &&
+                job.status == app.zhijuan.core.model.GenerationJobStatus.RUNNING &&
+                stage.status == GenerationStageStatus.PREPARING && job.currentStageId == stage.stageId &&
+                job.pauseOrStopReason == null && job.leaseTokenOrNull() == lease.jobLeaseToken &&
+                stage.leaseTokenOrNull() == lease.stageLeaseToken &&
+                jobHeartbeat >= lease.jobHeartbeatAt && stageHeartbeat >= lease.stageHeartbeatAt &&
+                stage.attemptCount == snapshot.attemptCount && stage.maxAttempts == snapshot.maxAttempts &&
+                GenerationRunnerStageRouteResolver.resolve(stage) == snapshot.route,
+        ) { "Initial draft bound source snapshot changed." }
+        require(loadedAt >= job.updatedAt && loadedAt >= stage.updatedAt && loadedAt >= jobHeartbeat && loadedAt >= stageHeartbeat)
+        require(!leasePolicy.isExpired(jobHeartbeat, loadedAt) && !leasePolicy.isExpired(stageHeartbeat, loadedAt))
+        val source = InitialChapterDraftStageBinding.parseAndVerify(stage)
+        InitialChapterDraftSourceGuard(database).requireProviderOpenAllowedIfBound(stage, job)
+        val planStage = requireNotNull(dao.findStage(source.planStageId))
+        val planSource = ChapterPlanV2StageBinding.parseAndVerify(planStage)
+        val context = ChapterContextAssemblyRepository(database).requireProviderOpenAllowed(planStage, job)
+        val plan = Json.parseToJsonElement(source.canonicalPlanJson) as JsonObject
+        return InitialChapterDraftPromptSources(
+            stageId = stage.stageId,
+            stageInputVersionHash = stage.inputVersionHash,
+            chapterId = stage.targetId,
+            chapterIndex = (plan["chapterIndex"] as? JsonPrimitive)
+                ?.takeUnless(JsonPrimitive::isString)?.intOrNull
+                ?: throw IllegalArgumentException("Initial draft chapter index is invalid."),
+            canonicalPlanJson = source.canonicalPlanJson,
+            contextPayloadJson = context.providerPayloadJson,
+            expectationJson = planSource.frozen.expectationJson,
+            activationManifestJson = planSource.frozen.activationManifestJson,
+            policyManifestJson = planSource.frozen.policyManifestJson,
         )
     }
 }
