@@ -327,8 +327,10 @@ internal class ChapterCandidateStageSourceGuard(
         ) {
             stale("Candidate Stage lineage does not end at a sealed initial chapter body.")
         }
-        ChapterProgressionGateRepository(database).requireProviderOpenAllowed(root, job)
-        ChapterContextAssemblyRepository(database).requireProviderOpenAllowedIfBound(root, job)
+        if (!InitialChapterDraftSourceGuard(database).requireProviderOpenAllowedIfBound(root, job)) {
+            ChapterProgressionGateRepository(database).requireProviderOpenAllowed(root, job)
+            ChapterContextAssemblyRepository(database).requireProviderOpenAllowedIfBound(root, job)
+        }
         return true
     }
 
@@ -398,6 +400,7 @@ data class ChapterCandidateArtifactSealDraftV1(
     val nextStage: GenerationStageSetup,
     val sealedAt: Long,
     val routeBindingHash: String? = null,
+    val sourceRouteBindingHash: String? = routeBindingHash,
 ) {
     override fun toString(): String =
         "ChapterCandidateArtifactSealDraftV1(role=$role, chapterIndex=$chapterIndex, revisionIndex=$revisionIndex, content=redacted)"
@@ -486,7 +489,7 @@ class ChapterCandidateArtifactSealRepositoryV1(
                 chapterId = draft.chapterId,
                 chapterIndex = draft.chapterIndex,
                 revisionIndex = draft.revisionIndex,
-                routeBindingHash = draft.routeBindingHash,
+                routeBindingHash = draft.sourceRouteBindingHash,
             )
 
             if (stage.status == GenerationStageStatus.SUCCEEDED) {
@@ -710,6 +713,7 @@ class ChapterCandidateArtifactSealRepositoryV1(
             listOf(draft.candidateContentHash, draft.canonicalOutputHash, draft.sourceBindingHash).all(HASH::matches),
         )
         require(draft.routeBindingHash == null || HASH.matches(draft.routeBindingHash))
+        require(draft.sourceRouteBindingHash == null || HASH.matches(draft.sourceRouteBindingHash))
         require(draft.sealedAt >= 0L)
         require(draft.nextStage.targetType == GenerationTargetType.CHAPTER && draft.nextStage.targetId == draft.chapterId)
         require(draft.nextStage.maxAttempts in 1..16)

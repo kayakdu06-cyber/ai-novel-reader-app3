@@ -448,6 +448,7 @@ class ChapterConsistencyOutcomeRepositoryV1(
             nextStage = next,
             sealedAt = routedAt,
             routeBindingHash = routeBindingHash,
+            sourceRouteBindingHash = candidateRouteBindingHash,
         )
 
     private companion object {
