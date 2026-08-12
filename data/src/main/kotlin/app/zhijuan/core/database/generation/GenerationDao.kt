@@ -310,6 +310,32 @@ internal interface GenerationDao {
     @Query(
         """
         UPDATE generation_stage
+        SET input_version_hash = :inputVersionHash,
+            idempotency_key = :idempotencyKey,
+            input_sources_json = :inputSourcesJson,
+            updated_at = :updatedAt
+        WHERE stage_id = :stageId
+          AND job_id = :jobId
+          AND status IN ('PENDING', 'READY')
+          AND attempt_count = 0
+          AND lease_owner_id IS NULL
+          AND input_version_hash = :expectedInputVersionHash
+          AND updated_at <= :updatedAt
+        """,
+    )
+    suspend fun compareAndUpgradePendingStage(
+        stageId: String,
+        jobId: String,
+        expectedInputVersionHash: String,
+        inputVersionHash: String,
+        idempotencyKey: String,
+        inputSourcesJson: String,
+        updatedAt: Long,
+    ): Int
+
+    @Query(
+        """
+        UPDATE generation_stage
         SET status = 'CANCELLED',
             standard_error_code = NULL,
             next_retry_at = NULL,

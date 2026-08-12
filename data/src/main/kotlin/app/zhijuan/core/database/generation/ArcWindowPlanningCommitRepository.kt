@@ -194,8 +194,10 @@ class ArcWindowPlanningCommitRepository(
     }
 
     private fun validateDraft(draft: ArcWindowPlanningCommitDraft): WindowMetadata {
-        require(draft.schemaId == "arc-plan.v1")
-        require(draft.policyVersion == ArcPlanningWindowPolicyV1.POLICY_VERSION)
+        require(
+            (draft.schemaId == "arc-plan.v1" && draft.policyVersion == ArcPlanningWindowPolicyV1.POLICY_VERSION) ||
+                (draft.schemaId == "arc-plan.v2" && draft.policyVersion == "zhijuan.arc-window-policy.v2"),
+        )
         require(
             IDENTIFIER.matches(draft.masterOutlineRevisionId) &&
                 HASH.matches(draft.masterOutlineContentHash) && HASH.matches(draft.parentOutlineContentHash),

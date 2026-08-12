@@ -13,6 +13,7 @@ enum class GenerationRunnerStageRoute {
     INITIAL_STORY_SEED_V1,
     INITIAL_STORY_BIBLE_V1,
     INITIAL_MASTER_OUTLINE_V1,
+    ARC_WINDOW_V1,
     FORMAL_CHAPTER_MEMORY_V1,
     EDIT_REBUILD_CHAPTER_MEMORY_V2,
     FORMAL_CHAPTER_TRACKING_V1,
@@ -34,6 +35,7 @@ internal val INITIAL_PLANNING_ROUTES = setOf(
     GenerationRunnerStageRoute.INITIAL_STORY_SEED_V1,
     GenerationRunnerStageRoute.INITIAL_STORY_BIBLE_V1,
     GenerationRunnerStageRoute.INITIAL_MASTER_OUTLINE_V1,
+    GenerationRunnerStageRoute.ARC_WINDOW_V1,
 )
 
 internal val CHAPTER_PLAN_ROUTES = setOf(
@@ -69,6 +71,10 @@ internal object GenerationRunnerStageRouteResolver {
                     GenerationPhase.BUILD_MASTER_OUTLINE -> GenerationRunnerStageRoute.INITIAL_MASTER_OUTLINE_V1
                     else -> throw IllegalArgumentException("Initial planning phase is not routable.")
                 }
+            }
+            ArcWindowPlanningJobFactory.SOURCE_POLICY_VERSION -> {
+                ArcWindowPlanningJobFactory.parseAndVerify(stage)
+                GenerationRunnerStageRoute.ARC_WINDOW_V1
             }
             ChapterMemoryExtractionJobFactory.SOURCE_POLICY_VERSION -> {
                 ChapterMemoryExtractionJobFactory.parseAndVerify(stage)

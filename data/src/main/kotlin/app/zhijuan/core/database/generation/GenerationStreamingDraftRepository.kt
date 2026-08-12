@@ -189,6 +189,23 @@ class GenerationStreamingDraftRepository(
         )
     }
 
+    suspend fun prepareBoundArcWindowBeforeSend(
+        snapshot: GenerationRunnerCurrentStageRouteSnapshot,
+        draft: RequestIntentDraft,
+        budget: RequestBudgetReservationDraft,
+    ): PersistedStreamingRequest = LIFECYCLE_LOCK.withLock {
+        require(snapshot.route == GenerationRunnerStageRoute.ARC_WINDOW_V1)
+        require(draft.stageId == snapshot.executionLease.stageId)
+        prepareBeforeSendLocked(
+            draft = draft,
+            budget = budget,
+            leaseToken = snapshot.executionLease.stageLeaseToken,
+            initialDraft = null,
+            rolloverSource = null,
+            boundRouteSnapshot = snapshot,
+        )
+    }
+
     suspend fun prepareBoundInitialChapterDraftBeforeSend(
         snapshot: GenerationRunnerCurrentStageRouteSnapshot,
         draft: RequestIntentDraft,
@@ -424,6 +441,12 @@ class GenerationStreamingDraftRepository(
                     )
                 rolloverSource == null && boundRouteSnapshot?.route in CHAPTER_PLAN_ROUTES ->
                     auditRepository.persistBoundChapterPlanBeforeSend(
+                        draft = draftWithArtifact,
+                        budget = budget,
+                        snapshot = requireNotNull(boundRouteSnapshot),
+                    )
+                rolloverSource == null && boundRouteSnapshot?.route in INITIAL_PLANNING_ROUTES ->
+                    auditRepository.persistBoundInitialPlanningBeforeSend(
                         draft = draftWithArtifact,
                         budget = budget,
                         snapshot = requireNotNull(boundRouteSnapshot),

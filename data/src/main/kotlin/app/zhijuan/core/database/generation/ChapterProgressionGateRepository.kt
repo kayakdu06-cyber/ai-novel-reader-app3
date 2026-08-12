@@ -355,14 +355,16 @@ class ChapterProgressionGateRepository(
         } == true
         val windowReady = targetWindow?.let { revision ->
             val stageId = revision.generationStageId ?: return@let false
-            successfulRevisionStage(
-                stageId,
-                bookId,
-                GenerationPhase.BUILD_ARC_PLAN,
-                "arc-plan.v1",
-                revision.outlineRevisionId,
-                revision.contentHash,
-            )
+            listOf("arc-plan.v2", "arc-plan.v1").any { schemaId ->
+                successfulRevisionStage(
+                    stageId,
+                    bookId,
+                    GenerationPhase.BUILD_ARC_PLAN,
+                    schemaId,
+                    revision.outlineRevisionId,
+                    revision.contentHash,
+                )
+            }
         } == true
         val previousChapter = if (chapterIndex >= 2) {
             library.chaptersForBook(bookId).singleOrNull { it.chapterIndex == chapterIndex - 1 }

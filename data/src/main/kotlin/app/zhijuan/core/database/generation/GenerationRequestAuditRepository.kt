@@ -184,6 +184,22 @@ class GenerationRequestAuditRepository(
         )
     }
 
+    internal suspend fun persistBoundInitialPlanningBeforeSend(
+        draft: RequestIntentDraft,
+        budget: RequestBudgetReservationDraft,
+        snapshot: GenerationRunnerCurrentStageRouteSnapshot,
+    ): PersistedRequestAudit = database.withTransaction {
+        requireBoundRemoteExecution(draft, snapshot, INITIAL_PLANNING_ROUTES, "initial planning")
+        persistBeforeSendInternal(
+            draft = draft,
+            budget = budget,
+            leaseToken = snapshot.executionLease.stageLeaseToken,
+            rolloverParentAttemptId = null,
+            rolloverSourceArtifactRefId = null,
+            executionLease = null,
+        )
+    }
+
     internal suspend fun persistBoundInitialChapterDraftBeforeSend(
         draft: RequestIntentDraft,
         budget: RequestBudgetReservationDraft,
