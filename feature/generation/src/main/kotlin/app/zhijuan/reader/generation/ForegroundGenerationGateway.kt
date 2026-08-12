@@ -8,14 +8,21 @@ import app.zhijuan.core.database.generation.GenerationStateRepository
 import app.zhijuan.core.database.ZHIJUAN_DATABASE_NAME
 import app.zhijuan.core.contract.GenerationController
 import app.zhijuan.core.model.GenerationJobStatus
+import app.zhijuan.core.security.AndroidProtectedArtifactStore
+import app.zhijuan.feature.generation.GenerationBoundRemoteExecutionProvider
+import app.zhijuan.feature.generation.GenerationPersistentRunResult
+import app.zhijuan.feature.generation.GenerationPersistentRuntimeFactoryV1
+import app.zhijuan.feature.generation.GenerationTotalRunnerPort
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.util.Optional
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
 internal class ForegroundGenerationGateway @Inject constructor(
     @ApplicationContext context: Context,
-) : ForegroundGenerationControlPort, GenerationController {
+    private val remote: Optional<GenerationBoundRemoteExecutionProvider>,
+) : ForegroundGenerationControlPort, GenerationController, GenerationTotalRunnerPort {
     private val applicationContext = context.applicationContext
     private val databaseHandle by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         EncryptedZhijuanDatabaseFactory(applicationContext).open(ZHIJUAN_DATABASE_NAME)
@@ -26,6 +33,21 @@ internal class ForegroundGenerationGateway @Inject constructor(
     private val controlRepository by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         GenerationControlRepository(databaseHandle.database)
     }
+    private val runtime by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        val provider = remote.orElseThrow {
+            GenerationRuntimeUnavailableException()
+        }
+        GenerationPersistentRuntimeFactoryV1.create(
+            database = databaseHandle.database,
+            artifactStore = AndroidProtectedArtifactStore(applicationContext),
+            remote = provider,
+        )
+    }
+
+    override suspend fun runJob(
+        jobId: String,
+        runnerOwnerId: String,
+    ): GenerationPersistentRunResult = runtime.runner.runJob(jobId, runnerOwnerId)
 
     override suspend fun findJob(jobId: String): ForegroundGenerationSnapshot? =
         stateRepository.findJob(jobId)?.let { job ->
@@ -72,3 +94,6 @@ internal class ForegroundGenerationGateway @Inject constructor(
     private suspend fun monotonicControlTime(jobId: String, requestedAt: Long): Long =
         maxOf(requestedAt, requireNotNull(stateRepository.findJob(jobId)).updatedAt)
 }
+
+internal class GenerationRuntimeUnavailableException :
+    IllegalStateException("Generation remote execution is not installed yet.")

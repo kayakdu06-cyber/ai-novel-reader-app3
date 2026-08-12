@@ -11,6 +11,7 @@ import android.os.SystemClock
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import app.zhijuan.core.model.GenerationJobStatus
+import app.zhijuan.feature.generation.GenerationTotalRunnerPort
 import dagger.hilt.android.AndroidEntryPoint
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
@@ -24,6 +25,8 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import java.util.UUID
 
 @AndroidEntryPoint
 class GenerationForegroundService : Service() {
@@ -36,16 +39,21 @@ class GenerationForegroundService : Service() {
     @Inject
     internal lateinit var timeoutCoordinator: ForegroundGenerationTimeoutCoordinator
 
+    @Inject
+    internal lateinit var totalRunner: GenerationTotalRunnerPort
+
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val commandMutex = Mutex()
     private val mainHandler = Handler(Looper.getMainLooper())
     private var processor: ForegroundGenerationCommandProcessor? = null
     private var monitorJob: Job? = null
+    private var executionJob: Job? = null
     private var activeJobId: String? = null
     private var latestStartId: Int = 0
     private var controlDeadlineElapsed: Long? = null
     private var foregroundStarted = false
     private val timeoutStopStarted = AtomicBoolean(false)
+    private val runnerOwnerSuffix = UUID.randomUUID().toString()
 
     override fun onCreate() {
         super.onCreate()
@@ -106,6 +114,7 @@ class GenerationForegroundService : Service() {
 
     override fun onDestroy() {
         monitorJob?.cancel()
+        executionJob?.cancel()
         serviceScope.cancel()
         mainHandler.removeCallbacksAndMessages(null)
         super.onDestroy()
@@ -129,6 +138,11 @@ class GenerationForegroundService : Service() {
             return
         }
         promote(jobId, result.status)
+        if (command == ForegroundGenerationCommand.START &&
+            result.directive == ForegroundGenerationDirective.KEEP_RUNNING
+        ) {
+            startExecution(jobId)
+        }
         if (command == ForegroundGenerationCommand.PAUSE ||
             command == ForegroundGenerationCommand.STOP
         ) {
@@ -138,6 +152,37 @@ class GenerationForegroundService : Service() {
             stopService(latestStartId, force = false)
         } else {
             startMonitor(jobId)
+        }
+    }
+
+    private fun startExecution(jobId: String) {
+        if (executionJob?.isActive == true) return
+        executionJob = serviceScope.launch(Dispatchers.Default) {
+            val completed = runCatching {
+                GenerationExecutionEntryPointV1(totalRunner, "fgs").run(jobId, runnerOwnerSuffix)
+            }.isSuccess
+            withContext(Dispatchers.Main.immediate) {
+                executionJob = null
+                if (!completed || activeJobId != jobId) {
+                    if (activeJobId == jobId) stopService(latestStartId, force = false)
+                    return@withContext
+                }
+                commandMutex.withLock {
+                    val status = runCatching {
+                        requireNotNull(processor).handle(
+                            jobId = jobId,
+                            command = ForegroundGenerationCommand.RECHECK,
+                            requestedAt = System.currentTimeMillis().coerceAtLeast(0L),
+                        )
+                    }.getOrNull()
+                    promote(jobId, status?.status)
+                    if (status?.directive == ForegroundGenerationDirective.KEEP_RUNNING) {
+                        startMonitor(jobId)
+                    } else {
+                        stopService(latestStartId, force = false)
+                    }
+                }
+            }
         }
     }
 
@@ -196,6 +241,8 @@ class GenerationForegroundService : Service() {
     ) {
         monitorJob?.cancel()
         monitorJob = null
+        executionJob?.cancel()
+        executionJob = null
         activeJobId = null
         controlDeadlineElapsed = null
         if (foregroundStarted) {
