@@ -110,11 +110,15 @@ object ChapterPlanV2RequestFactory {
             createBound(spec, creativeIntent, instructions)
         }
 
+    /** Restores only the immutable business expectation for later bound chapter stages. */
+    fun restoreExpectation(frozen: ChapterPlanV2FrozenSources): ChapterPlanExpectationV2 =
+        restoredExpectation(strictObject(frozen.expectationJson, "expectation"))
+
     /** Rebuilds an exact request after process death only from frozen Stage/context evidence. */
     fun restore(spec: FrozenChapterPlanV2RequestSpec): BoundChapterPlanV2Request {
         val expectationRoot = strictObject(spec.frozen.expectationJson, "expectation")
         val policyRoot = strictObject(spec.frozen.policyManifestJson, "policy manifest")
-        val expectation = restoredExpectation(expectationRoot)
+        val expectation = restoreExpectation(spec.frozen)
         val creativeIntent = expectationRoot.requiredString("creativeIntent")
         val instructions = policyRoot.requiredObjects("instructions").map { item ->
             PolicyInstructionV1(
