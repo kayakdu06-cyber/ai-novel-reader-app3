@@ -136,7 +136,7 @@ class InitialChapterDraftCoordinator(
                     stageId = advance.memoryStageId,
                     phase = GenerationPhase.EXTRACT_MEMORY,
                     source = ChapterCandidateStageSourceV1(
-                        role = ChapterCandidateArtifactRoleV1.MEMORY,
+                    role = ChapterCandidateArtifactRoleV1.POST_ANALYSIS,
                         candidateChapterVersionId = advance.candidateChapterVersionId,
                         candidateContentHash = contentHash,
                         chapterId = bound.chapterId,

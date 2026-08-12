@@ -30,6 +30,7 @@ enum class ChapterCandidateArtifactRoleV1(
     MEMORY("chapter-memory.v1", setOf(GenerationPhase.EXTRACT_MEMORY)),
     TRACKING("chapter-story-tracking.v1", setOf(GenerationPhase.EXTRACT_MEMORY)),
     CONSISTENCY("chapter-consistency-report.v1", setOf(GenerationPhase.CHECK_CONSISTENCY)),
+    POST_ANALYSIS("chapter-post-analysis.v1", setOf(GenerationPhase.EXTRACT_MEMORY)),
 }
 
 data class ChapterCandidateStageSourceV1(
@@ -354,14 +355,18 @@ internal class ChapterCandidateStageSourceGuard(
         } catch (_: IllegalArgumentException) {
             stale("Candidate predecessor output evidence is invalid or stale.")
         }
-        val expectedPredecessorRole = when (source.role) {
-            ChapterCandidateArtifactRoleV1.BODY -> ChapterCandidateArtifactRoleV1.CONSISTENCY
-            ChapterCandidateArtifactRoleV1.MEMORY -> ChapterCandidateArtifactRoleV1.BODY
-            ChapterCandidateArtifactRoleV1.TRACKING -> ChapterCandidateArtifactRoleV1.MEMORY
-            ChapterCandidateArtifactRoleV1.CONSISTENCY -> ChapterCandidateArtifactRoleV1.TRACKING
+        val expectedPredecessorRoles = when (source.role) {
+            ChapterCandidateArtifactRoleV1.BODY -> setOf(
+                ChapterCandidateArtifactRoleV1.CONSISTENCY,
+                ChapterCandidateArtifactRoleV1.POST_ANALYSIS,
+            )
+            ChapterCandidateArtifactRoleV1.MEMORY -> setOf(ChapterCandidateArtifactRoleV1.BODY)
+            ChapterCandidateArtifactRoleV1.TRACKING -> setOf(ChapterCandidateArtifactRoleV1.MEMORY)
+            ChapterCandidateArtifactRoleV1.CONSISTENCY -> setOf(ChapterCandidateArtifactRoleV1.TRACKING)
+            ChapterCandidateArtifactRoleV1.POST_ANALYSIS -> setOf(ChapterCandidateArtifactRoleV1.BODY)
         }
         if (
-            evidence.role != expectedPredecessorRole || evidence.nextStageId != stage.stageId ||
+            evidence.role !in expectedPredecessorRoles || evidence.nextStageId != stage.stageId ||
             evidence.candidateChapterVersionId != source.candidateChapterVersionId ||
             evidence.candidateContentHash != source.candidateContentHash ||
             evidence.chapterId != source.chapterId || evidence.chapterIndex != source.chapterIndex ||
@@ -418,6 +423,7 @@ data class ChapterConsistencyNeedsActionDraftV1(
     val reason: ChapterRevisionNeedsActionReasonV1,
     val usage: FinalUsageCommit,
     val settledAt: Long,
+    val artifactRole: ChapterCandidateArtifactRoleV1 = ChapterCandidateArtifactRoleV1.CONSISTENCY,
 ) {
     override fun toString(): String =
         "ChapterConsistencyNeedsActionDraftV1(chapterIndex=$chapterIndex, revisionIndex=$revisionIndex, " +
@@ -579,7 +585,7 @@ class ChapterCandidateArtifactSealRepositoryV1(
         if (database.generationDao().findStage(permit.stageId)?.status != GenerationStageStatus.NEEDS_ACTION) {
             verifyArtifact(
                 permit = permit,
-                role = ChapterCandidateArtifactRoleV1.CONSISTENCY,
+                role = draft.artifactRole,
                 canonicalOutputHash = draft.canonicalOutputHash,
                 candidateContentHash = draft.candidateContentHash,
             )
@@ -590,7 +596,7 @@ class ChapterCandidateArtifactSealRepositoryV1(
             val attempt = requireNotNull(dao.findAttempt(permit.attemptId)) { "Consistency Attempt no longer exists." }
             val job = requireNotNull(dao.findJob(stage.jobId)) { "Consistency Job no longer exists." }
             require(
-                stage.phase == GenerationPhase.CHECK_CONSISTENCY &&
+                stage.phase in draft.artifactRole.allowedPhases &&
                     stage.targetType == GenerationTargetType.CHAPTER &&
                     stage.targetId == draft.chapterId &&
                     attempt.stageId == stage.stageId &&
@@ -606,7 +612,7 @@ class ChapterCandidateArtifactSealRepositoryV1(
             }
             requireCurrentCandidateBinding(
                 stage = stage,
-                role = ChapterCandidateArtifactRoleV1.CONSISTENCY,
+                role = draft.artifactRole,
                 candidateChapterVersionId = draft.candidateChapterVersionId,
                 candidateContentHash = draft.candidateContentHash,
                 chapterId = draft.chapterId,
@@ -714,6 +720,12 @@ class ChapterCandidateArtifactSealRepositoryV1(
         require(listOf(draft.candidateChapterVersionId, draft.chapterId).all(IDENTIFIER::matches))
         require(draft.chapterIndex in 1..10_000 && draft.revisionIndex in 0..2)
         require(
+            draft.artifactRole in setOf(
+                ChapterCandidateArtifactRoleV1.CONSISTENCY,
+                ChapterCandidateArtifactRoleV1.POST_ANALYSIS,
+            ),
+        )
+        require(
             listOf(
                 draft.candidateContentHash,
                 draft.canonicalOutputHash,
@@ -733,8 +745,11 @@ class ChapterCandidateArtifactSealRepositoryV1(
         next: GenerationStageEntity,
     ) {
         if (next.phase == GenerationPhase.COMMIT_CHAPTER) {
-            require(draft.role == ChapterCandidateArtifactRoleV1.CONSISTENCY) {
-                "Only a consistency artifact can advance to final commit."
+            require(draft.role in setOf(
+                ChapterCandidateArtifactRoleV1.CONSISTENCY,
+                ChapterCandidateArtifactRoleV1.POST_ANALYSIS,
+            )) {
+                "Only an accepted analysis artifact can advance to final commit."
             }
             return
         }
@@ -757,13 +772,18 @@ class ChapterCandidateArtifactSealRepositoryV1(
                 source.revisionIndex == draft.revisionIndex && source.predecessorStageId == currentStage.stageId &&
                 source.routeBindingHash == draft.routeBindingHash,
         ) { "Candidate next Stage does not bind the sealed source artifact." }
-        val allowedNextRole = when (draft.role) {
-            ChapterCandidateArtifactRoleV1.BODY -> ChapterCandidateArtifactRoleV1.MEMORY
-            ChapterCandidateArtifactRoleV1.MEMORY -> ChapterCandidateArtifactRoleV1.TRACKING
-            ChapterCandidateArtifactRoleV1.TRACKING -> ChapterCandidateArtifactRoleV1.CONSISTENCY
-            ChapterCandidateArtifactRoleV1.CONSISTENCY -> ChapterCandidateArtifactRoleV1.BODY
+        val allowedNextRoles = when (draft.role) {
+            ChapterCandidateArtifactRoleV1.BODY -> setOf(
+                ChapterCandidateArtifactRoleV1.MEMORY,
+                ChapterCandidateArtifactRoleV1.POST_ANALYSIS,
+            )
+            ChapterCandidateArtifactRoleV1.MEMORY -> setOf(ChapterCandidateArtifactRoleV1.TRACKING)
+            ChapterCandidateArtifactRoleV1.TRACKING -> setOf(ChapterCandidateArtifactRoleV1.CONSISTENCY)
+            ChapterCandidateArtifactRoleV1.CONSISTENCY,
+            ChapterCandidateArtifactRoleV1.POST_ANALYSIS,
+            -> setOf(ChapterCandidateArtifactRoleV1.BODY)
         }
-        require(source.role == allowedNextRole) { "Candidate Stage order is invalid." }
+        require(source.role in allowedNextRoles) { "Candidate Stage order is invalid." }
     }
 
     private fun requireCurrentCandidateBinding(
@@ -904,8 +924,8 @@ class ChapterCandidateArtifactSealRepositoryV1(
             "schemaVersion" to JsonPrimitive(1),
             "pipelineVersion" to JsonPrimitive(PIPELINE_VERSION),
             "outcomeType" to JsonPrimitive("NEEDS_ACTION"),
-            "artifactRole" to JsonPrimitive(ChapterCandidateArtifactRoleV1.CONSISTENCY.name),
-            "outputSchemaId" to JsonPrimitive(ChapterCandidateArtifactRoleV1.CONSISTENCY.schemaId),
+            "artifactRole" to JsonPrimitive(draft.artifactRole.name),
+            "outputSchemaId" to JsonPrimitive(draft.artifactRole.schemaId),
             "attemptId" to JsonPrimitive(permit.attemptId),
             "artifactRefId" to JsonPrimitive(permit.artifactRefId),
             "artifactRevision" to JsonPrimitive(permit.artifactRevision),

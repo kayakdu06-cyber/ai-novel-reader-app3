@@ -58,7 +58,7 @@ class ChapterPostAnalysisStructuredOutputTest {
 
     fun validOutput() = """
         {"schemaVersion":1,"sourceChapterVersionId":"candidate-1","sourceChapterContentHash":"$HASH_A","chapterId":"chapter-1","chapterIndex":1,
-        "checkSourceSnapshotHash":"$HASH_B","sceneContractHash":"$HASH_C",
+        "memorySnapshotHash":"$HASH_B","priorForeshadowSnapshotHash":"$HASH_C","knownEntitySnapshotHash":"$HASH_D","checkSourceSnapshotHash":"$HASH_E","sceneContractHash":"$HASH_F",
         "summary":{"objectiveOutcome":"主角完成任务并承担后果","keyEvents":["系统升级"],"decisions":["接受代价"],"relationshipChanges":["双方建立信任"],"endingState":"新任务开启","unresolvedQuestions":["代价来源"],"importance":90},
         "entityEvents":[{"entityId":"character-1","attribute":"RELATIONSHIP","relatedEntityId":"character-2","oldValue":"陌生","newValue":"信任","storyTimeExpression":"当夜","confidenceMicros":1000000,"canonLevel":"STORY_CANON","evidence":"两人在事后明确结盟"},{"entityId":"character-1","attribute":"POSSESSION","relatedEntityId":null,"oldValue":null,"newValue":"持有钥匙","storyTimeExpression":"当夜","confidenceMicros":1000000,"canonLevel":"STORY_CANON","evidence":"正文写明主角收起钥匙"}],
         "canonFacts":[{"factKind":"DISCOVERY","entityId":"character-1","text":"系统升级需要完成任务","canonLevel":"STORY_CANON","confidenceMicros":1000000,"conflictGroupId":"system-rule"}],
@@ -75,5 +75,8 @@ class ChapterPostAnalysisStructuredOutputTest {
         private const val HASH_A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         private const val HASH_B = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         private const val HASH_C = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        private const val HASH_D = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        private const val HASH_E = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        private const val HASH_F = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
     }
 }

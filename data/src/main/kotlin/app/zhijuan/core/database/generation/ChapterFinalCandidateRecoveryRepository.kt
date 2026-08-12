@@ -32,9 +32,10 @@ data class ChapterFinalCandidateRecoveryV1(
 }
 
 /**
- * Recovers the current BODY -> MEMORY -> TRACKING -> CONSISTENCY chain in one
- * read transaction. This snapshot is not a publication permit; the final
- * commit repository independently revalidates the same durable evidence.
+ * Recovers either the legacy four-artifact chain or the merged
+ * BODY -> POST_ANALYSIS chain in one read transaction. This snapshot is not a
+ * publication permit; the final commit repository independently revalidates
+ * the same durable evidence.
  */
 class ChapterFinalCandidateRecoveryRepository(
     private val database: ZhijuanDatabase,
@@ -64,64 +65,83 @@ class ChapterFinalCandidateRecoveryRepository(
             "Final candidate recovery failed: chapter does not belong to the frozen job source."
         }
 
-        val consistency = loadSealedStage(
+        val analysis = loadSealedStage(
             dao = dao,
             stageId = source.predecessorStageId,
             finalStage = finalStage,
             source = source,
-            expectedRole = ChapterCandidateArtifactRoleV1.CONSISTENCY,
+            expectedRoles = setOf(
+                ChapterCandidateArtifactRoleV1.CONSISTENCY,
+                ChapterCandidateArtifactRoleV1.POST_ANALYSIS,
+            ),
         )
-        val consistencyInput = requireNotNull(consistency.inputSource) {
-            "Final candidate recovery failed: consistency input source is missing."
+        val analysisInput = requireNotNull(analysis.inputSource) {
+            "Final candidate recovery failed: analysis input source is missing."
         }
-        val tracking = loadSealedStage(
-            dao = dao,
-            stageId = consistencyInput.predecessorStageId,
-            finalStage = finalStage,
-            source = source,
-            expectedRole = ChapterCandidateArtifactRoleV1.TRACKING,
-        )
-        val trackingInput = requireNotNull(tracking.inputSource) {
-            "Final candidate recovery failed: tracking input source is missing."
-        }
-        val memory = loadSealedStage(
-            dao = dao,
-            stageId = trackingInput.predecessorStageId,
-            finalStage = finalStage,
-            source = source,
-            expectedRole = ChapterCandidateArtifactRoleV1.MEMORY,
-        )
-        val memoryInput = requireNotNull(memory.inputSource) {
-            "Final candidate recovery failed: memory input source is missing."
-        }
-        val body = loadSealedStage(
-            dao = dao,
-            stageId = memoryInput.predecessorStageId,
-            finalStage = finalStage,
-            source = source,
-            expectedRole = ChapterCandidateArtifactRoleV1.BODY,
-        )
+        val chain = when (analysis.evidence.role) {
+            ChapterCandidateArtifactRoleV1.POST_ANALYSIS -> {
+                val body = loadSealedStage(
+                    dao = dao,
+                    stageId = analysisInput.predecessorStageId,
+                    finalStage = finalStage,
+                    source = source,
+                    expectedRoles = setOf(ChapterCandidateArtifactRoleV1.BODY),
+                )
+                requireDerivedSource(analysis, ChapterCandidateArtifactRoleV1.POST_ANALYSIS, body, source)
+                requireContinuousChain(listOf(body, analysis), finalStage.stageId)
+                RecoveredCandidateChain(body, listOf(body, analysis), analysis, analysis, analysis)
+            }
 
-        requireDerivedSource(memory, ChapterCandidateArtifactRoleV1.MEMORY, body, source)
-        requireDerivedSource(tracking, ChapterCandidateArtifactRoleV1.TRACKING, memory, source)
-        requireDerivedSource(consistency, ChapterCandidateArtifactRoleV1.CONSISTENCY, tracking, source)
-        requireContinuousChain(body, memory, tracking, consistency, finalStage.stageId)
-        require(consistency.evidence.routeBindingHash == source.routeBindingHash) {
+            ChapterCandidateArtifactRoleV1.CONSISTENCY -> {
+                val tracking = loadSealedStage(
+                    dao = dao,
+                    stageId = analysisInput.predecessorStageId,
+                    finalStage = finalStage,
+                    source = source,
+                    expectedRoles = setOf(ChapterCandidateArtifactRoleV1.TRACKING),
+                )
+                val trackingInput = requireNotNull(tracking.inputSource) {
+                    "Final candidate recovery failed: tracking input source is missing."
+                }
+                val memory = loadSealedStage(
+                    dao = dao,
+                    stageId = trackingInput.predecessorStageId,
+                    finalStage = finalStage,
+                    source = source,
+                    expectedRoles = setOf(ChapterCandidateArtifactRoleV1.MEMORY),
+                )
+                val memoryInput = requireNotNull(memory.inputSource) {
+                    "Final candidate recovery failed: memory input source is missing."
+                }
+                val body = loadSealedStage(
+                    dao = dao,
+                    stageId = memoryInput.predecessorStageId,
+                    finalStage = finalStage,
+                    source = source,
+                    expectedRoles = setOf(ChapterCandidateArtifactRoleV1.BODY),
+                )
+                requireDerivedSource(memory, ChapterCandidateArtifactRoleV1.MEMORY, body, source)
+                requireDerivedSource(tracking, ChapterCandidateArtifactRoleV1.TRACKING, memory, source)
+                requireDerivedSource(analysis, ChapterCandidateArtifactRoleV1.CONSISTENCY, tracking, source)
+                requireContinuousChain(listOf(body, memory, tracking, analysis), finalStage.stageId)
+                RecoveredCandidateChain(body, listOf(body, memory, tracking, analysis), memory, tracking, analysis)
+            }
+
+            else -> error("Unreachable final analysis role.")
+        }
+        require(analysis.evidence.routeBindingHash == source.routeBindingHash) {
             "Final candidate recovery failed: final route binding is stale."
         }
-        require(consistency.evidence.sourceBindingHash == source.consistencyRequestSourceBindingHash) {
-            "Final candidate recovery failed: consistency request binding is stale."
+        require(analysis.evidence.sourceBindingHash == source.consistencyRequestSourceBindingHash) {
+            "Final candidate recovery failed: analysis request binding is stale."
         }
-        requireBodySource(body, source)
+        requireBodySource(chain.body, source)
 
-        val bodyAttempt = verifyAttempt(dao, body, finalStage.jobId)
-        val memoryAttempt = verifyAttempt(dao, memory, finalStage.jobId)
-        val trackingAttempt = verifyAttempt(dao, tracking, finalStage.jobId)
-        val consistencyAttempt = verifyAttempt(dao, consistency, finalStage.jobId)
-        verifyUsage(dao, bodyAttempt, job.bookId)
-        verifyUsage(dao, memoryAttempt, job.bookId)
-        verifyUsage(dao, trackingAttempt, job.bookId)
-        verifyUsage(dao, consistencyAttempt, job.bookId)
+        val attemptsByStage = chain.artifacts.associate { loaded ->
+            val attempt = verifyAttempt(dao, loaded, finalStage.jobId)
+            verifyUsage(dao, attempt, job.bookId)
+            loaded.stage.stageId to attempt
+        }
 
         ChapterFinalCandidateRecoveryV1(
             finalStageId = finalStage.stageId,
@@ -130,12 +150,17 @@ class ChapterFinalCandidateRecoveryRepository(
             finalStageStatus = finalStage.status,
             finalStageUpdatedAt = finalStage.updatedAt,
             source = source,
-            candidateRouteBindingHash = consistencyInput.routeBindingHash,
-            artifacts = listOf(body, memory, tracking, consistency)
-                .map { it.evidence.toArtifactEvidence() },
-            memoryModelSnapshotJson = requireModelSnapshot(memoryAttempt.modelSnapshotJson),
-            trackingModelSnapshotJson = requireModelSnapshot(trackingAttempt.modelSnapshotJson),
-            consistencyModelSnapshotJson = requireModelSnapshot(consistencyAttempt.modelSnapshotJson),
+            candidateRouteBindingHash = analysisInput.routeBindingHash,
+            artifacts = chain.artifacts.map { it.evidence.toArtifactEvidence() },
+            memoryModelSnapshotJson = requireModelSnapshot(
+                attemptsByStage.getValue(chain.memoryModelStage.stage.stageId).modelSnapshotJson,
+            ),
+            trackingModelSnapshotJson = requireModelSnapshot(
+                attemptsByStage.getValue(chain.trackingModelStage.stage.stageId).modelSnapshotJson,
+            ),
+            consistencyModelSnapshotJson = requireModelSnapshot(
+                attemptsByStage.getValue(chain.consistencyModelStage.stage.stageId).modelSnapshotJson,
+            ),
         )
     }
 
@@ -144,6 +169,14 @@ class ChapterFinalCandidateRecoveryRepository(
         val evidence: ChapterCandidateSealedStageEvidenceV1,
         val inputSource: ChapterCandidateStageSourceV1?,
         val initialDraftSource: InitialChapterDraftSourceV1?,
+    )
+
+    private data class RecoveredCandidateChain(
+        val body: RecoveredSealedStage,
+        val artifacts: List<RecoveredSealedStage>,
+        val memoryModelStage: RecoveredSealedStage,
+        val trackingModelStage: RecoveredSealedStage,
+        val consistencyModelStage: RecoveredSealedStage,
     )
 
     private fun requireFinalState(
@@ -171,7 +204,7 @@ class ChapterFinalCandidateRecoveryRepository(
         stageId: String,
         finalStage: GenerationStageEntity,
         source: ChapterFinalCommitStageSourceV1,
-        expectedRole: ChapterCandidateArtifactRoleV1,
+        expectedRoles: Set<ChapterCandidateArtifactRoleV1>,
     ): RecoveredSealedStage {
         val stage = dao.findStage(stageId)
             ?: stale("Final candidate recovery failed: predecessor stage does not exist.")
@@ -181,14 +214,14 @@ class ChapterFinalCandidateRecoveryRepository(
         ) { "Final candidate recovery failed: predecessor stage ownership or status is stale." }
         val evidence = ChapterCandidateSealedStageEvidenceParserV1.parseAndVerify(stage)
         require(
-            evidence.role == expectedRole &&
+            evidence.role in expectedRoles && stage.phase in evidence.role.allowedPhases &&
                 evidence.candidateChapterVersionId == source.candidateChapterVersionId &&
                 evidence.candidateContentHash == source.candidateContentHash &&
                 evidence.chapterId == source.chapterId && evidence.chapterIndex == source.chapterIndex &&
                 evidence.revisionIndex == source.revisionIndex,
         ) { "Final candidate recovery failed: sealed candidate evidence is stale." }
         val initialDraftSource = if (
-            expectedRole == ChapterCandidateArtifactRoleV1.BODY &&
+            evidence.role == ChapterCandidateArtifactRoleV1.BODY &&
             stage.phase == GenerationPhase.DRAFT_CHAPTER
         ) {
             InitialChapterDraftStageBinding.parseAndVerify(stage)
@@ -223,27 +256,15 @@ class ChapterFinalCandidateRecoveryRepository(
         ) { "Final candidate recovery failed: derived input source is stale." }
     }
 
-    private fun requireContinuousChain(
-        body: RecoveredSealedStage,
-        memory: RecoveredSealedStage,
-        tracking: RecoveredSealedStage,
-        consistency: RecoveredSealedStage,
-        finalStageId: String,
-    ) {
-        require(
-            body.evidence.nextStageId == memory.stage.stageId &&
-                memory.evidence.nextStageId == tracking.stage.stageId &&
-                tracking.evidence.nextStageId == consistency.stage.stageId &&
-                consistency.evidence.nextStageId == finalStageId,
-        ) { "Final candidate recovery failed: sealed candidate chain is not contiguous." }
-        require(
-            setOf(
-                body.stage.stageId,
-                memory.stage.stageId,
-                tracking.stage.stageId,
-                consistency.stage.stageId,
-            ).size == ChapterCandidateArtifactRoleV1.entries.size,
-        ) { "Final candidate recovery failed: sealed candidate chain contains a cycle." }
+    private fun requireContinuousChain(chain: List<RecoveredSealedStage>, finalStageId: String) {
+        require(chain.isNotEmpty())
+        val expectedNextIds = chain.drop(1).map { it.stage.stageId } + finalStageId
+        require(chain.map { it.evidence.nextStageId } == expectedNextIds) {
+            "Final candidate recovery failed: sealed candidate chain is not contiguous."
+        }
+        require(chain.map { it.stage.stageId }.distinct().size == chain.size) {
+            "Final candidate recovery failed: sealed candidate chain contains a cycle."
+        }
     }
 
     private fun requireBodySource(

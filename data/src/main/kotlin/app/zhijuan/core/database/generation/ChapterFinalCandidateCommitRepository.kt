@@ -300,7 +300,7 @@ class ChapterFinalCandidateCommitRepositoryV1(
     ): Map<ChapterCandidateArtifactRoleV1, Pair<GenerationStageEntity, RequestAttemptEntity>> {
         val dao = database.generationDao()
         val result = linkedMapOf<ChapterCandidateArtifactRoleV1, Pair<GenerationStageEntity, RequestAttemptEntity>>()
-        ChapterCandidateArtifactRoleV1.entries.forEach { role ->
+        artifactsByRole.keys.sortedBy { it.ordinal }.forEach { role ->
             val evidence = artifactsByRole.getValue(role)
             val stage = requireNotNull(dao.findStage(evidence.stageId)) { "Candidate evidence Stage is missing." }
             val attempt = requireNotNull(dao.findAttempt(evidence.attemptId)) { "Candidate evidence Attempt is missing." }
@@ -332,16 +332,28 @@ class ChapterFinalCandidateCommitRepositoryV1(
             ) { "Candidate Stage seal does not match the final publication evidence." }
             result[role] = stage to attempt
         }
-        val body = parseObject(requireNotNull(result.getValue(ChapterCandidateArtifactRoleV1.BODY).first.outputReferenceJson), "Body seal")
-        val memory = parseObject(requireNotNull(result.getValue(ChapterCandidateArtifactRoleV1.MEMORY).first.outputReferenceJson), "Memory seal")
-        val tracking = parseObject(requireNotNull(result.getValue(ChapterCandidateArtifactRoleV1.TRACKING).first.outputReferenceJson), "Tracking seal")
-        val consistency = parseObject(requireNotNull(result.getValue(ChapterCandidateArtifactRoleV1.CONSISTENCY).first.outputReferenceJson), "Consistency seal")
-        require(
-            body.string("nextStageId") == artifactsByRole.getValue(ChapterCandidateArtifactRoleV1.MEMORY).stageId &&
-                memory.string("nextStageId") == artifactsByRole.getValue(ChapterCandidateArtifactRoleV1.TRACKING).stageId &&
-                tracking.string("nextStageId") == artifactsByRole.getValue(ChapterCandidateArtifactRoleV1.CONSISTENCY).stageId &&
-                consistency.string("nextStageId") == finalStage.stageId,
-        ) { "Candidate evidence is not one contiguous body-memory-tracking-check chain." }
+        val body = parseObject(
+            requireNotNull(result.getValue(ChapterCandidateArtifactRoleV1.BODY).first.outputReferenceJson),
+            "Body seal",
+        )
+        val postAnalysis = result[ChapterCandidateArtifactRoleV1.POST_ANALYSIS]
+        if (postAnalysis != null) {
+            val post = parseObject(requireNotNull(postAnalysis.first.outputReferenceJson), "Post-analysis seal")
+            require(
+                body.string("nextStageId") == postAnalysis.first.stageId &&
+                    post.string("nextStageId") == finalStage.stageId,
+            ) { "Candidate evidence is not one contiguous body-post-analysis chain." }
+        } else {
+            val memory = parseObject(requireNotNull(result.getValue(ChapterCandidateArtifactRoleV1.MEMORY).first.outputReferenceJson), "Memory seal")
+            val tracking = parseObject(requireNotNull(result.getValue(ChapterCandidateArtifactRoleV1.TRACKING).first.outputReferenceJson), "Tracking seal")
+            val consistency = parseObject(requireNotNull(result.getValue(ChapterCandidateArtifactRoleV1.CONSISTENCY).first.outputReferenceJson), "Consistency seal")
+            require(
+                body.string("nextStageId") == artifactsByRole.getValue(ChapterCandidateArtifactRoleV1.MEMORY).stageId &&
+                    memory.string("nextStageId") == artifactsByRole.getValue(ChapterCandidateArtifactRoleV1.TRACKING).stageId &&
+                    tracking.string("nextStageId") == artifactsByRole.getValue(ChapterCandidateArtifactRoleV1.CONSISTENCY).stageId &&
+                    consistency.string("nextStageId") == finalStage.stageId,
+            ) { "Candidate evidence is not one contiguous body-memory-tracking-check chain." }
+        }
         return result
     }
 
@@ -352,10 +364,15 @@ class ChapterFinalCandidateCommitRepositoryV1(
         chapterIndex: Int,
     ) {
         val source = ChapterFinalCommitStageBindingV1.parseAndVerify(finalStage)
-        val consistencyStage = evidence.getValue(ChapterCandidateArtifactRoleV1.CONSISTENCY).first
-        val consistencyOutput = parseObject(
-            requireNotNull(consistencyStage.outputReferenceJson) { "Consistency seal output is missing." },
-            "Consistency seal",
+        val analysisRole = if (ChapterCandidateArtifactRoleV1.POST_ANALYSIS in evidence) {
+            ChapterCandidateArtifactRoleV1.POST_ANALYSIS
+        } else {
+            ChapterCandidateArtifactRoleV1.CONSISTENCY
+        }
+        val analysisStage = evidence.getValue(analysisRole).first
+        val analysisOutput = parseObject(
+            requireNotNull(analysisStage.outputReferenceJson) { "Analysis seal output is missing." },
+            "Analysis seal",
         )
         require(
             source.candidateChapterVersionId == draft.chapterVersionId &&
@@ -365,9 +382,9 @@ class ChapterFinalCandidateCommitRepositoryV1(
                 source.expectedCurrentVersionId == draft.expectedCurrentVersionId &&
                 source.maximumAutomaticRevisions == draft.maximumAutomaticRevisions &&
                 source.candidateContentHashHistory == draft.candidateContentHashHistory &&
-                source.predecessorStageId == consistencyStage.stageId &&
-                source.routeBindingHash == consistencyOutput.string("routeBindingHash") &&
-                source.consistencyRequestSourceBindingHash == consistencyOutput.string("sourceBindingHash"),
+                source.predecessorStageId == analysisStage.stageId &&
+                source.routeBindingHash == analysisOutput.string("routeBindingHash") &&
+                source.consistencyRequestSourceBindingHash == analysisOutput.string("sourceBindingHash"),
         ) { "Final commit Stage source does not match the frozen publication draft." }
     }
 
@@ -379,9 +396,13 @@ class ChapterFinalCandidateCommitRepositoryV1(
     ) {
         val versionId = draft.chapterVersionId
         val contentHash = draft.candidateContentHashHistory.last()
-        val memoryAttempt = evidence.getValue(ChapterCandidateArtifactRoleV1.MEMORY).second
-        val trackingAttempt = evidence.getValue(ChapterCandidateArtifactRoleV1.TRACKING).second
-        val consistencyAttempt = evidence.getValue(ChapterCandidateArtifactRoleV1.CONSISTENCY).second
+        val postAnalysis = evidence[ChapterCandidateArtifactRoleV1.POST_ANALYSIS]
+        val memoryEvidence = postAnalysis ?: evidence.getValue(ChapterCandidateArtifactRoleV1.MEMORY)
+        val trackingEvidence = postAnalysis ?: evidence.getValue(ChapterCandidateArtifactRoleV1.TRACKING)
+        val consistencyEvidence = postAnalysis ?: evidence.getValue(ChapterCandidateArtifactRoleV1.CONSISTENCY)
+        val memoryAttempt = memoryEvidence.second
+        val trackingAttempt = trackingEvidence.second
+        val consistencyAttempt = consistencyEvidence.second
         require(
             draft.summary.bookId == bookId && draft.summary.chapterVersionId == versionId &&
                 draft.summary.chapterIndex == chapterIndex && draft.summary.status == DerivedDataStatus.VALID &&
@@ -406,7 +427,7 @@ class ChapterFinalCandidateCommitRepositoryV1(
             ) { "Final canon-fact provenance is invalid." }
         }
         val projection = draft.trackingProjection
-        val trackingStage = evidence.getValue(ChapterCandidateArtifactRoleV1.TRACKING).first
+        val trackingStage = trackingEvidence.first
         require(
             projection.bookId == bookId && projection.chapterVersionId == versionId &&
                 projection.chapterIndex == chapterIndex && projection.generationStageId == trackingStage.stageId &&
@@ -425,7 +446,7 @@ class ChapterFinalCandidateCommitRepositoryV1(
         ) { "Final story-tracking projection provenance is invalid." }
         validateTrackingRows(draft, bookId, versionId, trackingStage.stageId, contentHash)
         val report = draft.consistencyReport
-        val consistencyStage = evidence.getValue(ChapterCandidateArtifactRoleV1.CONSISTENCY).first
+        val consistencyStage = consistencyEvidence.first
         require(
             report.bookId == bookId && report.targetChapterVersionId == versionId &&
                 report.targetChapterIndex == chapterIndex && report.generationStageId == consistencyStage.stageId &&
@@ -443,9 +464,26 @@ class ChapterFinalCandidateCommitRepositoryV1(
                 reportJson.string("chapterId") == draft.chapterId && reportJson.int("chapterIndex") == chapterIndex &&
                 reportJson["modelSnapshot"] == modelSnapshot,
         ) { "Only a source-bound accepted consistency report can publish a chapter." }
-        require(draft.memoryOutputContentHash == draft.artifacts.single { it.role == ChapterCandidateArtifactRoleV1.MEMORY }.canonicalOutputHash)
-        require(draft.trackingOutputContentHash == draft.artifacts.single { it.role == ChapterCandidateArtifactRoleV1.TRACKING }.canonicalOutputHash)
-        require(draft.consistencyOutputContentHash == draft.artifacts.single { it.role == ChapterCandidateArtifactRoleV1.CONSISTENCY }.canonicalOutputHash)
+        val mergedOutputHash = draft.artifacts.singleOrNull {
+            it.role == ChapterCandidateArtifactRoleV1.POST_ANALYSIS
+        }?.canonicalOutputHash
+        require(
+            if (mergedOutputHash != null) {
+                draft.memoryOutputContentHash == mergedOutputHash &&
+                    draft.trackingOutputContentHash == mergedOutputHash &&
+                    draft.consistencyOutputContentHash == mergedOutputHash
+            } else {
+                draft.memoryOutputContentHash == draft.artifacts.single {
+                    it.role == ChapterCandidateArtifactRoleV1.MEMORY
+                }.canonicalOutputHash &&
+                    draft.trackingOutputContentHash == draft.artifacts.single {
+                        it.role == ChapterCandidateArtifactRoleV1.TRACKING
+                    }.canonicalOutputHash &&
+                    draft.consistencyOutputContentHash == draft.artifacts.single {
+                        it.role == ChapterCandidateArtifactRoleV1.CONSISTENCY
+                    }.canonicalOutputHash
+            },
+        )
     }
 
     private fun validateTrackingRows(
@@ -569,8 +607,8 @@ class ChapterFinalCandidateCommitRepositoryV1(
                 draft.candidateContentHashHistory.all(HASH::matches) &&
                 draft.candidateContentHashHistory.distinct().size == draft.candidateContentHashHistory.size,
         ) { "Final candidate lineage is incomplete or cyclic." }
-        require(draft.artifacts.size == ChapterCandidateArtifactRoleV1.entries.size)
-        require(draft.artifacts.map { it.role }.toSet() == ChapterCandidateArtifactRoleV1.entries.toSet())
+        val roles = draft.artifacts.map { it.role }.toSet()
+        require(draft.artifacts.size == roles.size && roles in SUPPORTED_ARTIFACT_ROLE_SETS)
         draft.artifacts.forEach { evidence ->
             require(listOf(evidence.stageId, evidence.attemptId, evidence.artifactRefId).all(IDENTIFIER::matches))
             require(evidence.artifactRevision > 0)
@@ -604,7 +642,7 @@ class ChapterFinalCandidateCommitRepositoryV1(
         artifactsByRole: Map<ChapterCandidateArtifactRoleV1, ChapterFinalCandidateArtifactEvidenceV1>,
         contentHash: String,
     ) {
-        ChapterCandidateArtifactRoleV1.entries.forEach { role ->
+        artifactsByRole.keys.sortedBy { it.ordinal }.forEach { role ->
             val evidence = artifactsByRole.getValue(role)
             artifactStore.readBytes(
                 evidence.artifactRefId,
@@ -644,9 +682,9 @@ class ChapterFinalCandidateCommitRepositoryV1(
             "maximumAutomaticRevisions" to JsonPrimitive(draft.maximumAutomaticRevisions),
             "candidateHistoryHash" to JsonPrimitive(hashList(draft.candidateContentHashHistory)),
             "bodyStageId" to JsonPrimitive(artifacts.getValue(ChapterCandidateArtifactRoleV1.BODY).stageId),
-            "memoryStageId" to JsonPrimitive(artifacts.getValue(ChapterCandidateArtifactRoleV1.MEMORY).stageId),
-            "trackingStageId" to JsonPrimitive(artifacts.getValue(ChapterCandidateArtifactRoleV1.TRACKING).stageId),
-            "consistencyStageId" to JsonPrimitive(artifacts.getValue(ChapterCandidateArtifactRoleV1.CONSISTENCY).stageId),
+            "memoryStageId" to JsonPrimitive(derivedStageId(artifacts, ChapterCandidateArtifactRoleV1.MEMORY)),
+            "trackingStageId" to JsonPrimitive(derivedStageId(artifacts, ChapterCandidateArtifactRoleV1.TRACKING)),
+            "consistencyStageId" to JsonPrimitive(derivedStageId(artifacts, ChapterCandidateArtifactRoleV1.CONSISTENCY)),
             "memoryOutputContentHash" to JsonPrimitive(draft.memoryOutputContentHash),
             "trackingOutputContentHash" to JsonPrimitive(draft.trackingOutputContentHash),
             "consistencyOutputContentHash" to JsonPrimitive(draft.consistencyOutputContentHash),
@@ -700,6 +738,12 @@ class ChapterFinalCandidateCommitRepositoryV1(
 
     private fun rowHash(value: Any): String = sha256(value.toString())
 
+    private fun derivedStageId(
+        artifacts: Map<ChapterCandidateArtifactRoleV1, ChapterFinalCandidateArtifactEvidenceV1>,
+        legacyRole: ChapterCandidateArtifactRoleV1,
+    ): String = artifacts[ChapterCandidateArtifactRoleV1.POST_ANALYSIS]?.stageId
+        ?: artifacts.getValue(legacyRole).stageId
+
     private fun requireActiveLease(stage: GenerationStageEntity, token: GenerationLeaseToken, at: Long) {
         require(stage.leaseOwnerId == token.ownerId && stage.leaseAcquiredAt == token.acquiredAt)
         val heartbeatAt = requireNotNull(stage.leaseHeartbeatAt)
@@ -750,6 +794,17 @@ class ChapterFinalCandidateCommitRepositoryV1(
     private fun ByteArray.toHex() = joinToString(separator = "") { byte -> "%02x".format(byte) }
 
     private companion object {
+        val LEGACY_ARTIFACT_ROLES = setOf(
+            ChapterCandidateArtifactRoleV1.BODY,
+            ChapterCandidateArtifactRoleV1.MEMORY,
+            ChapterCandidateArtifactRoleV1.TRACKING,
+            ChapterCandidateArtifactRoleV1.CONSISTENCY,
+        )
+        val MERGED_ARTIFACT_ROLES = setOf(
+            ChapterCandidateArtifactRoleV1.BODY,
+            ChapterCandidateArtifactRoleV1.POST_ANALYSIS,
+        )
+        val SUPPORTED_ARTIFACT_ROLE_SETS = setOf(LEGACY_ARTIFACT_ROLES, MERGED_ARTIFACT_ROLES)
         val IDENTIFIER = Regex("[A-Za-z0-9._:-]{1,128}")
         val HASH = Regex("[0-9a-f]{64}")
         val STRICT_JSON = Json { isLenient = false; ignoreUnknownKeys = false }

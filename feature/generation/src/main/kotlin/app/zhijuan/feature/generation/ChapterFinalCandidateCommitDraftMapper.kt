@@ -70,13 +70,15 @@ object ChapterFinalCandidateCommitDraftMapperV1 {
         }
 
         val artifactsByRole = spec.artifacts.groupBy { it.role }
-        require(ChapterCandidateArtifactRoleV1.entries.all { artifactsByRole[it]?.size == 1 }) {
-            "Candidate evidence must contain exactly one artifact per role."
+        val roles = artifactsByRole.keys
+        require(roles in setOf(LEGACY_ROLES, MERGED_ROLES) && roles.all { artifactsByRole[it]?.size == 1 }) {
+            "Candidate evidence must contain one supported artifact chain."
         }
         val bodyEvidence = artifactsByRole.getValue(ChapterCandidateArtifactRoleV1.BODY).single()
-        val memoryEvidence = artifactsByRole.getValue(ChapterCandidateArtifactRoleV1.MEMORY).single()
-        val trackingEvidence = artifactsByRole.getValue(ChapterCandidateArtifactRoleV1.TRACKING).single()
-        val consistencyEvidence = artifactsByRole.getValue(ChapterCandidateArtifactRoleV1.CONSISTENCY).single()
+        val postEvidence = artifactsByRole[ChapterCandidateArtifactRoleV1.POST_ANALYSIS]?.single()
+        val memoryEvidence = postEvidence ?: artifactsByRole.getValue(ChapterCandidateArtifactRoleV1.MEMORY).single()
+        val trackingEvidence = postEvidence ?: artifactsByRole.getValue(ChapterCandidateArtifactRoleV1.TRACKING).single()
+        val consistencyEvidence = postEvidence ?: artifactsByRole.getValue(ChapterCandidateArtifactRoleV1.CONSISTENCY).single()
         require(bodyEvidence.canonicalOutputHash == candidate.contentHash) {
             "Body evidence does not match the current candidate hash."
         }
@@ -209,4 +211,14 @@ object ChapterFinalCandidateCommitDraftMapperV1 {
 
     private val IDENTIFIER = Regex("[A-Za-z0-9._:-]{1,128}")
     private val HASH = Regex("[0-9a-f]{64}")
+    private val LEGACY_ROLES = setOf(
+        ChapterCandidateArtifactRoleV1.BODY,
+        ChapterCandidateArtifactRoleV1.MEMORY,
+        ChapterCandidateArtifactRoleV1.TRACKING,
+        ChapterCandidateArtifactRoleV1.CONSISTENCY,
+    )
+    private val MERGED_ROLES = setOf(
+        ChapterCandidateArtifactRoleV1.BODY,
+        ChapterCandidateArtifactRoleV1.POST_ANALYSIS,
+    )
 }

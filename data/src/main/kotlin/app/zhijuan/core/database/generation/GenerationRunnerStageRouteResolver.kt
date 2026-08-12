@@ -18,6 +18,7 @@ enum class GenerationRunnerStageRoute {
     CANDIDATE_CHAPTER_MEMORY_V1,
     CANDIDATE_CHAPTER_TRACKING_V1,
     CANDIDATE_CHAPTER_CONSISTENCY_V1,
+    CANDIDATE_CHAPTER_POST_ANALYSIS_V1,
     CANDIDATE_CHAPTER_REVISION_V1,
     CHAPTER_CONTEXT_ASSEMBLY_V1,
     CHAPTER_PLAN_V1,
@@ -78,6 +79,9 @@ internal object GenerationRunnerStageRouteResolver {
                     source.role == ChapterCandidateArtifactRoleV1.CONSISTENCY &&
                         stage.phase == GenerationPhase.CHECK_CONSISTENCY ->
                         GenerationRunnerStageRoute.CANDIDATE_CHAPTER_CONSISTENCY_V1
+                    source.role == ChapterCandidateArtifactRoleV1.POST_ANALYSIS &&
+                        stage.phase == GenerationPhase.EXTRACT_MEMORY ->
+                        GenerationRunnerStageRoute.CANDIDATE_CHAPTER_POST_ANALYSIS_V1
                     source.role == ChapterCandidateArtifactRoleV1.BODY &&
                         stage.phase == GenerationPhase.REVISE_CHAPTER ->
                         GenerationRunnerStageRoute.CANDIDATE_CHAPTER_REVISION_V1

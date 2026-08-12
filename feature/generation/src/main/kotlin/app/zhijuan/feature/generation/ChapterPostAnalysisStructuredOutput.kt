@@ -56,6 +56,9 @@ data class ChapterPostAnalysisV1(
     val sourceChapterContentHash: String,
     val chapterId: String,
     val chapterIndex: Int,
+    val memorySnapshotHash: String,
+    val priorForeshadowSnapshotHash: String,
+    val knownEntitySnapshotHash: String,
     val checkSourceSnapshotHash: String,
     val sceneContractHash: String,
     val summary: ChapterMemorySummaryV1,
@@ -100,6 +103,9 @@ class ChapterPostAnalysisOutputParser(
             sourceChapterContentHash = memory.sourceChapterContentHash,
             chapterId = memory.chapterId,
             chapterIndex = memory.chapterIndex,
+            memorySnapshotHash = document.string("memorySnapshotHash"),
+            priorForeshadowSnapshotHash = document.string("priorForeshadowSnapshotHash"),
+            knownEntitySnapshotHash = document.string("knownEntitySnapshotHash"),
             checkSourceSnapshotHash = consistency.checkSourceSnapshotHash,
             sceneContractHash = consistency.sceneContractHash,
             summary = memory.summary,
@@ -209,6 +215,9 @@ object ChapterPostAnalysisOutputContractV1 : StructuredOutputContract {
         root.hash("sourceChapterContentHash")
         root.identifier("chapterId")
         root.int("chapterIndex", 1..10_000)
+        root.hash("memorySnapshotHash")
+        root.hash("priorForeshadowSnapshotHash")
+        root.hash("knownEntitySnapshotHash")
         root.hash("checkSourceSnapshotHash")
         root.hash("sceneContractHash")
 
@@ -371,9 +380,9 @@ private fun JsonObject.trackingDocument() = JsonObject(linkedMapOf(
     "sourceChapterContentHash" to getValue("sourceChapterContentHash"),
     "chapterId" to getValue("chapterId"),
     "chapterIndex" to getValue("chapterIndex"),
-    "memorySnapshotHash" to JsonPrimitive(ZERO_HASH),
-    "priorForeshadowSnapshotHash" to JsonPrimitive(ZERO_HASH),
-    "knownEntitySnapshotHash" to JsonPrimitive(ZERO_HASH),
+    "memorySnapshotHash" to getValue("memorySnapshotHash"),
+    "priorForeshadowSnapshotHash" to getValue("priorForeshadowSnapshotHash"),
+    "knownEntitySnapshotHash" to getValue("knownEntitySnapshotHash"),
     "timelineEvents" to getValue("timelineEvents"),
     "foreshadowOperations" to getValue("foreshadowTransitions"),
 ))
@@ -407,6 +416,9 @@ private fun buildProviderSchema(): JsonObject {
                 .forEach { put(it, memoryProperties.getValue(it)) }
             put("checkSourceSnapshotHash", consistencyProperties.getValue("checkSourceSnapshotHash"))
             put("sceneContractHash", consistencyProperties.getValue("sceneContractHash"))
+            put("memorySnapshotHash", trackingProperties.getValue("memorySnapshotHash"))
+            put("priorForeshadowSnapshotHash", trackingProperties.getValue("priorForeshadowSnapshotHash"))
+            put("knownEntitySnapshotHash", trackingProperties.getValue("knownEntitySnapshotHash"))
             put("summary", memoryProperties.getValue("summary"))
             put("entityEvents", memoryProperties.getValue("entityEvents"))
             put("canonFacts", memoryProperties.getValue("facts"))
@@ -496,6 +508,7 @@ private fun sha256(value: String) = MessageDigest.getInstance("SHA-256").digest(
 
 private val ROOT_KEYS = linkedSetOf(
     "schemaVersion", "sourceChapterVersionId", "sourceChapterContentHash", "chapterId", "chapterIndex",
+    "memorySnapshotHash", "priorForeshadowSnapshotHash", "knownEntitySnapshotHash",
     "checkSourceSnapshotHash", "sceneContractHash", "summary", "entityEvents", "canonFacts",
     "timelineEvents", "foreshadowTransitions", "completedAndOpenObligations", "storyStateDeltas",
     "repetitionFindings", "consistencyFindings", "presentationFindings", "criterionResults",
@@ -506,7 +519,6 @@ private val STATE_KEYS = linkedSetOf("namespace", "entityId", "attribute", "rela
 private val REPETITION_KEYS = linkedSetOf("findingId", "firstStartCodePointInclusive", "firstEndCodePointExclusive", "repeatedStartCodePointInclusive", "repeatedEndCodePointExclusive", "severity", "repairAction")
 private val BINDING_KEYS = linkedSetOf("bindingId", "subject", "subjectIndex", "startCodePointInclusive", "endCodePointExclusive")
 private val STATE_ATTRIBUTE = Regex("[a-z][a-z0-9._-]{0,95}")
-private val ZERO_HASH = "0".repeat(64)
 private val PRESENTATION_CODES = setOf(
     ConsistencyIssueCode.FADE_SUBSTITUTION.name,
     ConsistencyIssueCode.SENSORY_CONTINUITY_BREAK.name,

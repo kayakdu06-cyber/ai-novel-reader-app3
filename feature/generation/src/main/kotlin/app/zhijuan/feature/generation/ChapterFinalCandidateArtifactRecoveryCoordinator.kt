@@ -55,11 +55,24 @@ class ChapterFinalCandidateArtifactRecoveryCoordinator(
         evidence: List<ChapterFinalCandidateArtifactEvidenceV1>,
     ): ChapterFinalCandidateArtifactRecoveryResultV1 {
         val byRole = evidence.groupBy { it.role }
-        val roles = ChapterCandidateArtifactRoleV1.entries
-        require(byRole.size == roles.size && roles.all { byRole[it]?.size == 1 }) {
-            "Final candidate evidence must contain exactly one artifact per role."
+        val roles = byRole.keys
+        require(roles in setOf(LEGACY_ROLES, MERGED_ROLES) && roles.all { byRole[it]?.size == 1 }) {
+            "Final candidate evidence must contain one supported artifact chain."
         }
         val body = readBody(byRole.getValue(ChapterCandidateArtifactRoleV1.BODY).single())
+        if (roles == MERGED_ROLES) {
+            val post = readStructured(
+                byRole.getValue(ChapterCandidateArtifactRoleV1.POST_ANALYSIS).single(),
+                { bytes -> ChapterPostAnalysisOutputParser().parse(bytes) },
+                { it.contentHash },
+            )
+            return ChapterFinalCandidateArtifactRecoveryResultV1(
+                candidateContent = body,
+                memory = post.asMemory(),
+                tracking = post.asTracking(),
+                consistency = post.asConsistency(),
+            )
+        }
         val memory = readStructured(
             byRole.getValue(ChapterCandidateArtifactRoleV1.MEMORY).single(),
             { bytes -> ChapterMemoryOutputParser().parse(bytes) },
@@ -140,7 +153,35 @@ class ChapterFinalCandidateArtifactRecoveryCoordinator(
         ): ChapterFinalCandidateArtifactRecoveryCoordinator =
             ChapterFinalCandidateArtifactRecoveryCoordinator(StoreBackedReader(store))
     }
+
+    private fun ChapterPostAnalysisV1.asMemory() = ChapterMemoryV1(
+        sourceChapterVersionId, sourceChapterContentHash, chapterId, chapterIndex,
+        summary, entityEvents, canonFacts, canonicalJson, contentHash,
+    )
+
+    private fun ChapterPostAnalysisV1.asTracking() = ChapterStoryTrackingV1(
+        sourceChapterVersionId, sourceChapterContentHash, chapterId, chapterIndex,
+        memorySnapshotHash, priorForeshadowSnapshotHash, knownEntitySnapshotHash,
+        timelineEvents, foreshadowTransitions, canonicalJson, contentHash,
+    )
+
+    private fun ChapterPostAnalysisV1.asConsistency() = ChapterConsistencyReportV1(
+        sourceChapterVersionId, sourceChapterContentHash, chapterId, chapterIndex,
+        checkSourceSnapshotHash, sceneContractHash, criterionResults, requiredProcessResults,
+        consistencyFindings, canonicalJson, contentHash,
+    )
 }
+
+private val LEGACY_ROLES = setOf(
+    ChapterCandidateArtifactRoleV1.BODY,
+    ChapterCandidateArtifactRoleV1.MEMORY,
+    ChapterCandidateArtifactRoleV1.TRACKING,
+    ChapterCandidateArtifactRoleV1.CONSISTENCY,
+)
+private val MERGED_ROLES = setOf(
+    ChapterCandidateArtifactRoleV1.BODY,
+    ChapterCandidateArtifactRoleV1.POST_ANALYSIS,
+)
 
 private fun sha256(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256")
     .digest(bytes)

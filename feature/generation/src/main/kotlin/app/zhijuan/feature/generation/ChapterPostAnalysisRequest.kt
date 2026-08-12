@@ -269,7 +269,7 @@ internal class BoundChapterPostAnalysisOutputContractV1(
 
     private fun ChapterPostAnalysisV1.asTracking(expected: ChapterTrackingExpectation) = ChapterStoryTrackingV1(
         sourceChapterVersionId, sourceChapterContentHash, chapterId, chapterIndex,
-        expected.memorySnapshotHash, expected.priorForeshadowSnapshotHash, expected.knownEntitySnapshotHash,
+        memorySnapshotHash, priorForeshadowSnapshotHash, knownEntitySnapshotHash,
         timelineEvents, foreshadowTransitions, canonicalJson, contentHash,
     )
 

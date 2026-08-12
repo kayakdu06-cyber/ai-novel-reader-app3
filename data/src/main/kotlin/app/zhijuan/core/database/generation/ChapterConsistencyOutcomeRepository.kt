@@ -31,6 +31,7 @@ data class ChapterConsistencyOutcomeDraftV1(
     val routedAt: Long,
     val consistencyMappingSnapshotJson: String? = null,
     val consistencyMappingSnapshotContentHash: String? = null,
+    val artifactRole: ChapterCandidateArtifactRoleV1 = ChapterCandidateArtifactRoleV1.CONSISTENCY,
 ) {
     override fun toString(): String =
         "ChapterConsistencyOutcomeDraftV1(chapterIndex=$chapterIndex, revisionIndex=$revisionIndex, content=redacted)"
@@ -380,6 +381,7 @@ class ChapterConsistencyOutcomeRepositoryV1(
                             reason = decision.reason,
                             usage = draft.usage,
                             settledAt = draft.routedAt,
+                            artifactRole = draft.artifactRole,
                         ),
                     ),
                 )
@@ -393,6 +395,12 @@ class ChapterConsistencyOutcomeRepositoryV1(
     ) {
         require(listOf(draft.candidateChapterVersionId, draft.chapterId, draft.nextStageId).all(IDENTIFIER::matches))
         require(draft.chapterIndex in 1..10_000 && draft.revisionIndex in 0..2)
+        require(
+            draft.artifactRole in setOf(
+                ChapterCandidateArtifactRoleV1.CONSISTENCY,
+                ChapterCandidateArtifactRoleV1.POST_ANALYSIS,
+            ),
+        )
         require(listOf(draft.candidateContentHash, draft.canonicalOutputHash, draft.sourceBindingHash).all(HASH::matches))
         require(draft.candidateRouteBindingHash == null || HASH.matches(draft.candidateRouteBindingHash))
         require(
@@ -427,7 +435,7 @@ class ChapterConsistencyOutcomeRepositoryV1(
         routeBindingHash: String,
     ) =
         ChapterCandidateArtifactSealDraftV1(
-            role = ChapterCandidateArtifactRoleV1.CONSISTENCY,
+            role = artifactRole,
             candidateChapterVersionId = candidateChapterVersionId,
             chapterId = chapterId,
             chapterIndex = chapterIndex,

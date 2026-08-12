@@ -153,9 +153,10 @@ class ChapterFinalCandidateCommitCoordinatorV1 internal constructor(
             "Candidate route binding does not match its revision index."
         }
 
-        val memoryStageId = singleArtifactStageId(artifacts, ChapterCandidateArtifactRoleV1.MEMORY)
-        val trackingStageId = singleArtifactStageId(artifacts, ChapterCandidateArtifactRoleV1.TRACKING)
-        val consistencyStageId = singleArtifactStageId(artifacts, ChapterCandidateArtifactRoleV1.CONSISTENCY)
+        val postAnalysisStageId = optionalArtifactStageId(artifacts, ChapterCandidateArtifactRoleV1.POST_ANALYSIS)
+        val memoryStageId = postAnalysisStageId ?: singleArtifactStageId(artifacts, ChapterCandidateArtifactRoleV1.MEMORY)
+        val trackingStageId = postAnalysisStageId ?: singleArtifactStageId(artifacts, ChapterCandidateArtifactRoleV1.TRACKING)
+        val consistencyStageId = postAnalysisStageId ?: singleArtifactStageId(artifacts, ChapterCandidateArtifactRoleV1.CONSISTENCY)
 
         val mappingTime = if (initialStatus == GenerationStageStatus.PREPARING) {
             requestedAt
@@ -261,6 +262,15 @@ class ChapterFinalCandidateCommitCoordinatorV1 internal constructor(
             "Final commit requires exactly one recovered artifact per role."
         }
         return matches.single().stageId
+    }
+
+    private fun optionalArtifactStageId(
+        artifacts: List<ChapterFinalCandidateArtifactEvidenceV1>,
+        role: ChapterCandidateArtifactRoleV1,
+    ): String? {
+        val matches = artifacts.filter { it.role == role }
+        require(matches.size <= 1)
+        return matches.singleOrNull()?.stageId
     }
 
     private fun sha256(value: String): String {
