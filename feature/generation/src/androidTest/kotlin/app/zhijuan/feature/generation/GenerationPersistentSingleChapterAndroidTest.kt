@@ -14,6 +14,7 @@ import app.zhijuan.core.database.generation.ChapterContextAssemblyJobSpec
 import app.zhijuan.core.database.generation.ChapterContextAssemblyRepository
 import app.zhijuan.core.database.generation.ChapterContextAssemblyStageIds
 import app.zhijuan.core.database.generation.ChapterPlanV2FrozenSources
+import app.zhijuan.core.database.generation.ChapterPlanV2PromptSourcesRepository
 import app.zhijuan.core.database.generation.ChapterPlanV2StageBinding
 import app.zhijuan.core.database.generation.ChapterProgressionAuthorization
 import app.zhijuan.core.database.generation.ChapterProgressionGateRepository
@@ -89,7 +90,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
-class GenerationPersistentSingleChapterAndroidTest {
+class GenerationPersistentChapterSequenceAndroidTest {
     private val context: Context = ApplicationProvider.getApplicationContext()
     private lateinit var database: ZhijuanDatabase
     private lateinit var artifacts: AndroidProtectedArtifactStore
@@ -113,83 +114,75 @@ class GenerationPersistentSingleChapterAndroidTest {
     }
 
     @Test
-    fun oneFrozenPlanRunsThreeFakeCallsAcrossPauseAndCommitsOneReadableVersion() = runBlocking {
-        val ready = seedPlanningAndContext()
+    fun fourChaptersPauseAndRestartWithoutLosingReadableStateOrOpeningProviderTwice() = runBlocking {
+        seedBookPlanning()
         val routing = strictMixedPolicy()
-        val policyHash = ChapterPlanV2RequestFactory.policyCompilationHash(routing)
-        val scene = strictSceneContract()
-        val expectation = ChapterPlanExpectationV2(
-            base = ChapterPlanExpectationV1(
-                chapterId = CHAPTER_ID,
-                chapterIndex = 1,
-                contextContentHash = ready.contentHash,
-                contextSourceManifestHash = ready.sourceManifestHash,
-                knownCharacterIds = setOf(HERO_ID, PARTNER_ID),
-                confirmedAdultFictionalCharacterIds = setOf(HERO_ID, PARTNER_ID),
-                sceneExecutionContract = scene,
-            ),
-            activationHash = routing.activation.activationHash,
-            policyCompilationHash = policyHash,
-            contextEvidenceHash = sha256(ready.providerPayloadJson),
-            activeCapabilityIds = routing.activation.activeCapabilityIds,
-            activeStateNamespaces = routing.activation.expectedStateNamespaceIds,
-            priorObligationIds = emptySet(),
-        )
-        val authority = ChapterPlanV2RequestFactory.create(ChapterPlanV2RequestSpec(
-            requestId = "request.authority",
-            generationId = JOB_ID,
-            stageId = PLAN_STAGE,
-            attemptId = "attempt.authority",
-            modelId = FakeProviderAdapter.DEFAULT_MODEL_ID,
-            contextPayloadJson = ready.providerPayloadJson,
-            contextContentHash = ready.contentHash,
-            contextSourceManifestHash = ready.sourceManifestHash,
-            contextEvidenceHash = expectation.contextEvidenceHash,
-            expectation = expectation,
-            policySelection = routing,
-            maximumOutputTokens = 4_096,
-            timeouts = TIMEOUTS,
-        ))
-        freezePlanStage(authority)
-
-        GenerationControlRepository(database).requestPause(JOB_ID, 21L)
-        assertEquals(GenerationJobStatus.PAUSED, GenerationStateRepository(database).findJob(JOB_ID)?.status)
-        GenerationControlRepository(database).resume(JOB_ID, 22L)
-
-        val body = candidateBody()
-        val remote = FakeRemote(
-            database = database,
-            artifacts = artifacts,
-            planOutput = planOutput(authority, ready),
-            body = body,
-        )
-        val runtime = GenerationPersistentRuntimeFactoryV1.create(
+        val firstChapter = prepareChapter(1, routing)
+        val firstRemote = FakeRemote(database, artifacts)
+        val firstRuntime = GenerationPersistentRuntimeFactoryV1.create(
             database = database,
             artifactStore = artifacts,
-            remote = remote,
-            clock = IncrementingClock(100L),
+            remote = firstRemote,
+            clock = IncrementingClock(30_000L),
         )
+        var pauseInjected = false
+        val firstSequence = GenerationPersistentChapterSequenceV1(firstRuntime.runner) { _, expected ->
+            val prepared = prepareChapter(expected, routing)
+            if (!pauseInjected && expected == 2) {
+                GenerationControlRepository(database).requestPause(prepared.jobId, chapterBaseTime(expected) + 100L)
+                pauseInjected = true
+            }
+            GenerationNextChapterPreparationResult.Prepared(prepared)
+        }
 
-        val result = runtime.runner.runJob(JOB_ID, "runner.task128")
+        val paused = firstSequence.run(firstChapter, 4, "runner.task129.first")
 
-        assertEquals(GenerationPersistentRunDisposition.COMPLETED, result.disposition)
-        assertEquals(4, result.executedStageCount)
-        assertEquals(3, remote.generateCalls())
-        val job = GenerationStateRepository(database).findJob(JOB_ID)
-        assertEquals(GenerationJobStatus.COMPLETED, job?.status)
-        val stages = database.generationDao().stagesForJob(JOB_ID)
-        assertEquals(5, stages.size)
-        assertTrue(stages.all { it.status == GenerationStageStatus.SUCCEEDED })
-        assertEquals(3, stages.count { database.generationDao().attemptsForStage(it.stageId).size == 1 })
-        assertEquals(3, scalarInt("SELECT COUNT(*) FROM usage_ledger WHERE status = 'FINAL'"))
-        val chapter = requireNotNull(database.libraryDao().findChapter(CHAPTER_ID))
-        val version = requireNotNull(chapter.currentVersionId?.let { database.libraryDao().findChapterVersion(it) })
-        assertEquals(body, version.content)
-        assertEquals(1, database.libraryDao().versionsForChapter(CHAPTER_ID).size)
-        assertNotNull(database.memoryDao().findSummaryForVersion(version.chapterVersionId))
+        assertEquals(GenerationChapterSequenceDisposition.RUNNER_HALTED, paused.disposition)
+        assertEquals(listOf(1), paused.completedChapters.map { it.chapterOrdinal })
+        assertEquals(2, paused.currentChapter.chapterOrdinal)
+        assertEquals(3, firstRemote.generateCalls())
+        assertEquals(GenerationJobStatus.PAUSED, GenerationStateRepository(database).findJob(jobId(2))?.status)
+        assertReadableChapter(1)
+
+        GenerationControlRepository(database).resume(jobId(2), chapterBaseTime(2) + 101L)
+        val restartedRemote = FakeRemote(database, artifacts)
+        val restartedRuntime = GenerationPersistentRuntimeFactoryV1.create(
+            database = database,
+            artifactStore = artifacts,
+            remote = restartedRemote,
+            clock = IncrementingClock(50_000L),
+        )
+        val restartedSequence = GenerationPersistentChapterSequenceV1(restartedRuntime.runner) { _, expected ->
+            GenerationNextChapterPreparationResult.Prepared(prepareChapter(expected, routing))
+        }
+
+        val completed = restartedSequence.run(paused.currentChapter, 3, "runner.task129.restarted")
+
+        assertEquals(GenerationChapterSequenceDisposition.TARGET_COMPLETED, completed.disposition)
+        assertEquals(listOf(2, 3, 4), completed.completedChapters.map { it.chapterOrdinal })
+        assertEquals(9, restartedRemote.generateCalls())
+        assertEquals(12, firstRemote.generateCalls() + restartedRemote.generateCalls())
+        assertEquals((1..4).toList(), database.libraryDao().chaptersForBook(BOOK_ID).map { it.chapterIndex })
+        (1..4).forEach { index ->
+            assertEquals(GenerationJobStatus.COMPLETED, GenerationStateRepository(database).findJob(jobId(index))?.status)
+            val stages = database.generationDao().stagesForJob(jobId(index))
+            assertEquals(5, stages.size)
+            assertTrue(stages.all { it.status == GenerationStageStatus.SUCCEEDED })
+            assertReadableChapter(index)
+        }
+        assertEquals(12, scalarInt("SELECT COUNT(*) FROM usage_ledger WHERE status = 'FINAL'"))
+        val systemLevels = (1..4).map { index ->
+            val version = requireNotNull(database.libraryDao().findChapter(chapterId(index))?.currentVersionId)
+            assertTrue(database.memoryDao().canonFactsForVersion(version).any {
+                it.factPayloadJson.contains(OBLIGATION_ID) && it.factPayloadJson.contains("CARRY_FORWARD")
+            })
+            database.memoryDao().entityEventsForVersion(version)
+                .single { it.attributeKey == "system.level" }.newValueJson
+        }
+        assertEquals(listOf("2", "3", "4", "5"), systemLevels)
     }
 
-    private suspend fun seedPlanningAndContext(): ReadyChapterContext {
+    private suspend fun seedBookPlanning() {
         BookCreationRepository(database).create(
             BookCreationSnapshotEntity(
                 snapshotId = SNAPSHOT_ID,
@@ -220,7 +213,6 @@ class GenerationPersistentSingleChapterAndroidTest {
                 updatedAt = 1L,
             ),
         )
-        database.libraryDao().insertChapter(chapter())
         createEvidenceStage(BIBLE_JOB, BIBLE_STAGE, GenerationPhase.BUILD_BIBLE)
         createEvidenceStage(MASTER_JOB, MASTER_STAGE, GenerationPhase.BUILD_MASTER_OUTLINE)
         createEvidenceStage(WINDOW_JOB, WINDOW_STAGE, GenerationPhase.BUILD_ARC_PLAN)
@@ -259,26 +251,39 @@ class GenerationPersistentSingleChapterAndroidTest {
         database.memoryDao().createOutlineRevision(
             OutlineRevisionEntity(WINDOW_REVISION, BOOK_ID, 2, MASTER_REVISION, RevisionSource.AI_GENERATED, 1,
                 window, sha256(window), WINDOW_STAGE, 4L),
-            listOf(
-                outlineNode("node.window", WINDOW_REVISION, null, OutlineNodeType.BOOK, 0L, null, window),
-                outlineNode("node.arc", WINDOW_REVISION, "node.window", OutlineNodeType.ARC, 1L, null,
-                    "{\"goal\":\"任务升级并推动关系\"}"),
-                outlineNode("node.chapter", WINDOW_REVISION, "node.arc", OutlineNodeType.CHAPTER, 2L, 1,
-                    "{\"goal\":\"两名成年人共同完成系统任务\"}"),
-            ),
+            buildList {
+                add(outlineNode("node.window", WINDOW_REVISION, null, OutlineNodeType.BOOK, 0L, null, window))
+                add(outlineNode("node.arc", WINDOW_REVISION, "node.window", OutlineNodeType.ARC, 1L, null,
+                    "{\"goal\":\"任务升级并推动关系\"}"))
+                (1..4).forEach { index ->
+                    add(outlineNode("node.chapter.$index", WINDOW_REVISION, "node.arc", OutlineNodeType.CHAPTER,
+                        index + 1L, index, "{\"goal\":\"第${index}次任务推动人物、关系、系统与道具状态\"}"))
+                }
+            },
         )
         markEvidenceStage(WINDOW_STAGE, "arc-plan.v1", WINDOW_REVISION, sha256(window))
         seedBudget()
+    }
+
+    private suspend fun prepareChapter(
+        chapterIndex: Int,
+        routing: ChapterPromptPolicySelectionV1,
+    ): GenerationChapterRun {
+        val chapterId = chapterId(chapterIndex)
+        val jobId = jobId(chapterIndex)
+        val contextStage = contextStageId(chapterIndex)
+        val planStage = planStageId(chapterIndex)
+        database.libraryDao().insertChapter(chapter(chapterIndex))
         val permit = ChapterProgressionGateRepository(database).authorize(
-            BOOK_ID, CHAPTER_ID, FirstChapterGenerationMode.FULL_PLANNING,
+            BOOK_ID, chapterId, FirstChapterGenerationMode.FULL_PLANNING,
         ) as ChapterProgressionAuthorization.Ready
         val binding = PromptBundleBindingRepository(database).bindForBook(BOOK_ID)
         GenerationJobSetupRepository(database).create(ChapterContextAssemblyJobFactory.create(
             ChapterContextAssemblyJobSpec(
-                jobId = JOB_ID,
+                jobId = jobId,
                 bookId = BOOK_ID,
-                chapterId = CHAPTER_ID,
-                chapterIndex = 1,
+                chapterId = chapterId,
+                chapterIndex = chapterIndex,
                 userIntentJson = INTENT_JSON,
                 budgetSnapshotJson = "{\"fixture\":true}",
                 promptBindingHash = binding.bindingHash,
@@ -291,26 +296,69 @@ class GenerationPersistentSingleChapterAndroidTest {
                     tokenizerFamily = "conservative-utf8-v1",
                 ),
                 progressionPermit = permit.permit,
-                stageIds = ChapterContextAssemblyStageIds(CONTEXT_STAGE, PLAN_STAGE),
-                createdAt = 10L,
+                stageIds = ChapterContextAssemblyStageIds(contextStage, planStage),
+                createdAt = chapterBaseTime(chapterIndex),
             ),
         ))
         val states = GenerationStateRepository(database)
-        states.transitionJob(JOB_ID, GenerationJobStatus.CREATED, JobEvent.VALIDATION_PASSED, 11L)
-        states.transitionStage(CONTEXT_STAGE, GenerationStageStatus.PENDING, StageEvent.DEPENDENCIES_SATISFIED, 11L)
-        states.acquireJobLease(JOB_ID, "fixture.context", 12L)
-        states.acquireStageLease(CONTEXT_STAGE, "fixture.context", 13L)
-        val token = requireNotNull(states.findStage(CONTEXT_STAGE)?.leaseToken)
-        return when (val result = ChapterContextAssemblyRepository(database).assemble(CONTEXT_STAGE, token, 14L)) {
+        val base = chapterBaseTime(chapterIndex)
+        states.transitionJob(jobId, GenerationJobStatus.CREATED, JobEvent.VALIDATION_PASSED, base + 1L)
+        states.transitionStage(contextStage, GenerationStageStatus.PENDING, StageEvent.DEPENDENCIES_SATISFIED, base + 1L)
+        states.acquireJobLease(jobId, "fixture.context.$chapterIndex", base + 2L)
+        states.acquireStageLease(contextStage, "fixture.context.$chapterIndex", base + 3L)
+        val token = requireNotNull(states.findStage(contextStage)?.leaseToken)
+        val ready = when (val result = ChapterContextAssemblyRepository(database).assemble(contextStage, token, base + 4L)) {
             is PersistedChapterContextAssemblyResult.Ready -> result.context
             is PersistedChapterContextAssemblyResult.Blocked -> error("Context assembly blocked: $result")
         }
+        val policyHash = ChapterPlanV2RequestFactory.policyCompilationHash(routing)
+        val expectation = ChapterPlanExpectationV2(
+            base = ChapterPlanExpectationV1(
+                chapterId = chapterId,
+                chapterIndex = chapterIndex,
+                contextContentHash = ready.contentHash,
+                contextSourceManifestHash = ready.sourceManifestHash,
+                knownCharacterIds = setOf(HERO_ID, PARTNER_ID),
+                confirmedAdultFictionalCharacterIds = setOf(HERO_ID, PARTNER_ID),
+                sceneExecutionContract = strictSceneContract(),
+            ),
+            activationHash = routing.activation.activationHash,
+            policyCompilationHash = policyHash,
+            contextEvidenceHash = sha256(ready.providerPayloadJson),
+            activeCapabilityIds = routing.activation.activeCapabilityIds,
+            activeStateNamespaces = routing.activation.expectedStateNamespaceIds,
+            priorObligationIds = setOf(OBLIGATION_ID),
+        )
+        val authority = ChapterPlanV2RequestFactory.create(ChapterPlanV2RequestSpec(
+            requestId = "request.authority.$chapterIndex",
+            generationId = jobId,
+            stageId = planStage,
+            attemptId = "attempt.authority.$chapterIndex",
+            modelId = FakeProviderAdapter.DEFAULT_MODEL_ID,
+            contextPayloadJson = ready.providerPayloadJson,
+            contextContentHash = ready.contentHash,
+            contextSourceManifestHash = ready.sourceManifestHash,
+            contextEvidenceHash = expectation.contextEvidenceHash,
+            expectation = expectation,
+            policySelection = routing,
+            maximumOutputTokens = 4_096,
+            timeouts = TIMEOUTS,
+        ))
+        freezePlanStage(jobId, planStage, base, authority)
+        GenerationControlRepository(database).requestPause(jobId, base + 5L)
+        GenerationControlRepository(database).resume(jobId, base + 6L)
+        return GenerationChapterRun(jobId, chapterIndex)
     }
 
-    private suspend fun freezePlanStage(authority: BoundChapterPlanV2Request) {
-        val original = requireNotNull(database.generationDao().findStage(PLAN_STAGE))
+    private suspend fun freezePlanStage(
+        jobId: String,
+        planStageId: String,
+        createdAt: Long,
+        authority: BoundChapterPlanV2Request,
+    ) {
+        val original = requireNotNull(database.generationDao().findStage(planStageId))
         val setup = GenerationJobSetup(
-            jobId = JOB_ID,
+            jobId = jobId,
             bookId = BOOK_ID,
             jobType = GenerationJobType.CONTINUE_BOOK,
             userIntentJson = INTENT_JSON,
@@ -320,7 +368,7 @@ class GenerationPersistentSingleChapterAndroidTest {
                 original.stageId, original.phase, original.targetType, original.targetId,
                 original.inputVersionHash, original.idempotencyKey, original.maxAttempts, original.inputSourcesJson,
             )),
-            createdAt = 10L,
+            createdAt = createdAt,
         )
         val frozen = ChapterPlanV2FrozenSources.freeze(
             authority.expectationJson,
@@ -333,7 +381,7 @@ class GenerationPersistentSingleChapterAndroidTest {
         val upgraded = ChapterPlanV2StageBinding.bind(setup, frozen).stages.single()
         database.openHelper.writableDatabase.execSQL(
             "UPDATE generation_stage SET input_version_hash = ?, idempotency_key = ?, input_sources_json = ? WHERE stage_id = ?",
-            arrayOf(upgraded.inputVersionHash, upgraded.idempotencyKey, upgraded.inputSourcesJson, PLAN_STAGE),
+            arrayOf(upgraded.inputVersionHash, upgraded.idempotencyKey, upgraded.inputSourcesJson, planStageId),
         )
     }
 
@@ -384,11 +432,46 @@ class GenerationPersistentSingleChapterAndroidTest {
         )).joinToString("\n")
     }
 
+    private fun sequencePlanOutput(
+        source: app.zhijuan.core.database.generation.ChapterPlanV2PromptSources,
+        chapterIndex: Int,
+    ): String {
+        val authority = ChapterPlanV2RequestFactory.restore(FrozenChapterPlanV2RequestSpec(
+            requestId = "request.sequence.$chapterIndex",
+            generationId = jobId(chapterIndex),
+            stageId = planStageId(chapterIndex),
+            attemptId = "attempt.sequence.$chapterIndex",
+            modelId = FakeProviderAdapter.DEFAULT_MODEL_ID,
+            context = source.context,
+            frozen = source.frozen,
+            maximumOutputTokens = 4_096,
+            timeouts = TIMEOUTS,
+            idempotencyKey = source.stageIdempotencyKey,
+        ))
+        return planOutput(authority, source.context)
+            .replace("\"chapterId\":\"$CHAPTER_ID\"", "\"chapterId\":\"${chapterId(chapterIndex)}\"")
+            .replace("\"chapterIndex\":1", "\"chapterIndex\":$chapterIndex")
+            .replace(
+                "\"obligationActions\":[]",
+                "\"obligationActions\":[{\"obligationId\":\"$OBLIGATION_ID\",\"action\":\"CARRY_FORWARD\",\"plannedEvidence\":\"系统警告仍待后续兑现\",\"nextDueChapterIndex\":null}]",
+            )
+            .replace(
+                "\"oldValueJson\":\"1\",\"newValueJson\":\"2\"",
+                "\"oldValueJson\":\"$chapterIndex\",\"newValueJson\":\"${chapterIndex + 1}\"",
+            )
+            .replace(
+                "\"oldValueJson\":\"0\",\"newValueJson\":\"1\"",
+                "\"oldValueJson\":\"${chapterIndex - 1}\",\"newValueJson\":\"$chapterIndex\"",
+            )
+    }
+
+    private fun sequenceCandidateBody(chapterIndex: Int): String =
+        "第${chapterIndex}章的新任务承接上一章正式结果。\n" + candidateBody() +
+            "\n系统在第${chapterIndex}章确认等级升至${chapterIndex + 1}级。"
+
     private inner class FakeRemote(
         private val database: ZhijuanDatabase,
         private val artifacts: AndroidProtectedArtifactStore,
-        private val planOutput: String,
-        private val body: String,
     ) : GenerationBoundRemoteExecutionProvider {
         private val adapters = mutableListOf<FakeProviderAdapter>()
 
@@ -396,12 +479,20 @@ class GenerationPersistentSingleChapterAndroidTest {
             snapshot: app.zhijuan.core.database.generation.GenerationRunnerCurrentStageRouteSnapshot,
             requestedAt: Long,
         ): GenerationBoundRemoteExecution {
+            val chapterIndex = snapshot.executionLease.jobId.substringAfterLast('.').toInt()
             val output = when (snapshot.route) {
-                app.zhijuan.core.database.generation.GenerationRunnerStageRoute.CHAPTER_PLAN_V2 -> planOutput
+                app.zhijuan.core.database.generation.GenerationRunnerStageRoute.CHAPTER_PLAN_V2 -> {
+                    val source = ChapterPlanV2PromptSourcesRepository(database).loadBound(snapshot, requestedAt)
+                    sequencePlanOutput(source, chapterIndex)
+                }
                 app.zhijuan.core.database.generation.GenerationRunnerStageRoute.INITIAL_CHAPTER_DRAFT_V1 ->
-                    JsonObject(mapOf("body" to JsonPrimitive(body))).toString()
+                    JsonObject(mapOf("body" to JsonPrimitive(sequenceCandidateBody(chapterIndex)))).toString()
                 app.zhijuan.core.database.generation.GenerationRunnerStageRoute.CANDIDATE_CHAPTER_POST_ANALYSIS_V1 ->
-                    postAnalysisOutput(snapshot, requestedAt)
+                    postAnalysisOutput(snapshot, requestedAt).replace(
+                        "\"evidenceBindings\":[",
+                        "\"evidenceBindings\":[{\"bindingId\":\"bind-obligation\",\"subject\":\"OBLIGATION\"," +
+                            "\"subjectIndex\":0,\"startCodePointInclusive\":37,\"endCodePointExclusive\":48},",
+                    )
                 else -> error("Fake Provider was requested for a local route: ${snapshot.route}")
             }
             val adapter = FakeProviderAdapter(fakeStreamScript {
@@ -436,7 +527,7 @@ class GenerationPersistentSingleChapterAndroidTest {
             val assembly = ChapterPostAnalysisBoundRequestAssemblerV1.assemble(
                 source = source,
                 requestId = "request.analysis.fixture",
-                generationId = JOB_ID,
+                generationId = snapshot.executionLease.jobId,
                 attemptId = "attempt.analysis.fixture",
                 modelId = FakeProviderAdapter.DEFAULT_MODEL_ID,
                 maximumOutputTokens = 4_096,
@@ -451,7 +542,8 @@ class GenerationPersistentSingleChapterAndroidTest {
             val process = expected.consistency.requiredProcessNodeIds.sorted().joinToString(",") { node ->
                 "{\"requiredProcessNodeId\":\"$node\",\"status\":\"COVERED\",\"issueId\":null}"
             }
-            return """{"schemaVersion":1,"sourceChapterVersionId":"${expected.memory.sourceChapterVersionId}","sourceChapterContentHash":"${expected.memory.sourceChapterContentHash}","chapterId":"${expected.memory.chapterId}","chapterIndex":${expected.memory.chapterIndex},"memorySnapshotHash":"${expected.tracking.memorySnapshotHash}","priorForeshadowSnapshotHash":"${expected.tracking.priorForeshadowSnapshotHash}","knownEntitySnapshotHash":"${expected.tracking.knownEntitySnapshotHash}","checkSourceSnapshotHash":"${expected.consistency.checkSourceSnapshotHash}","sceneContractHash":"${expected.consistency.sceneContractHash}","summary":{"objectiveOutcome":"系统任务完成并产生关系与升级后果","keyEvents":["系统升级"],"decisions":["双方结盟"],"relationshipChanges":["信任提升"],"endingState":"系统二级并出现新代价","unresolvedQuestions":["新代价是什么"],"importance":90},"entityEvents":[{"entityId":"$HERO_ID","attribute":"RELATIONSHIP","relatedEntityId":"$PARTNER_ID","oldValue":"陌生","newValue":"结盟","storyTimeExpression":"当夜","confidenceMicros":1000000,"canonLevel":"STORY_CANON","evidence":"双方明确结盟"}],"canonFacts":[{"factKind":"DISCOVERY","entityId":"$HERO_ID","text":"系统完成任务后升至二级","canonLevel":"STORY_CANON","confidenceMicros":1000000,"conflictGroupId":"system-level"}],"timelineEvents":[{"name":"完成系统任务","participantEntityIds":["$HERO_ID","$PARTNER_ID"],"locationEntityId":null,"storyTimeExpression":"当夜","constraints":["升级发生在任务完成后"],"evidence":"正文先完成任务再显示升级"}],"foreshadowTransitions":[],"completedAndOpenObligations":[],"storyStateDeltas":[{"namespace":"SYSTEM","entityId":"$HERO_ID","attribute":"level","relatedEntityId":null,"oldValueJson":"1","newValueJson":"2","evidence":"系统明确显示从一级升至二级"},{"namespace":"ITEM","entityId":"$HERO_ID","attribute":"owner","relatedEntityId":null,"oldValueJson":"null","newValueJson":"\"$HERO_ID\"","evidence":"林岚把钥匙收进口袋"},{"namespace":"RELATIONSHIP","entityId":"$HERO_ID","attribute":"trust","relatedEntityId":"$PARTNER_ID","oldValueJson":"0","newValueJson":"1","evidence":"双方明确结盟"}],"repetitionFindings":[],"consistencyFindings":[],"presentationFindings":[],"criterionResults":[$criteria],"requiredProcessResults":[$process],"severeRevisionRequired":false,"evidenceBindings":[{"bindingId":"bind-system","subject":"STORY_STATE_DELTA","subjectIndex":0,"startCodePointInclusive":1,"endCodePointExclusive":12},{"bindingId":"bind-item","subject":"STORY_STATE_DELTA","subjectIndex":1,"startCodePointInclusive":13,"endCodePointExclusive":24},{"bindingId":"bind-relationship","subject":"STORY_STATE_DELTA","subjectIndex":2,"startCodePointInclusive":25,"endCodePointExclusive":36}]}"""
+            val chapterIndex = expected.memory.chapterIndex
+            return """{"schemaVersion":1,"sourceChapterVersionId":"${expected.memory.sourceChapterVersionId}","sourceChapterContentHash":"${expected.memory.sourceChapterContentHash}","chapterId":"${expected.memory.chapterId}","chapterIndex":${expected.memory.chapterIndex},"memorySnapshotHash":"${expected.tracking.memorySnapshotHash}","priorForeshadowSnapshotHash":"${expected.tracking.priorForeshadowSnapshotHash}","knownEntitySnapshotHash":"${expected.tracking.knownEntitySnapshotHash}","checkSourceSnapshotHash":"${expected.consistency.checkSourceSnapshotHash}","sceneContractHash":"${expected.consistency.sceneContractHash}","summary":{"objectiveOutcome":"系统任务完成并产生关系与升级后果","keyEvents":["系统升级"],"decisions":["双方结盟"],"relationshipChanges":["信任提升"],"endingState":"系统升级并出现新代价","unresolvedQuestions":["新代价是什么"],"importance":90},"entityEvents":[{"entityId":"$HERO_ID","attribute":"RELATIONSHIP","relatedEntityId":"$PARTNER_ID","oldValue":"前一状态","newValue":"继续结盟","storyTimeExpression":"当夜","confidenceMicros":1000000,"canonLevel":"STORY_CANON","evidence":"双方继续结盟"}],"canonFacts":[{"factKind":"DISCOVERY","entityId":"$HERO_ID","text":"系统完成第${chapterIndex}次任务后升级","canonLevel":"STORY_CANON","confidenceMicros":1000000,"conflictGroupId":"system-level-$chapterIndex"}],"timelineEvents":[{"name":"完成第${chapterIndex}次系统任务","participantEntityIds":["$HERO_ID","$PARTNER_ID"],"locationEntityId":null,"storyTimeExpression":"当夜","constraints":["升级发生在任务完成后"],"evidence":"正文先完成任务再显示升级"}],"foreshadowTransitions":[],"completedAndOpenObligations":[{"obligationId":"$OBLIGATION_ID","action":"CARRY_FORWARD","evidence":"系统警告仍待后续兑现","nextDueChapterIndex":null}],"storyStateDeltas":[{"namespace":"SYSTEM","entityId":"$HERO_ID","attribute":"level","relatedEntityId":null,"oldValueJson":"$chapterIndex","newValueJson":"${chapterIndex + 1}","evidence":"系统明确显示本次升级"},{"namespace":"ITEM","entityId":"$HERO_ID","attribute":"owner","relatedEntityId":null,"oldValueJson":"null","newValueJson":"\"$HERO_ID\"","evidence":"林岚继续持有钥匙"},{"namespace":"RELATIONSHIP","entityId":"$HERO_ID","attribute":"trust","relatedEntityId":"$PARTNER_ID","oldValueJson":"${chapterIndex - 1}","newValueJson":"$chapterIndex","evidence":"双方信任继续提升"}],"repetitionFindings":[],"consistencyFindings":[],"presentationFindings":[],"criterionResults":[$criteria],"requiredProcessResults":[$process],"severeRevisionRequired":false,"evidenceBindings":[{"bindingId":"bind-system","subject":"STORY_STATE_DELTA","subjectIndex":0,"startCodePointInclusive":1,"endCodePointExclusive":12},{"bindingId":"bind-item","subject":"STORY_STATE_DELTA","subjectIndex":1,"startCodePointInclusive":13,"endCodePointExclusive":24},{"bindingId":"bind-relationship","subject":"STORY_STATE_DELTA","subjectIndex":2,"startCodePointInclusive":25,"endCodePointExclusive":36}]}"""
         }
     }
 
@@ -494,10 +586,19 @@ class GenerationPersistentSingleChapterAndroidTest {
         AdultStatus.CONFIRMED_ADULT, 22, BIBLE_REVISION, 2L, 2L,
     )
 
-    private fun chapter() = ChapterEntity(
-        CHAPTER_ID, BOOK_ID, 1, "第一章", "第一章", ChapterStatus.PLANNED, null,
+    private fun chapter(chapterIndex: Int) = ChapterEntity(
+        chapterId(chapterIndex), BOOK_ID, chapterIndex, "第${chapterIndex}章", "第${chapterIndex}章",
+        ChapterStatus.PLANNED, null,
         ConsistencyStatus.UNKNOWN, 1L, 1L,
     )
+
+    private suspend fun assertReadableChapter(chapterIndex: Int) {
+        val chapter = requireNotNull(database.libraryDao().findChapter(chapterId(chapterIndex)))
+        val version = requireNotNull(chapter.currentVersionId?.let { database.libraryDao().findChapterVersion(it) })
+        assertTrue(version.content.startsWith("第${chapterIndex}章的新任务"))
+        assertEquals(1, database.libraryDao().versionsForChapter(chapter.chapterId).size)
+        assertNotNull(database.memoryDao().findSummaryForVersion(version.chapterVersionId))
+    }
 
     private fun outlineNode(
         id: String,
@@ -531,6 +632,7 @@ class GenerationPersistentSingleChapterAndroidTest {
         const val CHAPTER_ID = "chapter.task128.1"
         const val HERO_ID = "character.lin"
         const val PARTNER_ID = "character.su"
+        const val OBLIGATION_ID = "obligation.system-warning"
         const val BIBLE_JOB = "job.task128.bible"
         const val BIBLE_STAGE = "stage.task128.bible"
         const val BIBLE_REVISION = "bible.task128.1"
@@ -540,9 +642,6 @@ class GenerationPersistentSingleChapterAndroidTest {
         const val WINDOW_JOB = "job.task128.window"
         const val WINDOW_STAGE = "stage.task128.window"
         const val WINDOW_REVISION = "outline.task128.window"
-        const val JOB_ID = "job.task128.chapter"
-        const val CONTEXT_STAGE = "stage.task128.context"
-        const val PLAN_STAGE = "stage.task128.plan"
         const val CONNECTION_ID = "connection.task128"
         const val BASE_URL = "https://example.invalid"
         val TIMEOUTS = ProviderTimeoutPolicy(1_000, 2_000, 2_000, 10_000)
@@ -551,5 +650,11 @@ class GenerationPersistentSingleChapterAndroidTest {
         val GENRE_JSON = """{"contentDimensionBaseline":{"conflictDetailLevel":1,"graphicInjuryLevel":0,"languageIntensityLevel":2,"emotionalPressureLevel":3}}"""
         val PRESENTATION_JSON = """{"directive":{"preset":"DETAILED","narrativeDetailLevel":4,"intimacyDetailLevel":4,"fadePolicy":"AVOID","conflictDetailOverride":null,"graphicInjuryOverride":null,"languageIntensityOverride":null,"emotionalPressureOverride":null,"presentationMappingSchemaVersion":1,"contentControlSchemaVersion":1},"resolvedProfile":{"preset":"DETAILED","narrativeDetailLevel":4,"intimacyDetailLevel":4,"conflictDetailLevel":1,"graphicInjuryLevel":0,"languageIntensityLevel":2,"emotionalPressureLevel":3,"fadePolicy":"AVOID","presentationMappingSchemaVersion":1,"contentControlSchemaVersion":1}}"""
         val BIBLE_JSON = """{"schemaVersion":1,"characters":[{"entityId":"$HERO_ID"},{"entityId":"$PARTNER_ID"}],"worldRules":[{"ruleId":"rule.system","text":"系统只在完成任务后升级"}],"hardFacts":[{"factId":"fact.adult","entityId":"$HERO_ID","text":"两名角色均为二十二岁的虚构成年人"}],"themes":["选择与后果"],"writingStyle":["有限视角"],"forbiddenChanges":["不得跳过状态变化的因果"]}"""
+
+        fun chapterId(chapterIndex: Int) = "chapter.task128.$chapterIndex"
+        fun jobId(chapterIndex: Int) = "job.task128.chapter.$chapterIndex"
+        fun contextStageId(chapterIndex: Int) = "stage.task128.context.$chapterIndex"
+        fun planStageId(chapterIndex: Int) = "stage.task128.plan.$chapterIndex"
+        fun chapterBaseTime(chapterIndex: Int) = 100L + chapterIndex * 1_000L
     }
 }
