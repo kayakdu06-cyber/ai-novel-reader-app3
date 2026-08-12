@@ -12,7 +12,8 @@ data class ChapterPostAnalysisMappingSpecV1(
     val generationStageId: String,
     val modelSnapshotJson: String,
     val createdAt: Long,
-    val expectation: ChapterPostAnalysisExpectationV1,
+    val consistencyExpectation: ChapterConsistencyExpectation,
+    val narrativeExpectation: ChapterPostAnalysisNarrativeExpectationV1,
     val localReport: ChapterLocalConsistencyReport,
     val sceneContract: ChapterSceneConsistencyContractV1,
 )
@@ -38,8 +39,8 @@ object ChapterPostAnalysisPersistenceMapperV1 {
         require(analysis.consistencyFindings.none {
             it.severity == ConsistencyIssueSeverity.BLOCKER || it.severity == ConsistencyIssueSeverity.MAJOR
         })
-        require(spec.expectation.consistency.sourceChapterVersionId == analysis.sourceChapterVersionId)
-        require(spec.expectation.consistency.sourceChapterContentHash == analysis.sourceChapterContentHash)
+        require(spec.consistencyExpectation.sourceChapterVersionId == analysis.sourceChapterVersionId)
+        require(spec.consistencyExpectation.sourceChapterContentHash == analysis.sourceChapterContentHash)
         require(spec.localReport.contentHash == analysis.sourceChapterContentHash)
         require(spec.sceneContract.contractHash == analysis.sceneContractHash)
 
@@ -53,10 +54,10 @@ object ChapterPostAnalysisPersistenceMapperV1 {
             ),
         )
         val narrativeInput = NarrativeStateValidationInputV1(
-            activeNamespaces = spec.expectation.narrative.activeNamespaces,
-            priorObligations = spec.expectation.narrative.priorObligations,
+            activeNamespaces = spec.narrativeExpectation.activeNamespaces,
+            priorObligations = spec.narrativeExpectation.priorObligations,
             obligationUpdates = analysis.completedAndOpenObligations,
-            currentStateValues = spec.expectation.narrative.currentStateValues,
+            currentStateValues = spec.narrativeExpectation.currentStateValues,
             stateDeltas = analysis.storyStateDeltas,
         )
         val narrative = NarrativeStatePersistenceMapperV1.mapValidated(
@@ -77,7 +78,7 @@ object ChapterPostAnalysisPersistenceMapperV1 {
             canonFacts = memory.canonFacts + narrative.obligationFacts,
         )
         val tracking = ChapterTrackingProjectionPersistenceMapper.map(
-            tracking = analysis.asTracking(spec.expectation.tracking),
+            tracking = analysis.asTracking(),
             spec = ChapterTrackingProjectionMappingSpec(
                 bookId = spec.bookId,
                 generationStageId = spec.generationStageId,
@@ -88,7 +89,7 @@ object ChapterPostAnalysisPersistenceMapperV1 {
         val consistency = ChapterConsistencyPersistenceMapperV1.map(
             local = spec.localReport,
             model = analysis.asConsistency(),
-            expectation = spec.expectation.consistency,
+            expectation = spec.consistencyExpectation,
             scene = spec.sceneContract,
             spec = ChapterConsistencyMappingSpecV1(
                 bookId = spec.bookId,
@@ -106,7 +107,7 @@ object ChapterPostAnalysisPersistenceMapperV1 {
         summary, entityEvents, canonFacts, canonicalJson, contentHash,
     )
 
-    private fun ChapterPostAnalysisV1.asTracking(expected: ChapterTrackingExpectation) = ChapterStoryTrackingV1(
+    private fun ChapterPostAnalysisV1.asTracking() = ChapterStoryTrackingV1(
         sourceChapterVersionId, sourceChapterContentHash, chapterId, chapterIndex,
         memorySnapshotHash, priorForeshadowSnapshotHash, knownEntitySnapshotHash,
         timelineEvents, foreshadowTransitions, canonicalJson, contentHash,

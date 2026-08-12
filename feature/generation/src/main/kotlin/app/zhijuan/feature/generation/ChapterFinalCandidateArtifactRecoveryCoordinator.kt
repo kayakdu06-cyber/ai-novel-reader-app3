@@ -34,6 +34,7 @@ data class ChapterFinalCandidateArtifactRecoveryResultV1(
     val memory: ChapterMemoryV1,
     val tracking: ChapterStoryTrackingV1,
     val consistency: ChapterConsistencyReportV1,
+    val postAnalysis: ChapterPostAnalysisV1? = null,
 ) {
     override fun toString(): String =
         "ChapterFinalCandidateArtifactRecoveryResultV1(" +
@@ -71,6 +72,7 @@ class ChapterFinalCandidateArtifactRecoveryCoordinator(
                 memory = post.asMemory(),
                 tracking = post.asTracking(),
                 consistency = post.asConsistency(),
+                postAnalysis = post,
             )
         }
         val memory = readStructured(

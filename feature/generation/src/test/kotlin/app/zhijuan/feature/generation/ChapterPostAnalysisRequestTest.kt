@@ -46,7 +46,7 @@ class ChapterPostAnalysisRequestTest {
         assertTrue(result is ChapterPostAnalysisRequestPreparationV1.LocalRevisionRequired)
     }
 
-    private fun spec(content: String = DEFAULT_BODY): ChapterPostAnalysisRequestSpecV1 {
+    internal fun spec(content: String = DEFAULT_BODY): ChapterPostAnalysisRequestSpecV1 {
         val hash = content.sha256()
         val memory = ChapterMemoryExtractionRequestSpec(
             requestId = "request-1", generationId = "generation-1", stageId = "stage-1", attemptId = "attempt-1",

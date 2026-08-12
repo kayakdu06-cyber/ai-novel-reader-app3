@@ -167,13 +167,13 @@ object ChapterFinalCommitStageBindingV1 {
             .getOrElse {
                 throw IllegalArgumentException("Final commit consistency mapping snapshot is not a strict JSON object.")
             }
-        require(snapshot.keys == MAPPING_ROOT_KEYS) {
+        require(snapshot.keys in MAPPING_ROOT_KEY_SETS) {
             "Final commit consistency mapping snapshot root keys are invalid."
         }
-        require(snapshot.intValue("schemaVersion") == 1) {
+        require(snapshot.intValue("schemaVersion") in 1..2) {
             "Final commit consistency mapping snapshot schema version is invalid."
         }
-        require(snapshot.string("schemaId") == MAPPING_SCHEMA_ID) {
+        require(snapshot.string("schemaId") in MAPPING_SCHEMA_IDS) {
             "Final commit consistency mapping snapshot schema id is invalid."
         }
         require(snapshot.string("consistencyRequestSourceBindingHash") == source.consistencyRequestSourceBindingHash) {
@@ -246,7 +246,10 @@ object ChapterFinalCommitStageBindingV1 {
         .joinToString(separator = "") { byte -> "%02x".format(byte) }
 
     internal const val SOURCE_POLICY_VERSION = "zhijuan.chapter-final-commit-stage-source.v3"
-    private const val MAPPING_SCHEMA_ID = "zhijuan.chapter-final-consistency-mapping.v1"
+    private val MAPPING_SCHEMA_IDS = setOf(
+        "zhijuan.chapter-final-consistency-mapping.v1",
+        "zhijuan.chapter-final-post-analysis-mapping.v2",
+    )
     private val ROOT_KEYS = setOf(
         "schemaVersion", "sourcePolicyVersion", "pipelineVersion",
         "candidateChapterVersionId", "candidateContentHash", "chapterId", "chapterIndex",
@@ -255,11 +258,13 @@ object ChapterFinalCommitStageBindingV1 {
         "consistencyRequestSourceBindingHash", "consistencyMappingSnapshotContentHash",
         "consistencyMappingSnapshot",
     )
-    private val MAPPING_ROOT_KEYS = setOf(
+    private val MAPPING_ROOT_KEYS_V1 = setOf(
         "schemaVersion", "schemaId", "consistencyRequestSourceBindingHash",
         "minimumBodyCodePoints", "totalRevisionAttemptsUsed", "revisionStageMaximumAttempts",
         "localReport", "expectation", "sceneContract",
     )
+    private val MAPPING_ROOT_KEYS_V2 = MAPPING_ROOT_KEYS_V1 + "narrativeExpectation"
+    private val MAPPING_ROOT_KEY_SETS = setOf(MAPPING_ROOT_KEYS_V1, MAPPING_ROOT_KEYS_V2)
     private val IDENTIFIER = Regex("[A-Za-z0-9._:-]{1,128}")
     private val HASH = Regex("[0-9a-f]{64}")
     private val STRICT_JSON = Json { isLenient = false; ignoreUnknownKeys = false }

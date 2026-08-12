@@ -164,34 +164,43 @@ class ChapterFinalCandidateCommitCoordinatorV1 internal constructor(
             recovered.finalStageUpdatedAt
         }
 
-        val memory = ChapterMemoryExtractionPersistenceMapper.map(
-            memory = artifactResult.memory,
-            spec = ChapterMemoryExtractionMappingSpec(
-                bookId = recovered.bookId,
-                generationStageId = memoryStageId,
-                modelSnapshotJson = recovered.memoryModelSnapshotJson,
-                createdAt = mappingTime,
+        val postAnalysis = artifactResult.postAnalysis
+        val merged = postAnalysis?.let { analysis ->
+            ChapterPostAnalysisPersistenceMapperV1.map(
+                analysis,
+                ChapterPostAnalysisMappingSpecV1(
+                    bookId = recovered.bookId,
+                    generationStageId = requireNotNull(postAnalysisStageId),
+                    modelSnapshotJson = recovered.memoryModelSnapshotJson,
+                    createdAt = mappingTime,
+                    consistencyExpectation = snapshot.expectation,
+                    narrativeExpectation = requireNotNull(snapshot.narrativeExpectation) {
+                        "Merged post-analysis commit is missing its frozen narrative expectation."
+                    },
+                    localReport = snapshot.localReport,
+                    sceneContract = snapshot.sceneContract,
+                ),
+            )
+        }
+        val memory = merged?.memory ?: ChapterMemoryExtractionPersistenceMapper.map(
+            artifactResult.memory,
+            ChapterMemoryExtractionMappingSpec(
+                recovered.bookId, memoryStageId, recovered.memoryModelSnapshotJson, mappingTime,
             ),
         )
-        val tracking = ChapterTrackingProjectionPersistenceMapper.map(
-            tracking = artifactResult.tracking,
-            spec = ChapterTrackingProjectionMappingSpec(
-                bookId = recovered.bookId,
-                generationStageId = trackingStageId,
-                modelSnapshotJson = recovered.trackingModelSnapshotJson,
-                createdAt = mappingTime,
+        val tracking = merged?.tracking ?: ChapterTrackingProjectionPersistenceMapper.map(
+            artifactResult.tracking,
+            ChapterTrackingProjectionMappingSpec(
+                recovered.bookId, trackingStageId, recovered.trackingModelSnapshotJson, mappingTime,
             ),
         )
-        val consistency = ChapterConsistencyPersistenceMapperV1.map(
+        val consistency = merged?.consistency ?: ChapterConsistencyPersistenceMapperV1.map(
             local = snapshot.localReport,
             model = artifactResult.consistency,
             expectation = snapshot.expectation,
             scene = snapshot.sceneContract,
             spec = ChapterConsistencyMappingSpecV1(
-                bookId = recovered.bookId,
-                generationStageId = consistencyStageId,
-                modelSnapshotJson = recovered.consistencyModelSnapshotJson,
-                createdAt = mappingTime,
+                recovered.bookId, consistencyStageId, recovered.consistencyModelSnapshotJson, mappingTime,
             ),
         )
         require(consistency.gate.decision == ChapterConsistencyGateDecisionV1.ACCEPT_CANDIDATE) {

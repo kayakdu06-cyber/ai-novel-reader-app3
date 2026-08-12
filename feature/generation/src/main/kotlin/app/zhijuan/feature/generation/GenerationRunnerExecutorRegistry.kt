@@ -23,6 +23,13 @@ fun interface InitialChapterDraftBoundExecutor {
     ): InitialChapterDraftExecutionResult
 }
 
+fun interface ChapterPostAnalysisBoundExecutor {
+    suspend fun executeBound(
+        snapshot: GenerationRunnerCurrentStageRouteSnapshot,
+        requestedAt: Long,
+    ): ChapterPostAnalysisRoutingResultV1
+}
+
 sealed interface GenerationRunnerRegisteredExecutionResultV1 {
     data class FinalChapterCommit(
         val result: ChapterFinalCandidateCommitStageExecutionResultV1,
@@ -39,6 +46,10 @@ sealed interface GenerationRunnerRegisteredExecutionResultV1 {
     data class InitialChapterDraft(
         val result: InitialChapterDraftExecutionResult,
     ) : GenerationRunnerRegisteredExecutionResultV1
+
+    data class ChapterPostAnalysis(
+        val result: ChapterPostAnalysisRoutingResultV1,
+    ) : GenerationRunnerRegisteredExecutionResultV1
 }
 
 class GenerationRunnerRouteNotRegisteredException(
@@ -51,6 +62,7 @@ internal object GenerationRunnerExecutorRegistryPolicyV1 {
         GenerationRunnerStageRoute.CHAPTER_CONTEXT_ASSEMBLY_V1,
         GenerationRunnerStageRoute.CHAPTER_PLAN_V2,
         GenerationRunnerStageRoute.INITIAL_CHAPTER_DRAFT_V1,
+        GenerationRunnerStageRoute.CANDIDATE_CHAPTER_POST_ANALYSIS_V1,
     )
 
     fun requireRegistered(route: GenerationRunnerStageRoute) {
@@ -64,6 +76,7 @@ class GenerationRunnerExecutorRegistryV1(
     private val contextAssemblyExecutor: ChapterContextAssemblyBoundExecutorV1,
     private val chapterPlanV2Executor: ChapterPlanV2BoundExecutor,
     private val initialChapterDraftExecutor: InitialChapterDraftBoundExecutor,
+    private val chapterPostAnalysisExecutor: ChapterPostAnalysisBoundExecutor,
     private val leasePolicy: GenerationLeasePolicy = GenerationLeasePolicy(),
 ) {
     val registeredRoutes: Set<GenerationRunnerStageRoute>
@@ -107,6 +120,10 @@ class GenerationRunnerExecutorRegistryV1(
             GenerationRunnerStageRoute.INITIAL_CHAPTER_DRAFT_V1 ->
                 GenerationRunnerRegisteredExecutionResultV1.InitialChapterDraft(
                     initialChapterDraftExecutor.executeBound(snapshot, requestedAt),
+                )
+            GenerationRunnerStageRoute.CANDIDATE_CHAPTER_POST_ANALYSIS_V1 ->
+                GenerationRunnerRegisteredExecutionResultV1.ChapterPostAnalysis(
+                    chapterPostAnalysisExecutor.executeBound(snapshot, requestedAt),
                 )
             else -> notRegistered(snapshot.route)
         }

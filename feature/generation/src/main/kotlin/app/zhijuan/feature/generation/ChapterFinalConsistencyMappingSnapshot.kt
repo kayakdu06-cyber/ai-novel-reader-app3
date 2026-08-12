@@ -11,6 +11,9 @@ import app.zhijuan.core.task.ChapterSceneConsistencyContractV1
 import app.zhijuan.core.task.ChapterSceneConsistencyModeV1
 import app.zhijuan.core.task.ConsistencyEvidenceRange
 import app.zhijuan.core.task.DeterministicConsistencyIssue
+import app.zhijuan.core.database.memory.NarrativeObligationV1
+import app.zhijuan.core.database.memory.StoryStateKeyV1
+import app.zhijuan.core.database.memory.StoryStateNamespaceV1
 import java.security.MessageDigest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -33,6 +36,7 @@ data class ChapterFinalConsistencyMappingSnapshotV1(
     val minimumBodyCodePoints: Int,
     val totalRevisionAttemptsUsed: Int,
     val revisionStageMaximumAttempts: Int,
+    val narrativeExpectation: ChapterPostAnalysisNarrativeExpectationV1? = null,
 ) {
     override fun toString(): String =
         "ChapterFinalConsistencyMappingSnapshotV1(chapterIndex=${expectation.chapterIndex}, " +
@@ -43,6 +47,7 @@ data class ChapterFinalConsistencyMappingSnapshotV1(
 /** Strict and deterministic JSON codec for [ChapterFinalConsistencyMappingSnapshotV1]. */
 object ChapterFinalConsistencyMappingSnapshotCodecV1 {
     const val SCHEMA_ID = "zhijuan.chapter-final-consistency-mapping.v1"
+    const val POST_ANALYSIS_SCHEMA_ID = "zhijuan.chapter-final-post-analysis-mapping.v2"
 
     // The snapshot is nested inside a GenerationStage source envelope whose total limit is 64 KiB.
     private const val MAX_SNAPSHOT_BYTES = 49_152
@@ -54,7 +59,7 @@ object ChapterFinalConsistencyMappingSnapshotCodecV1 {
         ignoreUnknownKeys = false
     }
 
-    private val ROOT_KEYS = linkedSetOf(
+    private val ROOT_KEYS_V1 = linkedSetOf(
         "schemaVersion",
         "schemaId",
         "consistencyRequestSourceBindingHash",
@@ -64,6 +69,12 @@ object ChapterFinalConsistencyMappingSnapshotCodecV1 {
         "localReport",
         "expectation",
         "sceneContract",
+    )
+    private val ROOT_KEYS_V2 = ROOT_KEYS_V1 + "narrativeExpectation"
+    private val NARRATIVE_KEYS = setOf("activeNamespaces", "priorObligations", "currentStateValues")
+    private val OBLIGATION_KEYS = setOf("obligationId", "description", "dueChapterIndex")
+    private val STATE_VALUE_KEYS = setOf(
+        "namespace", "entityId", "attribute", "relatedEntityId", "valueJson",
     )
 
     private val LOCAL_REPORT_KEYS = linkedSetOf(
@@ -135,19 +146,40 @@ object ChapterFinalConsistencyMappingSnapshotCodecV1 {
         return encoded
     }
 
+    fun capturePostAnalysis(
+        boundRequest: BoundChapterPostAnalysisRequestV1,
+        spec: ChapterCandidateConsistencyRoutingSpecV1,
+    ): String {
+        verifyExpectationMatchesSpec(boundRequest.expectation.consistency, boundRequest.localReport, spec)
+        val snapshot = ChapterFinalConsistencyMappingSnapshotV1(
+            consistencyRequestSourceBindingHash = boundRequest.sourceBindingHash,
+            localReport = boundRequest.localReport,
+            expectation = boundRequest.expectation.consistency,
+            sceneContract = boundRequest.sceneContract,
+            minimumBodyCodePoints = spec.minimumBodyCodePoints,
+            totalRevisionAttemptsUsed = spec.totalRevisionAttemptsUsed,
+            revisionStageMaximumAttempts = spec.revisionStageMaximumAttempts,
+            narrativeExpectation = boundRequest.expectation.narrative,
+        )
+        verifyCrossObject(snapshot)
+        return encode(snapshot).also { encoded ->
+            require(utf8ByteCount(encoded) <= MAX_SNAPSHOT_BYTES)
+            parseAndVerify(encoded)
+        }
+    }
+
     fun parseAndVerify(value: String): ChapterFinalConsistencyMappingSnapshotV1 {
         require(utf8ByteCount(value) <= MAX_SNAPSHOT_BYTES) {
             "Snapshot must not exceed $MAX_SNAPSHOT_BYTES UTF-8 bytes."
         }
         val root = STRICT_JSON.parseToJsonElement(value) as? JsonObject
             ?: throw IllegalArgumentException("Snapshot root must be a JSON object.")
-        requireExactKeys(root, ROOT_KEYS, "root")
-        require(requireInt(root.getValue("schemaVersion"), "schemaVersion") == 1) {
-            "Snapshot schemaVersion must be the integer 1."
-        }
-        require(requireString(root.getValue("schemaId"), "schemaId") == SCHEMA_ID) {
-            "Snapshot schemaId must equal the current schema id."
-        }
+        val schemaVersion = requireInt(root.getValue("schemaVersion"), "schemaVersion")
+        val schemaId = requireString(root.getValue("schemaId"), "schemaId")
+        require(
+            (schemaVersion == 1 && schemaId == SCHEMA_ID && root.keys == ROOT_KEYS_V1) ||
+                (schemaVersion == 2 && schemaId == POST_ANALYSIS_SCHEMA_ID && root.keys == ROOT_KEYS_V2),
+        ) { "Snapshot schema identity or root keys are invalid." }
         val snapshot = ChapterFinalConsistencyMappingSnapshotV1(
             consistencyRequestSourceBindingHash = requireString(
                 root.getValue("consistencyRequestSourceBindingHash"),
@@ -162,6 +194,9 @@ object ChapterFinalConsistencyMappingSnapshotCodecV1 {
                 root.getValue("revisionStageMaximumAttempts"),
                 "revisionStageMaximumAttempts",
             ),
+            narrativeExpectation = root["narrativeExpectation"]?.let {
+                decodeNarrativeExpectation(requireObject(it, "narrativeExpectation"))
+            },
         )
         verifyCrossObject(snapshot)
         return snapshot
@@ -180,7 +215,14 @@ object ChapterFinalConsistencyMappingSnapshotCodecV1 {
         boundRequest: BoundChapterConsistencyCheckRequest,
         spec: ChapterCandidateConsistencyRoutingSpecV1,
     ) {
-        val expectation = boundRequest.expectation
+        verifyExpectationMatchesSpec(boundRequest.expectation, boundRequest.localReport, spec)
+    }
+
+    private fun verifyExpectationMatchesSpec(
+        expectation: ChapterConsistencyExpectation,
+        localReport: ChapterLocalConsistencyReport,
+        spec: ChapterCandidateConsistencyRoutingSpecV1,
+    ) {
         require(expectation.sourceChapterVersionId == spec.candidate.chapterVersionId) {
             "Bound expectation source chapter version must match the routing candidate."
         }
@@ -199,6 +241,7 @@ object ChapterFinalConsistencyMappingSnapshotCodecV1 {
         ) {
             "Bound expectation body code point count must match the routing candidate content."
         }
+        require(localReport.contentHash == expectation.sourceChapterContentHash)
     }
 
     private fun verifyCrossObject(snapshot: ChapterFinalConsistencyMappingSnapshotV1) {
@@ -240,8 +283,10 @@ object ChapterFinalConsistencyMappingSnapshotCodecV1 {
     private fun encode(snapshot: ChapterFinalConsistencyMappingSnapshotV1): String =
         JsonObject(
             linkedMapOf(
-                "schemaVersion" to JsonPrimitive(1),
-                "schemaId" to JsonPrimitive(SCHEMA_ID),
+                "schemaVersion" to JsonPrimitive(if (snapshot.narrativeExpectation == null) 1 else 2),
+                "schemaId" to JsonPrimitive(
+                    if (snapshot.narrativeExpectation == null) SCHEMA_ID else POST_ANALYSIS_SCHEMA_ID,
+                ),
                 "consistencyRequestSourceBindingHash" to JsonPrimitive(snapshot.consistencyRequestSourceBindingHash),
                 "minimumBodyCodePoints" to JsonPrimitive(snapshot.minimumBodyCodePoints),
                 "totalRevisionAttemptsUsed" to JsonPrimitive(snapshot.totalRevisionAttemptsUsed),
@@ -249,8 +294,64 @@ object ChapterFinalConsistencyMappingSnapshotCodecV1 {
                 "localReport" to encodeLocalReport(snapshot.localReport),
                 "expectation" to encodeExpectation(snapshot.expectation),
                 "sceneContract" to encodeSceneContract(snapshot.sceneContract),
-            ),
+            ).also { values ->
+                snapshot.narrativeExpectation?.let { values["narrativeExpectation"] = encodeNarrativeExpectation(it) }
+            },
         ).toString()
+
+    private fun encodeNarrativeExpectation(
+        expectation: ChapterPostAnalysisNarrativeExpectationV1,
+    ): JsonObject = JsonObject(linkedMapOf(
+        "activeNamespaces" to JsonArray(
+            expectation.activeNamespaces.sortedBy { it.ordinal }.map { JsonPrimitive(it.name) },
+        ),
+        "priorObligations" to JsonArray(expectation.priorObligations.sortedBy { it.obligationId }.map { item ->
+            JsonObject(linkedMapOf(
+                "obligationId" to JsonPrimitive(item.obligationId),
+                "description" to JsonPrimitive(item.description),
+                "dueChapterIndex" to (item.dueChapterIndex?.let(::JsonPrimitive) ?: JsonNull),
+            ))
+        }),
+        "currentStateValues" to JsonArray(expectation.currentStateValues.entries
+            .sortedBy { it.key.reference() }.map { (key, value) ->
+                JsonObject(linkedMapOf(
+                    "namespace" to JsonPrimitive(key.namespace.name),
+                    "entityId" to JsonPrimitive(key.entityId),
+                    "attribute" to JsonPrimitive(key.attribute),
+                    "relatedEntityId" to (key.relatedEntityId?.let(::JsonPrimitive) ?: JsonNull),
+                    "valueJson" to JsonPrimitive(value),
+                ))
+            }),
+    ))
+
+    private fun decodeNarrativeExpectation(obj: JsonObject): ChapterPostAnalysisNarrativeExpectationV1 {
+        requireExactKeys(obj, NARRATIVE_KEYS, "narrativeExpectation")
+        val namespaces = requireArray(obj.getValue("activeNamespaces"), "narrativeExpectation.activeNamespaces")
+            .mapIndexed { index, value -> requireEnum<StoryStateNamespaceV1>(value, "activeNamespaces[$index]") }
+            .toSet()
+        val obligations = requireArray(obj.getValue("priorObligations"), "narrativeExpectation.priorObligations")
+            .mapIndexed { index, value ->
+                val item = requireObject(value, "priorObligations[$index]")
+                requireExactKeys(item, OBLIGATION_KEYS, "priorObligations[$index]")
+                NarrativeObligationV1(
+                    obligationId = requireString(item.getValue("obligationId"), "obligationId"),
+                    description = requireString(item.getValue("description"), "description"),
+                    dueChapterIndex = requireNullableInt(item.getValue("dueChapterIndex"), "dueChapterIndex"),
+                )
+            }
+        val states = requireArray(obj.getValue("currentStateValues"), "narrativeExpectation.currentStateValues")
+            .mapIndexed { index, value ->
+                val item = requireObject(value, "currentStateValues[$index]")
+                requireExactKeys(item, STATE_VALUE_KEYS, "currentStateValues[$index]")
+                StoryStateKeyV1(
+                    namespace = requireEnum(item.getValue("namespace"), "namespace"),
+                    entityId = requireString(item.getValue("entityId"), "entityId"),
+                    attribute = requireString(item.getValue("attribute"), "attribute"),
+                    relatedEntityId = requireNullableString(item.getValue("relatedEntityId"), "relatedEntityId"),
+                ) to requireString(item.getValue("valueJson"), "valueJson")
+            }.toMap()
+        return ChapterPostAnalysisNarrativeExpectationV1(namespaces, obligations, states)
+    }
 
     private fun encodeLocalReport(report: ChapterLocalConsistencyReport): JsonObject =
         JsonObject(
@@ -546,6 +647,11 @@ object ChapterFinalConsistencyMappingSnapshotCodecV1 {
         return requireInt(element, key)
     }
 
+    private fun requireNullableString(element: JsonElement, key: String): String? {
+        if (element is JsonNull) return null
+        return requireString(element, key)
+    }
+
     private fun requireBoolean(element: JsonElement, key: String): Boolean {
         val primitive = element as? JsonPrimitive
             ?: throw IllegalArgumentException("Snapshot field '$key' must be a boolean.")
@@ -574,6 +680,9 @@ object ChapterFinalConsistencyMappingSnapshotCodecV1 {
             requireString(item, "$key[$index]")
         }
 }
+
+private fun StoryStateKeyV1.reference(): String =
+    listOfNotNull(namespace.name, entityId, relatedEntityId, attribute).joinToString(":")
 
 private val IDENTIFIER = Regex("[A-Za-z0-9._:-]{1,128}")
 private val HASH = Regex("[0-9a-f]{64}")

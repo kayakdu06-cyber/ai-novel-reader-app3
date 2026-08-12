@@ -76,7 +76,11 @@ class ChapterPostAnalysisPersistenceMapperTest {
             analysis,
             ChapterPostAnalysisMappingSpecV1(
                 bookId = "book-1", generationStageId = "analysis-stage", modelSnapshotJson = "{}",
-                createdAt = 100, expectation = expectation, localReport = local, sceneContract = scene,
+                createdAt = 100,
+                consistencyExpectation = expectation.consistency,
+                narrativeExpectation = expectation.narrative,
+                localReport = local,
+                sceneContract = scene,
             ),
         )
 
