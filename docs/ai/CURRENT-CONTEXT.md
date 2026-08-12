@@ -21,7 +21,8 @@
 - TASK-126 已完成：initial DRAFT 的冻结来源、bound exact-token prepare/open、受保护流式 artifact、只读投影、截断续接、post-analysis 交接和恢复来源校验已接通；JVM 38/38、API 35 UNKNOWN 恢复 1/1、边界和安全扫描通过，Provider 未修改且真实调用 0。
 - TASK-127 已完成：`chapter-post-analysis.v1` 单次响应、严格整体校验、状态映射、有限修订/重新分析、合并链恢复与既有最终 Room 原子事务已接通；相关 JVM 47/47、全量 JVM 165/165、构建/边界/安全门禁通过，真实 Provider 调用 0。
 - TASK-128 已完成：唯一 persistent runner、有限五 route、FGS/WorkManager 共用入口和 Fake 单章闭环已通过；API 35 验证 5 个 Stage 全成功、3 次 Fake 请求、1 个正式可读正文版本，真实 Provider 调用 0。
-- 唯一下一任务是 TASK-129：仅 `:feature:generation`，复用同一个 runner 完成 3～5 章 Fake 自动队列和一次暂停/恢复验收。
+- TASK-129 已完成：只在 `:feature:generation` 新增同书 3～5 章有界循环，复用唯一 runner；API 35 的 4 章 Room + Fake 场景覆盖暂停、runtime 重建、12 次请求、4 个正式可读版本和逐章义务/状态证据，真实 Provider 0。
+- 唯一下一任务是 TASK-130：按模块分批接通普通用户确认后的冻结启动入口。
 - 后续每个任务必须锁定主模块和允许配套模块；VS-1 不新增第十一个模块，feature 不新增实现依赖，`:app` 不写业务逻辑。
 - 不主动实现候选功能、通用扩展点或“以后可能有用”的抽象；只有不修会直接造成不稳定、数据损坏、费用失控、安全问题或严重 bug 时才扩大范围。
 - 测试按具体风险最小化；全量、双 API、Release/R8 和 APK 扫描只在里程碑、发布或对应高风险变化时运行。
@@ -36,9 +37,9 @@
 
 ## 当前任务
 
-- TASK-129：前章正式提交后，确定性创建下一章的计划入口和有限队列；连续生成 3～5 章。
-- 验收只覆盖章节序号、义务/状态证据重放、一次暂停/恢复、前章可读和无重复 Provider-open。
-- 不接 UI，不调用真实 Provider，不创建第二个 runner；普通 App 启动入口仍留给 TASK-130。
+- TASK-130：从冻结创建快照创建唯一首章 Job，接通确认事件和最小导航组装。
+- 必须分 `:core`、`:feature:generation`、`:feature:creation`、`:app` 批次提交；不得把业务逻辑塞进 `:app`。
+- 不调用真实 Provider；TASK-129 的有界循环、唯一 runner 和持久安全门禁必须复用。
 
 ## 项目基线与迁移来源
 

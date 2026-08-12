@@ -14,6 +14,7 @@
 
 | 任务 | 状态 | 证据 |
 |---|---|---|
+| TASK-129 3～5 章自动队列 | 完成 | 新增有界同书章节循环且不修改既有 runner；只有前章 Job=`COMPLETED` 才准备连续下一章。API 35 的 4 章 Room + Fake 场景含一次暂停和 runtime 重建，12 次请求、4 个正式可读版本、逐章义务与 system state 可回放；Generation JVM 54/54、边界和安全扫描通过，真实 Provider 0 |
 | TASK-128 单章 persistent total runner | 完成 | 唯一 Room 游标 runner、有限五 route、FGS/WorkManager 共用入口已接通；API 35 Fake 单章覆盖 pause/resume、plan→body→post-analysis→final，5 Stage 全成功、3 次 Fake 请求、1 个正式可读版本；JVM 182/182、`assembleDebug test`、十模块边界和安全扫描通过，真实 Provider 调用 0 |
 | TASK-127 合并章后分析与提交 | 完成 | `chapter-post-analysis.v1` 把摘要、记忆、追踪、伏笔、义务、状态和一致性收敛为一次分析；整体失败不映射，严重重复进入有限修订并重新分析，成功结果复用既有 Room 最终原子事务；相关 JVM 47/47、全量 JVM 165/165、`assembleDebug test`、边界和安全扫描通过，真实 Provider 调用 0 |
 | TASK-001 Android 工程和构建基线 | 完成 | Gradle Wrapper 9.4.1；Debug APK 构建成功 |
@@ -82,7 +83,7 @@
 
 ## 下一步
 
-- 唯一下一任务是 TASK-129：仅在 `:feature:generation` 复用同一个 persistent runner，完成 3～5 章 Fake 自动队列和一次暂停/恢复验收；不提前接 UI 或真实 Provider。
+- 唯一下一任务是 TASK-130：分模块接通冻结创建快照、唯一首章 Job、确认事件和导航；不接真实 Provider。
 
 - 2026-08-09 TASK-064 Phase 2E3 已完成48KiB `chapter-plan.v1`严格输出schema/parser、稳定canonical hash、人物/成年人虚构/场景策略业务交叉校验与严格过程节点/余波门禁；generation JVM 140/140、双API各42/42、801-task门禁通过。registry仍只有final+context；下一步Phase 2E4处理目的地/三层预算和请求绑定，在exact-token执行与DEC-068提交完成前不注册、不启用App内真实付费生成。
 - 2026-08-09 TASK-064 Phase 2E4A 已完成发送前缺口审计：现有disclosure字段尚无生产确认/校验，`normalizedDestination`未形成规范origin，`BudgetEngine`无生产调用且`budgetSnapshotJson`不是持久余额。DEC-071冻结顺序为目的地确认→TASK-083原子三层reservation+RequestIntent→plan exact-token执行；审计阶段保持Provider 0和plan未注册。
