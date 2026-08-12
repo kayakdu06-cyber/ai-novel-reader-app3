@@ -139,6 +139,12 @@ class ChapterPlanV2CommitRepositoryAndroidTest {
         )
         val repository = ChapterPlanV2CommitRepository(database, artifactStore)
 
+        val rejected = runCatching {
+            repository.commit(permit, draft.copy(canonicalPlanHash = "0".repeat(64)))
+        }
+        assertTrue(rejected.exceptionOrNull() is IllegalArgumentException)
+        assertEquals(0, dao.stagesForJob(JOB_ID).count { it.phase == GenerationPhase.DRAFT_CHAPTER })
+
         val first = repository.commit(permit, draft)
         val replay = repository.commit(permit, draft)
 
