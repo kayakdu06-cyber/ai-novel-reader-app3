@@ -168,6 +168,27 @@ class GenerationStreamingDraftRepository(
         )
     }
 
+    suspend fun prepareBoundInitialPlanningBeforeSend(
+        snapshot: GenerationRunnerCurrentStageRouteSnapshot,
+        draft: RequestIntentDraft,
+        budget: RequestBudgetReservationDraft,
+    ): PersistedStreamingRequest = LIFECYCLE_LOCK.withLock {
+        require(snapshot.route in INITIAL_PLANNING_ROUTES) {
+            "Bound request preparation route is not initial planning."
+        }
+        require(draft.stageId == snapshot.executionLease.stageId) {
+            "Bound initial-planning request Stage does not match the route snapshot."
+        }
+        prepareBeforeSendLocked(
+            draft = draft,
+            budget = budget,
+            leaseToken = snapshot.executionLease.stageLeaseToken,
+            initialDraft = null,
+            rolloverSource = null,
+            boundRouteSnapshot = snapshot,
+        )
+    }
+
     suspend fun prepareBoundInitialChapterDraftBeforeSend(
         snapshot: GenerationRunnerCurrentStageRouteSnapshot,
         draft: RequestIntentDraft,

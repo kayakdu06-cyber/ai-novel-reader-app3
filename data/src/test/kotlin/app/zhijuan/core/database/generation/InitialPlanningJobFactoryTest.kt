@@ -25,6 +25,14 @@ class InitialPlanningJobFactoryTest {
             listOf(GenerationTargetType.BOOK, GenerationTargetType.STORY_BIBLE, GenerationTargetType.OUTLINE),
             first.stages.map { it.targetType },
         )
+        assertEquals(
+            listOf(
+                GenerationRunnerStageRoute.INITIAL_STORY_SEED_V1,
+                GenerationRunnerStageRoute.INITIAL_STORY_BIBLE_V1,
+                GenerationRunnerStageRoute.INITIAL_MASTER_OUTLINE_V1,
+            ),
+            first.stages.map { GenerationRunnerStageRouteResolver.resolve(it.toEntity()) },
+        )
         first.stages.forEach { stage ->
             assertEquals(
                 "snapshot-1",

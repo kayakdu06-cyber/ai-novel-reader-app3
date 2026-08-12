@@ -10,6 +10,9 @@ import kotlinx.serialization.json.JsonPrimitive
  * only identity; it carries no Stage, Job, target, hash, or payload.
  */
 enum class GenerationRunnerStageRoute {
+    INITIAL_STORY_SEED_V1,
+    INITIAL_STORY_BIBLE_V1,
+    INITIAL_MASTER_OUTLINE_V1,
     FORMAL_CHAPTER_MEMORY_V1,
     EDIT_REBUILD_CHAPTER_MEMORY_V2,
     FORMAL_CHAPTER_TRACKING_V1,
@@ -26,6 +29,12 @@ enum class GenerationRunnerStageRoute {
     INITIAL_CHAPTER_DRAFT_V1,
     FINAL_CHAPTER_COMMIT_V3,
 }
+
+internal val INITIAL_PLANNING_ROUTES = setOf(
+    GenerationRunnerStageRoute.INITIAL_STORY_SEED_V1,
+    GenerationRunnerStageRoute.INITIAL_STORY_BIBLE_V1,
+    GenerationRunnerStageRoute.INITIAL_MASTER_OUTLINE_V1,
+)
 
 internal val CHAPTER_PLAN_ROUTES = setOf(
     GenerationRunnerStageRoute.CHAPTER_PLAN_V1,
@@ -52,6 +61,15 @@ internal object GenerationRunnerStageRouteResolver {
     fun resolve(stage: GenerationStageEntity): GenerationRunnerStageRoute {
         val sourcePolicyVersion = sourcePolicyVersion(stage)
         return when (sourcePolicyVersion) {
+            InitialPlanningJobFactory.SOURCE_POLICY_VERSION -> {
+                InitialPlanningJobFactory.parseAndVerify(stage)
+                when (stage.phase) {
+                    GenerationPhase.BUILD_STORY_SEED -> GenerationRunnerStageRoute.INITIAL_STORY_SEED_V1
+                    GenerationPhase.BUILD_BIBLE -> GenerationRunnerStageRoute.INITIAL_STORY_BIBLE_V1
+                    GenerationPhase.BUILD_MASTER_OUTLINE -> GenerationRunnerStageRoute.INITIAL_MASTER_OUTLINE_V1
+                    else -> throw IllegalArgumentException("Initial planning phase is not routable.")
+                }
+            }
             ChapterMemoryExtractionJobFactory.SOURCE_POLICY_VERSION -> {
                 ChapterMemoryExtractionJobFactory.parseAndVerify(stage)
                 if (ChapterMemoryExtractionJobFactory.parseRebuildBindingIfPresent(stage) != null) {
