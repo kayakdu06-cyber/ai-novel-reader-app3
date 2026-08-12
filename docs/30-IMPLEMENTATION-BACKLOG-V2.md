@@ -208,7 +208,7 @@ TASK-121～133 按精简后范围约 82–132 个有效工程小时。估算不�
 
 ### TASK-126 initial draft
 
-状态：下一任务。
+状态：已完成（2026-08-12）。冻结 initial-draft-source.v1、bound exact-token prepare/open、受保护流式 artifact、只读投影、截断续接、post-analysis 交接和恢复校验已接通；未修改 Provider，真实 Provider 调用 0。
 
 模块批次：先 `:data` 的 exact-token/持久边界，再 `:feature:generation` 的流式执行；现有 ProviderAdapter 能满足合同就禁止修改 `:provider`。
 
@@ -230,6 +230,8 @@ TASK-121～133 按精简后范围约 82–132 个有效工程小时。估算不�
 - 一个参数化来源漂移用例覆盖 source/plan/context 变化时 Provider 0。
 
 ### TASK-127 合并章后分析与提交
+
+状态：下一任务。
 
 交付：
 
@@ -422,7 +424,7 @@ TASK-138 默认不启动。只有以下任一证据存在才立项：
 
 ## 10. 下一任务唯一入口
 
-TASK-124 完成后，下一任务必须是 TASK-125。
+TASK-126 完成后，下一任务必须是 TASK-127。
 
 不得直接跳回：
 
@@ -432,4 +434,4 @@ TASK-124 完成后，下一任务必须是 TASK-125。
 - 80 章真实长跑；
 - 任意第三方 skill 安装。
 
-TASK-125 必须按 `:data`、`:feature:generation` 两个模块批次执行，复用 TASK-064 WIP；不得重写双租约、预算、目的地或 route resolver。
+TASK-127 必须按 `:feature:generation`、`:data` 两个模块批次执行，合并已有章后分析仓库并完成原子提交；不得新建并行状态系统。

@@ -18,7 +18,8 @@
 - TASK-123 已完成：只在 `:data` 新增义务/状态校验和现有 EntityEvent/CanonFact 映射；复用原子提交，无新表、无 migration，3 项测试通过。
 - TASK-124 已完成：只在 `:feature:generation` 增加 arc/chapter plan v2、v1 只读兼容、严格 schema、业务校验与规范哈希；17 项模块测试通过。
 - TASK-125 已完成：`:data` 冻结 v2 来源并原子提交计划与唯一 initial DRAFT；`:feature:generation` 完成请求、Fake 严格执行、业务绑定解析和有限 registry。JVM 32/32、两台模拟器事务用例各 1/1、边界和安全扫描通过。
-- 唯一下一任务是 TASK-126：先 `:data` 后 `:feature:generation`，接通 initial draft exact-token 流式执行与恢复；不修改 `:provider`，除非现有合同被实际失败证明不足。
+- TASK-126 已完成：initial DRAFT 的冻结来源、bound exact-token prepare/open、受保护流式 artifact、只读投影、截断续接、post-analysis 交接和恢复来源校验已接通；JVM 38/38、API 35 UNKNOWN 恢复 1/1、边界和安全扫描通过，Provider 未修改且真实调用 0。
+- 唯一下一任务是 TASK-127：先 `:feature:generation` 后 `:data`，合并已有章后分析链、状态映射和原子提交；不新建并行状态系统。
 - 后续每个任务必须锁定主模块和允许配套模块；VS-1 不新增第十一个模块，feature 不新增实现依赖，`:app` 不写业务逻辑。
 - 不主动实现候选功能、通用扩展点或“以后可能有用”的抽象；只有不修会直接造成不稳定、数据损坏、费用失控、安全问题或严重 bug 时才扩大范围。
 - 测试按具体风险最小化；全量、双 API、Release/R8 和 APK 扫描只在里程碑、发布或对应高风险变化时运行。
