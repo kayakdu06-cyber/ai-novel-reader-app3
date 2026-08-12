@@ -121,6 +121,12 @@ class ChapterPostAnalysisOutputParser(
         )
     }
 
+    internal fun fromValidated(output: ValidatedStructuredOutput): ChapterPostAnalysisV1 {
+        require(output.schemaId == ChapterPostAnalysisOutputContractV1.schemaId)
+        require(output.schemaVersion == ChapterPostAnalysisOutputContractV1.currentSchemaVersion)
+        return output.withDocument(::fromDocument)
+    }
+
     private fun timelineEvent(value: JsonObject) = ChapterTimelineEventV1(
         name = value.string("name"),
         participantEntityIds = value.strings("participantEntityIds"),

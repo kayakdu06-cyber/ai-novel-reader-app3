@@ -366,6 +366,7 @@ sealed interface GenerationTimingDuration {
 }
 
 data class GenerationTimingReport(
+    val remoteProviderCallCount: Int,
     val queue: GenerationTimingDuration,
     val localPreparation: GenerationTimingDuration,
     val providerToFirstByte: GenerationTimingDuration,
@@ -385,7 +386,7 @@ class GenerationTimingReporter {
     fun report(events: List<GenerationTimingEvent>): GenerationTimingReport {
         val grouped = events.groupBy { it.phase to it.milestone }
         val runFingerprints = events.map { it.correlations.runFingerprint }.toSet()
-        if (runFingerprints.size > 1) return conflictingReport()
+        if (runFingerprints.size > 1) return conflictingReport(events)
 
         fun first(
             phase: GenerationTimingPhase,
@@ -525,6 +526,7 @@ class GenerationTimingReporter {
             first(GenerationTimingPhase.CHAPTER, GenerationTimingMilestone.NEXT_CHAPTER_STARTED),
         )
         return GenerationTimingReport(
+            remoteProviderCallCount = events.count { it.milestone == GenerationTimingMilestone.PROVIDER_OPENED },
             queue = queue,
             localPreparation = localPreparation,
             providerToFirstByte = providerToFirstByte,
@@ -617,11 +619,12 @@ class GenerationTimingReporter {
         return GenerationTimingDuration.Available(total)
     }
 
-    private fun conflictingReport(): GenerationTimingReport {
+    private fun conflictingReport(events: List<GenerationTimingEvent>): GenerationTimingReport {
         val unavailable = GenerationTimingDuration.Unavailable(
             GenerationTimingUnavailableReason.CONFLICTING_EVENT,
         )
         return GenerationTimingReport(
+            remoteProviderCallCount = events.count { it.milestone == GenerationTimingMilestone.PROVIDER_OPENED },
             queue = unavailable,
             localPreparation = unavailable,
             providerToFirstByte = unavailable,
