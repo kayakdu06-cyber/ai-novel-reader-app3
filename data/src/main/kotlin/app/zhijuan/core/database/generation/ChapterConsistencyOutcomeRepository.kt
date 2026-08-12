@@ -379,6 +379,7 @@ class ChapterConsistencyOutcomeRepositoryV1(
                             sourceBindingHash = draft.sourceBindingHash,
                             revisionIndex = draft.revisionIndex,
                             routeBindingHash = routeBindingHash,
+                            sourceRouteBindingHash = draft.candidateRouteBindingHash,
                             reason = decision.reason,
                             usage = draft.usage,
                             settledAt = draft.routedAt,

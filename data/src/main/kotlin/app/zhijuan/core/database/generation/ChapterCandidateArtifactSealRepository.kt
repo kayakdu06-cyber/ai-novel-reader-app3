@@ -423,6 +423,7 @@ data class ChapterConsistencyNeedsActionDraftV1(
     val sourceBindingHash: String,
     val revisionIndex: Int,
     val routeBindingHash: String,
+    val sourceRouteBindingHash: String? = routeBindingHash,
     val reason: ChapterRevisionNeedsActionReasonV1,
     val usage: FinalUsageCommit,
     val settledAt: Long,
@@ -622,7 +623,7 @@ class ChapterCandidateArtifactSealRepositoryV1(
                 chapterId = draft.chapterId,
                 chapterIndex = draft.chapterIndex,
                 revisionIndex = draft.revisionIndex,
-                routeBindingHash = draft.routeBindingHash,
+                routeBindingHash = draft.sourceRouteBindingHash,
             )
 
             if (stage.status == GenerationStageStatus.NEEDS_ACTION) {
@@ -739,6 +740,7 @@ class ChapterCandidateArtifactSealRepositoryV1(
                 draft.routeBindingHash,
             ).all(HASH::matches),
         )
+        require(draft.sourceRouteBindingHash == null || HASH.matches(draft.sourceRouteBindingHash))
         require(draft.reason in PRE_REQUEST_EXHAUSTION_REASONS) {
             "Only a request-before finite-revision exhaustion can settle a consistency Stage."
         }
