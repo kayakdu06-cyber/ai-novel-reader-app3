@@ -10,6 +10,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -26,7 +27,9 @@ class ChapterPlanV2RequestTest {
         assertEquals(ChapterPlanOutputContractV2.providerSchema.withValue { it },
             request.request.structuredOutputSchema?.withValue { it })
         assertEquals(request.activationHash, request.expectation.activationHash)
-        assertEquals(request.policyManifestHash, request.expectation.policyCompilationHash)
+        assertEquals(request.policyCompilationHash, request.expectation.policyCompilationHash)
+        assertNotEquals(request.policyManifestHash, request.policyCompilationHash)
+        assertTrue(request.policyManifestJson.contains("\"policyCompilationHash\":\"$policyHash\""))
         assertFalse(request.requestBindingHash == request.expectationHash)
         Json.parseToJsonElement(request.expectationJson) as JsonObject
         Json.parseToJsonElement(request.activationManifestJson) as JsonObject

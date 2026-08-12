@@ -74,7 +74,7 @@ class BoundChapterPlanV2Request internal constructor(
 object ChapterPlanV2RequestFactory {
     fun policyCompilationHash(selection: ChapterPromptPolicySelectionV1): String =
         selection.withPromptContent { _, instructions ->
-            sha256(policyManifestJson(selection, instructions))
+            sha256(policyCompilationPayloadJson(selection, instructions))
         }
 
     fun create(spec: ChapterPlanV2RequestSpec): BoundChapterPlanV2Request =
@@ -90,11 +90,12 @@ object ChapterPlanV2RequestFactory {
         require(creativeIntent.isNotBlank())
         val expectation = expectationJson(spec.expectation)
         val activation = activationManifestJson(spec.policySelection.activation)
-        val policy = policyManifestJson(spec.policySelection, instructions)
-        val policyCompilationHash = sha256(policy)
+        val policyCompilationHash = sha256(policyCompilationPayloadJson(spec.policySelection, instructions))
         require(spec.expectation.policyCompilationHash == policyCompilationHash) {
             "Chapter-plan v2 expectation does not bind the selected policy compilation."
         }
+        val policy = policyManifestJson(spec.policySelection, instructions, policyCompilationHash)
+        val policyManifestHash = sha256(policy)
         val source = JsonObject(linkedMapOf(
             "schemaVersion" to JsonPrimitive(2),
             "schemaId" to JsonPrimitive("zhijuan.chapter-plan-request.v2"),
@@ -104,7 +105,7 @@ object ChapterPlanV2RequestFactory {
             "activationManifest" to Json.parseToJsonElement(activation),
             "activationManifestHash" to JsonPrimitive(sha256(activation)),
             "policyManifest" to Json.parseToJsonElement(policy),
-            "policyManifestHash" to JsonPrimitive(policyCompilationHash),
+            "policyManifestHash" to JsonPrimitive(policyManifestHash),
             "creativeIntent" to JsonPrimitive(creativeIntent),
         )).toString()
         val stageContract = """
@@ -142,7 +143,7 @@ object ChapterPlanV2RequestFactory {
             activationManifestHash = sha256(activation),
             activationHash = spec.expectation.activationHash,
             policyManifestJson = policy,
-            policyManifestHash = policyCompilationHash,
+            policyManifestHash = policyManifestHash,
             policyCompilationHash = policyCompilationHash,
             contextEvidenceHash = spec.contextEvidenceHash,
             outputContract = ChapterPlanOutputContractV2,
@@ -179,7 +180,7 @@ private fun activationManifestJson(value: ChapterCapabilityActivationV1): String
     "expectedStateNamespaceIds" to JsonArray(value.expectedStateNamespaceIds.map(::JsonPrimitive)),
 ))).toString()
 
-private fun policyManifestJson(
+private fun policyCompilationPayloadJson(
     selection: ChapterPromptPolicySelectionV1,
     instructions: List<PolicyInstructionV1>,
 ): String = canonical(JsonObject(linkedMapOf(
@@ -193,6 +194,18 @@ private fun policyManifestJson(
         "id" to JsonPrimitive(item.id), "text" to JsonPrimitive(item.text),
     )) }),
 ))).toString()
+
+private fun policyManifestJson(
+    selection: ChapterPromptPolicySelectionV1,
+    instructions: List<PolicyInstructionV1>,
+    policyCompilationHash: String,
+): String {
+    val payload = Json.parseToJsonElement(
+        policyCompilationPayloadJson(selection, instructions),
+    ) as JsonObject
+    return canonical(JsonObject(payload + ("policyCompilationHash" to JsonPrimitive(policyCompilationHash))))
+        .toString()
+}
 
 private fun canonicalObject(value: String): String = canonical(
     runCatching { Json.parseToJsonElement(value) as JsonObject }
