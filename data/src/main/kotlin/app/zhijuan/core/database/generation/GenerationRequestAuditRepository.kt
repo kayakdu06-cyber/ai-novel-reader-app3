@@ -200,6 +200,27 @@ class GenerationRequestAuditRepository(
         )
     }
 
+    internal suspend fun persistBoundChapterPostAnalysisBeforeSend(
+        draft: RequestIntentDraft,
+        budget: RequestBudgetReservationDraft,
+        snapshot: GenerationRunnerCurrentStageRouteSnapshot,
+    ): PersistedRequestAudit = database.withTransaction {
+        requireBoundRemoteExecution(
+            draft,
+            snapshot,
+            CANDIDATE_CHAPTER_POST_ANALYSIS_ROUTES,
+            "chapter post-analysis",
+        )
+        persistBeforeSendInternal(
+            draft = draft,
+            budget = budget,
+            leaseToken = snapshot.executionLease.stageLeaseToken,
+            rolloverParentAttemptId = null,
+            rolloverSourceArtifactRefId = null,
+            executionLease = null,
+        )
+    }
+
     internal suspend fun persistDailyRolloverReplacementBeforeSend(
         draft: RequestIntentDraft,
         budget: RequestBudgetReservationDraft,
@@ -244,6 +265,29 @@ class GenerationRequestAuditRepository(
         sourceArtifactRefId: String,
     ): PersistedRequestAudit = database.withTransaction {
         requireBoundRemoteExecution(draft, snapshot, INITIAL_CHAPTER_DRAFT_ROUTES, "initial chapter draft")
+        persistBeforeSendInternal(
+            draft = draft,
+            budget = budget,
+            leaseToken = snapshot.executionLease.stageLeaseToken,
+            rolloverParentAttemptId = parentAttemptId,
+            rolloverSourceArtifactRefId = sourceArtifactRefId,
+            executionLease = snapshot.executionLease,
+        )
+    }
+
+    internal suspend fun persistBoundChapterPostAnalysisDailyRolloverReplacementBeforeSend(
+        draft: RequestIntentDraft,
+        budget: RequestBudgetReservationDraft,
+        snapshot: GenerationRunnerCurrentStageRouteSnapshot,
+        parentAttemptId: String,
+        sourceArtifactRefId: String,
+    ): PersistedRequestAudit = database.withTransaction {
+        requireBoundRemoteExecution(
+            draft,
+            snapshot,
+            CANDIDATE_CHAPTER_POST_ANALYSIS_ROUTES,
+            "chapter post-analysis",
+        )
         persistBeforeSendInternal(
             draft = draft,
             budget = budget,
@@ -663,8 +707,12 @@ class GenerationRequestAuditRepository(
         if (stage.phase == GenerationPhase.BUILD_CHAPTER_PLAN) {
             return root == null || "firstChapterBootstrap" !in root
         }
-        return stage.phase == GenerationPhase.DRAFT_CHAPTER &&
-            root?.stringOrNull("sourcePolicyVersion") == InitialChapterDraftStageBinding.SOURCE_POLICY_VERSION
+        val sourcePolicyVersion = root?.stringOrNull("sourcePolicyVersion")
+        return (stage.phase == GenerationPhase.DRAFT_CHAPTER &&
+            sourcePolicyVersion == InitialChapterDraftStageBinding.SOURCE_POLICY_VERSION) ||
+            (stage.phase == GenerationPhase.EXTRACT_MEMORY &&
+                sourcePolicyVersion == ChapterCandidateStageBindingV1.SOURCE_POLICY_VERSION &&
+                root.stringOrNull("artifactRole") == ChapterCandidateArtifactRoleV1.POST_ANALYSIS.name)
     }
 }
 

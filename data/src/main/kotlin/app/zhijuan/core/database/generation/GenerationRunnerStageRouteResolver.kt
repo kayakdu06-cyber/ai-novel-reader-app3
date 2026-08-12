@@ -36,6 +36,10 @@ internal val INITIAL_CHAPTER_DRAFT_ROUTES = setOf(
     GenerationRunnerStageRoute.INITIAL_CHAPTER_DRAFT_V1,
 )
 
+internal val CANDIDATE_CHAPTER_POST_ANALYSIS_ROUTES = setOf(
+    GenerationRunnerStageRoute.CANDIDATE_CHAPTER_POST_ANALYSIS_V1,
+)
+
 /**
  * Resolves the route identity of a frozen derived-chain Stage without any
  * database, file, or provider side effect. Only [sourcePolicyVersion] is read

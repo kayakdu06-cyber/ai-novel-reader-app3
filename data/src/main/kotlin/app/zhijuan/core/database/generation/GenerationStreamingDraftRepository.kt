@@ -185,6 +185,23 @@ class GenerationStreamingDraftRepository(
         )
     }
 
+    suspend fun prepareBoundChapterPostAnalysisBeforeSend(
+        snapshot: GenerationRunnerCurrentStageRouteSnapshot,
+        draft: RequestIntentDraft,
+        budget: RequestBudgetReservationDraft,
+    ): PersistedStreamingRequest = LIFECYCLE_LOCK.withLock {
+        require(snapshot.route in CANDIDATE_CHAPTER_POST_ANALYSIS_ROUTES)
+        require(draft.stageId == snapshot.executionLease.stageId)
+        prepareBeforeSendLocked(
+            draft = draft,
+            budget = budget,
+            leaseToken = snapshot.executionLease.stageLeaseToken,
+            initialDraft = null,
+            rolloverSource = null,
+            boundRouteSnapshot = snapshot,
+        )
+    }
+
     internal suspend fun prepareBoundInitialChapterDraftContinuationBeforeSend(
         snapshot: GenerationRunnerCurrentStageRouteSnapshot,
         draft: RequestIntentDraft,
@@ -260,6 +277,23 @@ class GenerationStreamingDraftRepository(
         snapshot: GenerationRunnerCurrentStageRouteSnapshot,
     ): PersistedStreamingRequest {
         require(snapshot.route in INITIAL_CHAPTER_DRAFT_ROUTES)
+        require(draft.stageId == snapshot.executionLease.stageId)
+        return prepareDailyRolloverReplacementBeforeSendInternal(
+            parentAttemptId = parentAttemptId,
+            draft = draft,
+            budget = budget,
+            executionLease = snapshot.executionLease,
+            boundRouteSnapshot = snapshot,
+        )
+    }
+
+    suspend fun prepareBoundChapterPostAnalysisDailyRolloverReplacementBeforeSend(
+        parentAttemptId: String,
+        draft: RequestIntentDraft,
+        budget: RequestBudgetReservationDraft,
+        snapshot: GenerationRunnerCurrentStageRouteSnapshot,
+    ): PersistedStreamingRequest {
+        require(snapshot.route in CANDIDATE_CHAPTER_POST_ANALYSIS_ROUTES)
         require(draft.stageId == snapshot.executionLease.stageId)
         return prepareDailyRolloverReplacementBeforeSendInternal(
             parentAttemptId = parentAttemptId,
@@ -373,6 +407,13 @@ class GenerationStreamingDraftRepository(
                         budget = budget,
                         snapshot = requireNotNull(boundRouteSnapshot),
                     )
+                rolloverSource == null &&
+                    boundRouteSnapshot?.route in CANDIDATE_CHAPTER_POST_ANALYSIS_ROUTES ->
+                    auditRepository.persistBoundChapterPostAnalysisBeforeSend(
+                        draft = draftWithArtifact,
+                        budget = budget,
+                        snapshot = requireNotNull(boundRouteSnapshot),
+                    )
                 rolloverSource == null ->
                     auditRepository.persistBoundInitialChapterDraftBeforeSend(
                         draft = draftWithArtifact,
@@ -389,6 +430,14 @@ class GenerationStreamingDraftRepository(
                     )
                 boundRouteSnapshot.route in CHAPTER_PLAN_ROUTES ->
                     auditRepository.persistBoundChapterPlanDailyRolloverReplacementBeforeSend(
+                        draft = draftWithArtifact,
+                        budget = budget,
+                        snapshot = boundRouteSnapshot,
+                        parentAttemptId = requireNotNull(rolloverSource).parentAttemptId,
+                        sourceArtifactRefId = rolloverSource.artifactRefId,
+                    )
+                boundRouteSnapshot.route in CANDIDATE_CHAPTER_POST_ANALYSIS_ROUTES ->
+                    auditRepository.persistBoundChapterPostAnalysisDailyRolloverReplacementBeforeSend(
                         draft = draftWithArtifact,
                         budget = budget,
                         snapshot = boundRouteSnapshot,
