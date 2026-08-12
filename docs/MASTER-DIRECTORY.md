@@ -14,7 +14,7 @@
 | 全部功能 | [功能清单](02-FEATURE-INVENTORY.md) | 106 个唯一 FEAT 编号 |
 | 全部历史任务 | [历史任务清单](19-IMPLEMENTATION-BACKLOG.md) | 105 个唯一任务定义，含 TASK-008A/008B |
 | 当前任务队列 | [实施任务清单 V2](30-IMPLEMENTATION-BACKLOG-V2.md) | TASK-120～138，共 19 项 |
-| 当前现场 | [AI 当前上下文](ai/CURRENT-CONTEXT.md) | 唯一下一任务 TASK-124 |
+| 当前现场 | [AI 当前上下文](ai/CURRENT-CONTEXT.md) | 唯一下一任务 TASK-125 |
 | 需求追踪 | [追踪矩阵](20-TRACEABILITY-MATRIX.md) | 需求、功能、任务、风险和验证关系 |
 | 验收 | [验收标准](17-ACCEPTANCE-CRITERIA.md) | 产品完成门槛 |
 | 测试 | [测试计划](15-TEST-PLAN.md) | 风险最小化测试 |
@@ -87,8 +87,8 @@
 | 2 | TASK-121 | 已完成 | `:core` | WritingPolicyPack 最小纯 Kotlin 合同 |
 | 3 | TASK-122 | 已完成 | `:feature:generation` | 开放创作意图与状态适配器路由 |
 | 4 | TASK-123 | 已完成 | `:data` | 叙事义务和状态变化 |
-| 5 | TASK-124 | 下一任务 | `:feature:generation` | 规划合同 V2 |
-| 6 | TASK-125 | 待办 | `:data` + `:feature:generation` | 普通 chapter-plan 收口 |
+| 5 | TASK-124 | 已完成 | `:feature:generation` | 规划合同 V2 |
+| 6 | TASK-125 | 下一任务 | `:data` + `:feature:generation` | 普通 chapter-plan 收口 |
 | 7 | TASK-126 | 待办 | `:feature:generation` + `:data` | initial draft |
 | 8 | TASK-127 | 待办 | `:feature:generation` + `:data` | 合并章后分析与原子提交 |
 | 9 | TASK-128 | 待办 | `:feature:generation` | 单章 total runner |
@@ -151,4 +151,4 @@ VS-1 不新增模块；feature 不新增实现依赖，唯一既有例外是 `:f
 
 - `02-FEATURE-INVENTORY.md`：106 行、106 个唯一 FEAT ID；全部文档 FEAT 引用均有登记。
 - `19-IMPLEMENTATION-BACKLOG.md` + `30-IMPLEMENTATION-BACKLOG-V2.md`：124 个唯一任务定义；全部文档 TASK 引用均有登记。
-- TASK-121～123 已完成；当前执行任务为 TASK-124。
+- TASK-121～124 已完成；当前执行任务为 TASK-125。

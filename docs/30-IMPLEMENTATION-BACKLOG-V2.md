@@ -152,6 +152,8 @@ TASK-121～133 按精简后范围约 82–132 个有效工程小时。估算不�
 
 ### TASK-124 规划合同 V2
 
+状态：已完成（2026-08-12）。已交付 arc/chapter plan v2、v1 只读兼容、严格 schema、业务校验、规范 JSON 与哈希绑定；相关模块测试 17/17 通过。
+
 模块锁：只允许 `:feature:generation`。不为了合同升级迁移数据库，不修改 UI、Provider 或 app。
 
 交付：
@@ -416,7 +418,7 @@ TASK-138 默认不启动。只有以下任一证据存在才立项：
 
 ## 10. 下一任务唯一入口
 
-TASK-123 完成后，下一任务必须是 TASK-124。
+TASK-124 完成后，下一任务必须是 TASK-125。
 
 不得直接跳回：
 
@@ -426,4 +428,4 @@ TASK-123 完成后，下一任务必须是 TASK-124。
 - 80 章真实长跑；
 - 任意第三方 skill 安装。
 
-TASK-124 只允许修改 `:feature:generation`，在现有规划输出上做最小 v2；不得借此修改数据库、UI、Provider 或 `:app`。
+TASK-125 必须按 `:data`、`:feature:generation` 两个模块批次执行，复用 TASK-064 WIP；不得重写双租约、预算、目的地或 route resolver。
