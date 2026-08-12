@@ -56,7 +56,7 @@ class ChapterPostAnalysisStructuredOutputTest {
         assertEquals(1, result.value.repetitionFindings.size)
     }
 
-    private fun validOutput() = """
+    fun validOutput() = """
         {"schemaVersion":1,"sourceChapterVersionId":"candidate-1","sourceChapterContentHash":"$HASH_A","chapterId":"chapter-1","chapterIndex":1,
         "checkSourceSnapshotHash":"$HASH_B","sceneContractHash":"$HASH_C",
         "summary":{"objectiveOutcome":"主角完成任务并承担后果","keyEvents":["系统升级"],"decisions":["接受代价"],"relationshipChanges":["双方建立信任"],"endingState":"新任务开启","unresolvedQuestions":["代价来源"],"importance":90},

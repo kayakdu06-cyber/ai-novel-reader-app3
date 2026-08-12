@@ -70,6 +70,8 @@ sealed interface ChapterPostAnalysisRequestPreparationV1 {
 class BoundChapterPostAnalysisRequestV1 internal constructor(
     val request: GenerationRequest,
     val expectation: ChapterPostAnalysisExpectationV1,
+    val sceneContract: app.zhijuan.core.task.ChapterSceneConsistencyContractV1,
+    val localReport: app.zhijuan.core.task.ChapterLocalConsistencyReport,
     val sourceBindingHash: String,
     internal val outputContract: StructuredOutputContract,
 ) {
@@ -121,6 +123,8 @@ object ChapterPostAnalysisRequestFactoryV1 {
             BoundChapterPostAnalysisRequestV1(
                 request = request,
                 expectation = expectation,
+                sceneContract = consistency.sceneContract,
+                localReport = consistency.localReport,
                 sourceBindingHash = sha256(source),
                 outputContract = BoundChapterPostAnalysisOutputContractV1(expectation),
             ),

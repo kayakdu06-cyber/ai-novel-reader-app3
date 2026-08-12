@@ -149,6 +149,9 @@ data class NarrativeStatePersistenceSpecV1(
     val generationStageId: String,
     val chapterIndex: Int,
     val createdAt: Long,
+    val sourceChapterContentHash: String = ZERO_HASH,
+    val existingEntityEventCount: Int = 0,
+    val existingCanonFactCount: Int = 0,
 )
 
 data class NarrativeStatePersistenceDraftV1(
@@ -164,7 +167,8 @@ object NarrativeStatePersistenceMapperV1 {
         require(NarrativeStateDeltaValidatorV1.validate(input) == NarrativeStateValidationResultV1.Valid) {
             "Narrative obligation or state delta is invalid."
         }
-        require(spec.chapterIndex >= 1 && spec.createdAt >= 0 &&
+        require(spec.chapterIndex >= 1 && spec.createdAt >= 0 && HASH.matches(spec.sourceChapterContentHash) &&
+            spec.existingEntityEventCount >= 0 && spec.existingCanonFactCount >= 0 &&
             listOf(spec.bookId, spec.chapterVersionId, spec.generationStageId).all(ID::matches)
         ) { "Narrative state persistence source is invalid." }
         val baseOrder = Math.multiplyExact(spec.chapterIndex.toLong(), 1_000_000L)
@@ -176,6 +180,7 @@ object NarrativeStatePersistenceMapperV1 {
                 "action" to JsonPrimitive(update.action.name),
                 "evidence" to JsonPrimitive(update.evidence),
                 "nextDueChapterIndex" to (update.nextDueChapterIndex?.let(::JsonPrimitive) ?: kotlinx.serialization.json.JsonNull),
+                "sourceChapterContentHash" to JsonPrimitive(spec.sourceChapterContentHash),
             )).toString()
             CanonFactEntity(
                 canonFactId = stableId("obligation", spec, update.obligationId),
@@ -187,7 +192,7 @@ object NarrativeStatePersistenceMapperV1 {
                 scopeJson = "{\"fromChapter\":${spec.chapterIndex},\"throughChapter\":null}",
                 sourceChapterVersionId = spec.chapterVersionId,
                 sourceBibleRevisionId = null,
-                validFromStoryOrder = baseOrder + index + 1L,
+                validFromStoryOrder = baseOrder + spec.existingCanonFactCount + index + 1L,
                 validToStoryOrder = null,
                 conflictGroupId = "obligation.${update.obligationId}",
                 status = DerivedDataStatus.VALID,
@@ -201,7 +206,7 @@ object NarrativeStatePersistenceMapperV1 {
                     bookId = spec.bookId,
                     entityId = delta.key.entityId,
                     sourceChapterVersionId = spec.chapterVersionId,
-                    storyOrder = baseOrder + facts.size + index + 1L,
+                    storyOrder = baseOrder + spec.existingEntityEventCount + index + 1L,
                     attributeKey = listOfNotNull(
                         delta.key.namespace.name.lowercase(),
                         delta.key.relatedEntityId,
@@ -219,6 +224,7 @@ object NarrativeStatePersistenceMapperV1 {
                             delta.key.relatedEntityId?.let(::JsonPrimitive) ?: kotlinx.serialization.json.JsonNull
                         ),
                         "evidence" to JsonPrimitive(delta.evidence),
+                        "sourceChapterContentHash" to JsonPrimitive(spec.sourceChapterContentHash),
                     )).toString(),
                     status = DerivedDataStatus.VALID,
                     createdAt = spec.createdAt,
@@ -237,3 +243,5 @@ object NarrativeStatePersistenceMapperV1 {
 
 private val ID = Regex("[A-Za-z0-9._:-]{1,128}")
 private val STATE_ATTRIBUTE = Regex("[a-z][a-z0-9._-]{0,95}")
+private val HASH = Regex("[0-9a-f]{64}")
+private val ZERO_HASH = "0".repeat(64)
