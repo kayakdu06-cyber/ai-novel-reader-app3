@@ -66,6 +66,37 @@ class GenerationRunnerQueueRepository(
     private val database: ZhijuanDatabase,
     private val leasePolicy: GenerationLeasePolicy = GenerationLeasePolicy(),
 ) {
+    suspend fun findReadyJob(
+        jobId: String,
+        observedAt: Long,
+    ): GenerationRunnerQueueCandidate? {
+        require(RUNNER_OWNER_ID_REGEX.matches(jobId)) { "Runner queue Job id is invalid." }
+        require(observedAt >= 0L) { "Runner queue time is invalid." }
+        return database.withTransaction {
+            val dao = database.generationDao()
+            val job = dao.findJob(jobId) ?: return@withTransaction null
+            val stageId = job.currentStageId ?: return@withTransaction null
+            val stage = dao.findStage(stageId) ?: return@withTransaction null
+            if (
+                job.status != GenerationJobStatus.READY ||
+                job.updatedAt > observedAt ||
+                job.leaseTokenOrNull() != null ||
+                stage.jobId != job.jobId ||
+                stage.status != GenerationStageStatus.READY ||
+                stage.updatedAt > observedAt ||
+                stage.leaseTokenOrNull() != null
+            ) return@withTransaction null
+            GenerationRunnerQueueCandidate(
+                jobId = job.jobId,
+                jobStatus = job.status,
+                currentStageId = stage.stageId,
+                currentStageStatus = stage.status,
+                jobUpdatedAt = job.updatedAt,
+                stageUpdatedAt = stage.updatedAt,
+            )
+        }
+    }
+
     suspend fun scanReadyJobs(
         observedAt: Long,
         limit: Int = DEFAULT_BATCH_LIMIT,
