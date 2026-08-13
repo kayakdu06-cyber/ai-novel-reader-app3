@@ -11,6 +11,12 @@ import app.zhijuan.core.security.AndroidProtectedArtifactStore
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.isActive
 
 @Singleton
 class PersistentLibraryRepository @Inject constructor(
@@ -40,6 +46,24 @@ class PersistentLibraryRepository @Inject constructor(
 class LibraryCatalog @Inject constructor(private val repository: LibraryRepository) {
     suspend fun shelf(): List<LibraryBookSummary> = repository.listBooks()
 
+    suspend fun book(bookId: String): LibraryBookSummary? =
+        shelf().firstOrNull { it.bookId == bookId }
+
     suspend fun contents(bookId: String): List<LibraryChapterSummary> =
         repository.listChapters(bookId).sortedBy(LibraryChapterSummary::ordinal)
+
+    fun observeShelf(refreshMillis: Long = DEFAULT_REFRESH_MILLIS): Flow<List<LibraryBookSummary>> {
+        require(refreshMillis >= MINIMUM_REFRESH_MILLIS)
+        return flow {
+            while (currentCoroutineContext().isActive) {
+                emit(shelf())
+                delay(refreshMillis)
+            }
+        }.distinctUntilChanged()
+    }
+
+    private companion object {
+        const val DEFAULT_REFRESH_MILLIS = 1_500L
+        const val MINIMUM_REFRESH_MILLIS = 250L
+    }
 }
