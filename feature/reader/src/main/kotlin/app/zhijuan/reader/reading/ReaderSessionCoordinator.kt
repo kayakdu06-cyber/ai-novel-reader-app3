@@ -39,6 +39,9 @@ class ReaderSessionCoordinator @Inject constructor(
     private val library: LibraryRepository,
     private val generation: GenerationController,
 ) {
+    suspend fun contents(bookId: String): List<LibraryChapterSummary> =
+        library.listChapters(bookId).sortedBy(LibraryChapterSummary::ordinal)
+
     suspend fun openChapter(chapter: LibraryChapterSummary): ReaderChapterState {
         val chapterId = chapter.chapterId ?: return ReaderChapterState.Pending(chapter)
         val content = library.readChapter(chapterId)
@@ -58,4 +61,7 @@ class ReaderSessionCoordinator @Inject constructor(
 
     suspend fun stopGeneration(jobId: String, requestedAt: Long): GenerationJobStatus =
         generation.stopGeneration(jobId, requestedAt)
+
+    suspend fun generationStatus(jobId: String): GenerationJobStatus? =
+        generation.findGenerationStatus(jobId)
 }
