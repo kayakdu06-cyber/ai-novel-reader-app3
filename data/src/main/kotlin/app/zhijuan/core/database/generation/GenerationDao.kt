@@ -94,6 +94,15 @@ internal interface GenerationDao {
     @Query("SELECT * FROM generation_job WHERE job_id = :jobId")
     suspend fun findJob(jobId: String): GenerationJobEntity?
 
+    @Query(
+        """
+        SELECT * FROM generation_job
+        WHERE book_id = :bookId
+        ORDER BY created_at DESC, job_id DESC
+        """,
+    )
+    suspend fun jobsForBook(bookId: String): List<GenerationJobEntity>
+
     @Query("SELECT * FROM generation_stage WHERE stage_id = :stageId")
     suspend fun findStage(stageId: String): GenerationStageEntity?
 
@@ -120,6 +129,18 @@ internal interface GenerationDao {
         """,
     )
     suspend fun stagesForJob(jobId: String): List<GenerationStageEntity>
+
+    @Query(
+        """
+        SELECT generation_stage.* FROM generation_stage
+        INNER JOIN generation_job ON generation_job.job_id = generation_stage.job_id
+        WHERE generation_job.book_id = :bookId
+          AND generation_stage.phase = 'DRAFT_CHAPTER'
+          AND generation_stage.target_id = :chapterId
+        ORDER BY generation_stage.created_at DESC, generation_stage.stage_id DESC
+        """,
+    )
+    suspend fun draftStagesForChapter(bookId: String, chapterId: String): List<GenerationStageEntity>
 
     @Query(
         """

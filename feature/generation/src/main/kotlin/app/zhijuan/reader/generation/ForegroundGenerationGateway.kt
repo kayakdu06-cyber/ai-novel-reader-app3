@@ -20,6 +20,11 @@ import app.zhijuan.core.model.GenerationJobStatus
 import app.zhijuan.core.security.AndroidProtectedArtifactStore
 import app.zhijuan.feature.generation.GenerationBoundRemoteExecutionProvider
 import app.zhijuan.feature.generation.GenerationPersistentRunResult
+import app.zhijuan.feature.generation.GenerationPersistentRunDisposition
+import app.zhijuan.feature.generation.GenerationChapterRun
+import app.zhijuan.feature.generation.GenerationChapterSequenceDisposition
+import app.zhijuan.feature.generation.GenerationNextChapterPreparationResult
+import app.zhijuan.feature.generation.GenerationPersistentChapterSequenceV1
 import app.zhijuan.feature.generation.GenerationPersistentRuntimeFactoryV1
 import app.zhijuan.feature.generation.GenerationTotalRunnerPort
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -76,7 +81,55 @@ internal class ForegroundGenerationGateway @Inject constructor(
                     System.currentTimeMillis().coerceAtLeast(0L),
                 )
             ) {
-                is GenerationContinuationPreparationResult.Prepared -> currentJobId = continuation.jobId
+                is GenerationContinuationPreparationResult.Prepared -> {
+                    val chapterIndex = continuation.chapterIndex
+                    if (chapterIndex == null) {
+                        currentJobId = continuation.jobId
+                    } else {
+                        val sequence = GenerationPersistentChapterSequenceV1(runtime.runner) { completed, expected ->
+                            when (
+                                val next = continuations.prepareAfterCompleted(
+                                    completed.jobId,
+                                    System.currentTimeMillis().coerceAtLeast(0L),
+                                )
+                            ) {
+                                is GenerationContinuationPreparationResult.Prepared -> {
+                                    val nextIndex = next.chapterIndex
+                                    if (nextIndex == expected) {
+                                        GenerationNextChapterPreparationResult.Prepared(
+                                            GenerationChapterRun(next.bookId, next.jobId, nextIndex),
+                                        )
+                                    } else {
+                                        GenerationNextChapterPreparationResult.NotReady
+                                    }
+                                }
+                                GenerationContinuationPreparationResult.NotReady ->
+                                    GenerationNextChapterPreparationResult.NotReady
+                            }
+                        }.run(
+                            initialChapter = GenerationChapterRun(
+                                continuation.bookId,
+                                continuation.jobId,
+                                chapterIndex,
+                            ),
+                            requestedChapterCount = MAX_CHAPTERS_PER_SEQUENCE,
+                            runnerOwnerPrefix = "$runnerOwnerId:chapters",
+                            alreadyCompletedChapterCount = chapterIndex - 1,
+                        )
+                        return GenerationPersistentRunResult(
+                            disposition = when (sequence.disposition) {
+                                GenerationChapterSequenceDisposition.TARGET_COMPLETED ->
+                                    GenerationPersistentRunDisposition.COMPLETED
+                                GenerationChapterSequenceDisposition.RUNNER_HALTED -> sequence.runnerDisposition
+                                GenerationChapterSequenceDisposition.NEXT_CHAPTER_NOT_READY ->
+                                    GenerationPersistentRunDisposition.NOT_READY
+                                GenerationChapterSequenceDisposition.INVALID_NEXT_CHAPTER ->
+                                    GenerationPersistentRunDisposition.RECOVERY_REQUIRED
+                            },
+                            executedStageCount = executedStages + sequence.executedStageCount,
+                        )
+                    }
+                }
                 GenerationContinuationPreparationResult.NotReady ->
                     return result.copy(executedStageCount = executedStages)
             }
@@ -123,7 +176,7 @@ internal class ForegroundGenerationGateway @Inject constructor(
 
     override suspend fun findJob(jobId: String): ForegroundGenerationSnapshot? {
         var current = stateRepository.findJob(jobId) ?: return null
-        repeat(MAX_BOOTSTRAP_JOBS - 1) {
+        repeat(MAX_CHAIN_JOBS - 1) {
             if (current.status != GenerationJobStatus.COMPLETED) return ForegroundGenerationSnapshot(
                 current.status,
                 current.updatedAt,
@@ -181,6 +234,19 @@ internal class ForegroundGenerationGateway @Inject constructor(
         requestedAt: Long,
     ): GenerationJobStatus = requestUserPause(jobId, requestedAt).jobStatus
 
+    override suspend fun resumeGeneration(
+        jobId: String,
+        requestedAt: Long,
+    ): GenerationJobStatus {
+        val leafJobId = activeLeafJobId(jobId)
+        val status = controlRepository.resume(
+            leafJobId,
+            monotonicControlTime(leafJobId, requestedAt),
+        ).jobStatus
+        GenerationForegroundService.requestStart(applicationContext, jobId)
+        return status
+    }
+
     override suspend fun stopGeneration(
         jobId: String,
         requestedAt: Long,
@@ -191,7 +257,7 @@ internal class ForegroundGenerationGateway @Inject constructor(
 
     private suspend fun activeLeafJobId(rootJobId: String): String {
         var current = requireNotNull(stateRepository.findJob(rootJobId))
-        repeat(MAX_BOOTSTRAP_JOBS - 1) {
+        repeat(MAX_CHAIN_JOBS - 1) {
             if (current.status != GenerationJobStatus.COMPLETED) return current.jobId
             val continuation = continuations.prepareAfterCompleted(
                 current.jobId,
@@ -204,5 +270,7 @@ internal class ForegroundGenerationGateway @Inject constructor(
 
     private companion object {
         const val MAX_BOOTSTRAP_JOBS = 3
+        const val MAX_CHAPTERS_PER_SEQUENCE = 5
+        const val MAX_CHAIN_JOBS = 7
     }
 }

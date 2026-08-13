@@ -17,6 +17,12 @@ sealed interface ReaderChapterState {
     data class Pending(
         override val chapter: LibraryChapterSummary,
     ) : ReaderChapterState
+
+    data class Generating(
+        override val chapter: LibraryChapterSummary,
+        val content: String,
+        val revision: Int,
+    ) : ReaderChapterState
 }
 
 data class ReaderPosition(
@@ -34,16 +40,21 @@ class ReaderSessionCoordinator @Inject constructor(
     private val generation: GenerationController,
 ) {
     suspend fun openChapter(chapter: LibraryChapterSummary): ReaderChapterState {
-        val content = library.readChapter(chapter.chapterId)
-        return if (content.isNullOrBlank()) {
-            ReaderChapterState.Pending(chapter)
-        } else {
-            ReaderChapterState.Ready(chapter, content)
+        val chapterId = chapter.chapterId ?: return ReaderChapterState.Pending(chapter)
+        val content = library.readChapter(chapterId)
+        if (!content.isNullOrBlank()) {
+            return ReaderChapterState.Ready(chapter, content)
         }
+        val draft = library.readInProgressChapter(chapterId)
+        return if (draft == null) ReaderChapterState.Pending(chapter)
+        else ReaderChapterState.Generating(chapter, draft.text, draft.revision)
     }
 
     suspend fun pauseGeneration(jobId: String, requestedAt: Long): GenerationJobStatus =
         generation.pauseGeneration(jobId, requestedAt)
+
+    suspend fun resumeGeneration(jobId: String, requestedAt: Long): GenerationJobStatus =
+        generation.resumeGeneration(jobId, requestedAt)
 
     suspend fun stopGeneration(jobId: String, requestedAt: Long): GenerationJobStatus =
         generation.stopGeneration(jobId, requestedAt)

@@ -1,6 +1,7 @@
 package app.zhijuan.core.contract
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import app.zhijuan.core.model.ChapterStatus
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 
@@ -22,6 +23,9 @@ class FeatureContractsTest {
         }
         assertThrows<IllegalArgumentException> {
             LibraryChapterSummary("chapter", 0, "title")
+        }
+        assertThrows<IllegalArgumentException> {
+            LibraryChapterSummary(null, 1, "title", ChapterStatus.READY, hasReadableContent = true)
         }
         assertEquals(3, LibraryBookSummary("book", "title", 3).completedChapterCount)
     }

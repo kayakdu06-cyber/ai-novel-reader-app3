@@ -3,6 +3,8 @@ package app.zhijuan.core.database.generation
 import androidx.room.withTransaction
 import app.zhijuan.core.database.ZhijuanDatabase
 import app.zhijuan.core.database.library.ChapterEntity
+import app.zhijuan.core.database.memory.OutlineNodeEntity
+import app.zhijuan.core.database.memory.OutlineRevisionEntity
 import app.zhijuan.core.model.ChapterStatus
 import app.zhijuan.core.model.ConsistencyStatus
 import app.zhijuan.core.model.GenerationJobStatus
@@ -56,6 +58,8 @@ class GenerationContinuationPreparationRepository(
             completed.jobType == GenerationJobType.CONTINUE_BOOK &&
                 generation.stagesForJob(completed.jobId).singleOrNull()?.phase == GenerationPhase.BUILD_ARC_PLAN ->
                 prepareFirstChapter(completed, preparedAt)
+            completed.jobType == GenerationJobType.CONTINUE_BOOK ->
+                prepareFollowingChapter(completed, preparedAt)
             else -> GenerationContinuationPreparationResult.NotReady
         }
     }
@@ -137,6 +141,60 @@ class GenerationContinuationPreparationRepository(
             it.nodeType == OutlineNodeType.CHAPTER && it.plannedChapterIndex == 1
         } ?: return GenerationContinuationPreparationResult.NotReady
         val suffix = sha256("zhijuan.first-chapter.v1\u0000${completed.jobId}\u0000${window.contentHash}").take(32)
+        return prepareChapter(
+            completed = completed,
+            chapterIndex = 1,
+            chapterNode = chapterNode,
+            suffix = suffix,
+            preparedAt = preparedAt,
+        )
+    }
+
+    private suspend fun prepareFollowingChapter(
+        completed: GenerationJobEntity,
+        preparedAt: Long,
+    ): GenerationContinuationPreparationResult {
+        val generation = database.generationDao()
+        val finalStage = generation.stagesForJob(completed.jobId).singleOrNull {
+            it.phase == GenerationPhase.COMMIT_CHAPTER
+        } ?: return GenerationContinuationPreparationResult.NotReady
+        if (finalStage.status != GenerationStageStatus.SUCCEEDED) {
+            return GenerationContinuationPreparationResult.NotReady
+        }
+        val previous = database.libraryDao().findChapter(finalStage.targetId)
+            ?: return GenerationContinuationPreparationResult.NotReady
+        val previousVersion = previous.currentVersionId?.let { versionId ->
+            database.libraryDao().findChapterVersion(versionId)
+        }
+            ?: return GenerationContinuationPreparationResult.NotReady
+        if (
+            previous.bookId != completed.bookId || previous.status !in READABLE_CHAPTER_STATUSES ||
+            previousVersion.chapterId != previous.chapterId ||
+            previousVersion.generationStageId != finalStage.stageId
+        ) return GenerationContinuationPreparationResult.NotReady
+
+        val nextIndex = previous.chapterIndex + 1
+        val book = database.libraryDao().findBook(completed.bookId)
+            ?: return GenerationContinuationPreparationResult.NotReady
+        if (nextIndex > MAX_CHAPTERS_PER_PRODUCTION_SEQUENCE || nextIndex > (book.targetChapters ?: Int.MAX_VALUE)) {
+            return GenerationContinuationPreparationResult.NotReady
+        }
+        val chapterNode = findChapterNode(completed.bookId, nextIndex)
+            ?: return GenerationContinuationPreparationResult.NotReady
+        val suffix = sha256(
+            "zhijuan.next-chapter.v1\u0000${completed.jobId}\u0000$nextIndex\u0000${chapterNode.contentHash}",
+        ).take(32)
+        return prepareChapter(completed, nextIndex, chapterNode, suffix, preparedAt)
+    }
+
+    private suspend fun prepareChapter(
+        completed: GenerationJobEntity,
+        chapterIndex: Int,
+        chapterNode: OutlineNodeEntity,
+        suffix: String,
+        preparedAt: Long,
+    ): GenerationContinuationPreparationResult {
+        val generation = database.generationDao()
         val chapterId = "chapter.$suffix"
         val library = database.libraryDao()
         val existingChapter = library.findChapter(chapterId)
@@ -145,7 +203,7 @@ class GenerationContinuationPreparationRepository(
                 ChapterEntity(
                     chapterId = chapterId,
                     bookId = completed.bookId,
-                    chapterIndex = 1,
+                    chapterIndex = chapterIndex,
                     plannedTitle = chapterNode.title,
                     displayTitle = chapterNode.title,
                     status = ChapterStatus.PLANNED,
@@ -156,9 +214,9 @@ class GenerationContinuationPreparationRepository(
             )
         } else {
             require(
-                existingChapter.bookId == completed.bookId && existingChapter.chapterIndex == 1 &&
+                existingChapter.bookId == completed.bookId && existingChapter.chapterIndex == chapterIndex &&
                     existingChapter.plannedTitle == chapterNode.title,
-            ) { "First chapter replay changed its frozen identity." }
+            ) { "Chapter continuation replay changed its frozen identity." }
         }
         val progression = ChapterProgressionGateRepository(database).authorize(
             completed.bookId,
@@ -177,7 +235,7 @@ class GenerationContinuationPreparationRepository(
                 jobId = "job.chapter.$suffix",
                 bookId = completed.bookId,
                 chapterId = chapterId,
-                chapterIndex = 1,
+                chapterIndex = chapterIndex,
                 userIntentJson = completed.userIntentJson,
                 budgetSnapshotJson = completed.budgetSnapshotJson,
                 promptBindingHash = prompt.bindingHash,
@@ -202,9 +260,30 @@ class GenerationContinuationPreparationRepository(
         return GenerationContinuationPreparationResult.Prepared(
             completed.bookId,
             setup.jobId,
-            chapterIndex = 1,
+            chapterIndex = chapterIndex,
             replayed = replayed,
         )
+    }
+
+    private suspend fun findChapterNode(bookId: String, chapterIndex: Int): OutlineNodeEntity? {
+        val memory = database.memoryDao()
+        var cursor: OutlineRevisionEntity? = memory.findMemoryHead(bookId)?.currentOutlineRevisionId
+            ?.let { revisionId -> memory.findOutlineRevision(revisionId) }
+        var visited = 0
+        while (cursor != null && visited++ < MAX_OUTLINE_CHAIN_DEPTH) {
+            require(cursor.bookId == bookId) { "Outline lineage crossed into another book." }
+            val match = memory.findOutlineNodes(cursor.outlineRevisionId).singleOrNull {
+                it.nodeType == OutlineNodeType.CHAPTER && it.plannedChapterIndex == chapterIndex
+            }
+            if (match != null) {
+                require(sha256(match.planJson) == match.contentHash) {
+                    "Planned chapter node content hash is invalid."
+                }
+                return match
+            }
+            cursor = cursor.parentRevisionId?.let { revisionId -> memory.findOutlineRevision(revisionId) }
+        }
+        return null
     }
 
     private suspend fun createReadyOrReplay(setup: GenerationJobSetup, preparedAt: Long) {
@@ -272,6 +351,9 @@ class GenerationContinuationPreparationRepository(
         const val MINIMUM_REQUEST_TOKENS = 1_024
         const val MAXIMUM_OUTPUT_TOKENS = 16_384
         const val DEFAULT_REQUESTED_OUTPUT_TOKENS = 8_192
+        const val MAX_CHAPTERS_PER_PRODUCTION_SEQUENCE = 5
+        const val MAX_OUTLINE_CHAIN_DEPTH = 2_000
+        val READABLE_CHAPTER_STATUSES = setOf(ChapterStatus.READY, ChapterStatus.EDITED)
         val IDENTIFIER = Regex("[A-Za-z0-9._:-]{1,128}")
     }
 }

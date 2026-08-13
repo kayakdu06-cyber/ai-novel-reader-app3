@@ -19,6 +19,8 @@ import app.zhijuan.core.database.generation.ChapterPlanV2StageBinding
 import app.zhijuan.core.database.generation.ChapterProgressionAuthorization
 import app.zhijuan.core.database.generation.ChapterProgressionGateRepository
 import app.zhijuan.core.database.generation.GenerationControlRepository
+import app.zhijuan.core.database.generation.GenerationContinuationPreparationRepository
+import app.zhijuan.core.database.generation.GenerationContinuationPreparationResult
 import app.zhijuan.core.database.generation.GenerationJobSetup
 import app.zhijuan.core.database.generation.GenerationJobSetupRepository
 import app.zhijuan.core.database.generation.GenerationStageSetup
@@ -142,6 +144,10 @@ class GenerationPersistentChapterSequenceAndroidTest {
         assertEquals(2, paused.currentChapter.chapterOrdinal)
         assertEquals(3, firstRemote.generateCalls())
         assertEquals(GenerationJobStatus.PAUSED, GenerationStateRepository(database).findJob(jobId(2))?.status)
+        assertEquals(
+            GenerationContinuationPreparationResult.NotReady,
+            GenerationContinuationPreparationRepository(database).prepareAfterCompleted(jobId(2), 40_000L),
+        )
         assertReadableChapter(1)
 
         GenerationControlRepository(database).resume(jobId(2), chapterBaseTime(2) + 101L)
@@ -185,6 +191,18 @@ class GenerationPersistentChapterSequenceAndroidTest {
                 .single { it.attributeKey == "system.level" }.newValueJson
         }
         assertEquals(listOf("2", "3", "4", "5"), systemLevels)
+
+        val repository = GenerationContinuationPreparationRepository(database)
+        val fifth = repository.prepareAfterCompleted(jobId(4), 60_000L)
+            as GenerationContinuationPreparationResult.Prepared
+        assertEquals(5, fifth.chapterIndex)
+        assertEquals(false, fifth.replayed)
+        assertEquals(GenerationJobStatus.READY, GenerationStateRepository(database).findJob(fifth.jobId)?.status)
+        assertEquals(ChapterStatus.PLANNED, database.libraryDao().findChapter(
+            database.generationDao().stagesForJob(fifth.jobId).first().targetId,
+        )?.status)
+        assertEquals(true, (repository.prepareAfterCompleted(jobId(4), 60_001L)
+            as GenerationContinuationPreparationResult.Prepared).replayed)
     }
 
     private suspend fun seedBookPlanning() {
@@ -260,7 +278,7 @@ class GenerationPersistentChapterSequenceAndroidTest {
                 add(outlineNode("node.window", WINDOW_REVISION, null, OutlineNodeType.BOOK, 0L, null, window))
                 add(outlineNode("node.arc", WINDOW_REVISION, "node.window", OutlineNodeType.ARC, 1L, null,
                     "{\"goal\":\"任务升级并推动关系\"}"))
-                (1..4).forEach { index ->
+                (1..5).forEach { index ->
                     add(outlineNode("node.chapter.$index", WINDOW_REVISION, "node.arc", OutlineNodeType.CHAPTER,
                         index + 1L, index, "{\"goal\":\"第${index}次任务推动人物、关系、系统与道具状态\"}"))
                 }
@@ -290,7 +308,7 @@ class GenerationPersistentChapterSequenceAndroidTest {
                 chapterId = chapterId,
                 chapterIndex = chapterIndex,
                 userIntentJson = INTENT_JSON,
-                budgetSnapshotJson = "{\"fixture\":true}",
+                budgetSnapshotJson = "{\"requestTokenHardLimit\":8192}",
                 promptBindingHash = binding.bindingHash,
                 contextBudget = ChapterContextBudgetSpec(
                     contextLimitTokens = 32_768,
